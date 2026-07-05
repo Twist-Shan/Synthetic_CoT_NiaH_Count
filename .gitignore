@@ -28,3 +28,4 @@ paper_figs/
 .env
 .env.*
 .DS_Store
+colab_results/
