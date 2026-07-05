@@ -76,6 +76,7 @@ def main() -> None:
     parser.add_argument("--eval_splits", default="val_id,val_length_ood,val_density_shift_low,val_density_shift_high")
     parser.add_argument("--eval_limit", type=int, default=None)
     parser.add_argument("--device", default=None)
+    parser.add_argument("--skip_completed", action="store_true", help="Skip runs that already have checkpoints/final/config.json.")
     parser.add_argument("--dry_run", action="store_true")
     args = parser.parse_args()
 
@@ -101,6 +102,7 @@ def main() -> None:
     for run_idx, (seed, loss_mask, final_weight) in enumerate(run_specs, start=1):
         name = regime_name(loss_mask, final_weight)
         run_dir = Path(args.out_root) / args.model_name / f"{name}_seed{seed}"
+        final_checkpoint = run_dir / "checkpoints" / "final" / "config.json"
         print(
             "\n".join(
                 [
@@ -114,34 +116,39 @@ def main() -> None:
             ),
             flush=True,
         )
-        train_cmd = [
-            sys.executable,
-            "-m",
-            "trace_counting.train",
-            "--data_dir",
-            str(args.data_dir),
-            "--model_config",
-            str(args.model_config),
-            "--loss_mask",
-            loss_mask,
-            "--seed",
-            str(seed),
-            "--out_dir",
-            str(run_dir),
-            "--max_steps",
-            str(args.max_steps),
-            "--batch_size",
-            str(args.batch_size),
-        ]
-        if final_weight is not None:
-            train_cmd += ["--final_weight", str(final_weight)]
-        if args.device:
-            train_cmd += ["--device", args.device]
-        _run(train_cmd, dry_run=args.dry_run)
+        if args.skip_completed and final_checkpoint.exists():
+            print(f"[skip] RUN {run_idx}/{len(run_specs)}: found {final_checkpoint}", flush=True)
+        else:
+            train_cmd = [
+                sys.executable,
+                "-u",
+                "-m",
+                "trace_counting.train",
+                "--data_dir",
+                str(args.data_dir),
+                "--model_config",
+                str(args.model_config),
+                "--loss_mask",
+                loss_mask,
+                "--seed",
+                str(seed),
+                "--out_dir",
+                str(run_dir),
+                "--max_steps",
+                str(args.max_steps),
+                "--batch_size",
+                str(args.batch_size),
+            ]
+            if final_weight is not None:
+                train_cmd += ["--final_weight", str(final_weight)]
+            if args.device:
+                train_cmd += ["--device", args.device]
+            _run(train_cmd, dry_run=args.dry_run)
 
         print(f"[eval] RUN {run_idx}/{len(run_specs)}: evaluating {run_dir}", flush=True)
         eval_cmd = [
             sys.executable,
+            "-u",
             "-m",
             "trace_counting.eval",
             "--checkpoint",

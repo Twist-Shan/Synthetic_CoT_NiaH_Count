@@ -35,15 +35,17 @@ python scripts/run_loss_mask_sweep.py \
   --model_name small_main \
   --out_root runs/trace_count_v0_seed0 \
   --seeds 0 \
-  --max_steps 50000 \
-  --batch_size 128
+  --max_steps 10000 \
+  --batch_size 128 \
+  --eval_limit 1024 \
+  --skip_completed
 python -m trace_counting.summarize \
   --runs_dir runs/trace_count_v0_seed0 \
   --out_csv runs/trace_count_v0_seed0/summary.csv \
   --print_markdown
 ```
 
-This is the notebook default. It trains 7 runs: 7 loss-mask regimes for seed 0.
+This is the notebook default. It trains 7 runs: 7 loss-mask regimes for seed 0. For an exhaustive paper-quality run, use `--max_steps 50000` and remove `--eval_limit 1024`.
 
 ## Manual Commands
 
