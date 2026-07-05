@@ -174,6 +174,17 @@ def trace_metrics(generated_trace: list[str], expected_trace: list[str]) -> dict
     }
 
 
+def invalid_trace_metrics(generated_trace: list[str], expected_trace: list[str]) -> dict[str, float | bool | int]:
+    return {
+        "trace_exact_match": False,
+        "trace_index_accuracy": 0.0,
+        "trace_marker_precision": 0.0,
+        "trace_marker_recall": 0.0,
+        "trace_duplicate_rate": 0.0,
+        "trace_length_error": int(len(generated_trace) - len(expected_trace)),
+    }
+
+
 def _safe_mean(values: list[float]) -> float | None:
     return float(np.mean(values)) if values else None
 
@@ -262,7 +273,10 @@ def evaluate_split(
             prefix = example["full_tokens"][: example["spans"]["source_end_exclusive"]]
             generated = greedy_generate(model, tokenizer, prefix, device, max_new_tokens=max_new_tokens)
             parsed = parse_generation(generated)
-            t_metrics = trace_metrics(parsed.get("trace_tokens", []), example["trace_tokens"])
+            if parsed.get("format_valid", False):
+                t_metrics = trace_metrics(parsed.get("trace_tokens", []), example["trace_tokens"])
+            else:
+                t_metrics = invalid_trace_metrics(parsed.get("trace_tokens", []), example["trace_tokens"])
             ar_row = {
                 **base,
                 "pred_count": parsed.get("pred_count"),

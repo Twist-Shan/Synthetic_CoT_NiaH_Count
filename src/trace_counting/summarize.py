@@ -7,6 +7,8 @@ import pandas as pd
 
 from .io_utils import ensure_dir, load_json, save_json
 
+WEIGHTED_MASKS = {"full_sequence_final_weighted", "completion_final_weighted"}
+
 
 def summarize_runs(args: argparse.Namespace) -> pd.DataFrame:
     runs_dir = Path(args.runs_dir)
@@ -17,6 +19,8 @@ def summarize_runs(args: argparse.Namespace) -> pd.DataFrame:
         run_dir = metrics_path.parent.parent
         config_path = run_dir / "config.json"
         config = load_json(config_path) if config_path.exists() else {}
+        loss_mask = config.get("loss_mask")
+        final_weight = config.get("final_weight") if loss_mask in WEIGHTED_MASKS else None
         metrics = load_json(metrics_path)
         split = metrics.get("split", metrics_path.name.removesuffix("_metrics.json"))
         tf = metrics.get("teacher_forced", {})
@@ -27,8 +31,8 @@ def summarize_runs(args: argparse.Namespace) -> pd.DataFrame:
                 "split": split,
                 "model_name": config.get("model", {}).get("model_name"),
                 "seed": config.get("seed"),
-                "loss_mask": config.get("loss_mask"),
-                "final_weight": config.get("final_weight"),
+                "loss_mask": loss_mask,
+                "final_weight": final_weight,
                 "tf_count_acc": tf.get("count_accuracy"),
                 "tf_mae": tf.get("mean_absolute_error"),
                 "tf_under": tf.get("undercount_rate"),

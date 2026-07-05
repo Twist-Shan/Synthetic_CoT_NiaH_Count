@@ -23,15 +23,27 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-If you use Colab, open `notebooks/Trace_Count_v0_Colab.ipynb` and run all cells. The notebook clones/updates the repo when needed, installs dependencies, runs tests, generates the debug dataset, trains/evaluates every loss-mask regime, summarizes results, runs probes, and displays plots.
+If you use Colab, open `notebooks/Trace_Count_v0_Colab.ipynb` and run all cells. The notebook clones/updates the repo when needed, installs dependencies, runs tests, generates the full v0 dataset, trains/evaluates every loss-mask regime, summarizes results, runs probes, displays plots, saves outputs to Google Drive, and prepares an optional GitHub result upload.
 
-## One-Command Debug Run
+## Full v0 Sweep
 
 ```bash
-python scripts/run_pipeline.py --config configs/experiment/debug.yaml --stage all
+python scripts/run_pipeline.py --config configs/experiment/v0.yaml --stage data
+python scripts/run_loss_mask_sweep.py \
+  --data_dir data/trace_count_v0 \
+  --model_config configs/model/small_main.yaml \
+  --model_name small_main \
+  --out_root runs/trace_count_v0 \
+  --seeds 0,1,2 \
+  --max_steps 50000 \
+  --batch_size 128
+python -m trace_counting.summarize \
+  --runs_dir runs/trace_count_v0 \
+  --out_csv runs/trace_count_v0/summary.csv \
+  --print_markdown
 ```
 
-This generates a tiny balanced dataset, trains `tiny_debug` for 100 steps, evaluates all validation splits, runs a small hidden-state probe, and writes plots.
+This is the notebook default. It trains 21 runs: 7 loss-mask regimes across 3 seeds.
 
 ## Manual Commands
 

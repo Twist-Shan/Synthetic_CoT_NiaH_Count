@@ -15,7 +15,7 @@ def _save_lineplot(df: pd.DataFrame, x: str, y: str, path: Path, *, hue: str | N
     if df.empty or y not in df.columns:
         return
     plt.figure(figsize=(7, 4))
-    sns.lineplot(data=df, x=x, y=y, hue=hue)
+    sns.lineplot(data=df, x=x, y=y, hue=hue, marker="o")
     if title:
         plt.title(title)
     plt.tight_layout()

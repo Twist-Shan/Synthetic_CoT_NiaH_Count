@@ -4,7 +4,7 @@ import pytest
 
 pytest.importorskip("torch")
 
-from trace_counting.eval import parse_generation, trace_metrics
+from trace_counting.eval import invalid_trace_metrics, parse_generation, trace_metrics
 
 
 def test_parse_valid_generation() -> None:
@@ -37,3 +37,9 @@ def test_trace_metrics_zero_count() -> None:
     assert metrics["trace_index_accuracy"] == 1.0
     assert metrics["trace_marker_precision"] == 1.0
     assert metrics["trace_marker_recall"] == 1.0
+
+
+def test_invalid_trace_metrics_do_not_credit_empty_trace() -> None:
+    metrics = invalid_trace_metrics([], [])
+    assert metrics["trace_exact_match"] is False
+    assert metrics["trace_index_accuracy"] == 0.0
