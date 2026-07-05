@@ -1,0 +1,51 @@
+experiment:
+  name: trace_count_v0_debug
+
+data:
+  out_dir: data/trace_count_v0_debug
+  max_count: 64
+  noise_vocab_size: 64
+  seeds: [0]
+  train_lengths: [16, 32]
+  train_counts: "0:4"
+  val_id_lengths: [16, 32]
+  val_id_counts: "0:4"
+  val_length_ood_lengths: [64]
+  val_length_ood_counts: "0:4"
+  val_density_shift_low_lengths: [64]
+  val_density_shift_low_counts: "0:2"
+  val_density_shift_high_lengths: [16]
+  val_density_shift_high_counts: "3:4"
+  examples_per_pair_train: 8
+  examples_per_pair_val: 4
+
+training:
+  model_config: configs/model/tiny_debug.yaml
+  loss_mask: completion_final_weighted
+  final_weight: 10.0
+  eos_weight: 1.0
+  seed: 0
+  out_dir: runs/trace_count_v0_debug/tiny_debug/completion_final_weighted_fw10_seed0
+  batch_size: 32
+  grad_accum_steps: 1
+  max_steps: 100
+  eval_every: 50
+  save_every: 100
+  learning_rate: 3.0e-4
+  warmup_steps: 10
+  weight_decay: 0.1
+  grad_clip_norm: 1.0
+
+eval:
+  splits:
+    - val_id
+    - val_length_ood
+    - val_density_shift_low
+    - val_density_shift_high
+  limit: 128
+
+probe:
+  split: val_id
+  limit: 128
+  anchors: ans,think_close,source,trace_marker
+  layers: -1

@@ -1,0 +1,11 @@
+model_name: medium_optional
+n_layer: 6
+n_head: 8
+n_embd: 256
+n_inner: 1024
+activation_function: gelu_new
+resid_pdrop: 0.0
+embd_pdrop: 0.0
+attn_pdrop: 0.0
+n_positions: 2048
+vocab_size: auto
