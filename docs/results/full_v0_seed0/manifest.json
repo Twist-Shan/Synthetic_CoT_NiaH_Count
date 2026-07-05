@@ -1,0 +1,10 @@
+{
+  "result_tag": "full_v0_seed0_small_main_steps10000_20260705_205458",
+  "experiment_name": "full_v0_seed0",
+  "data_dir": "data/trace_count_v0_seed0",
+  "out_root": "runs/trace_count_v0_seed0",
+  "main_run": "runs/trace_count_v0_seed0/small_main/completion_final_weighted_fw10_seed0",
+  "summary_csv": "runs/trace_count_v0_seed0/summary.csv",
+  "max_steps": 10000,
+  "batch_size": 128
+}

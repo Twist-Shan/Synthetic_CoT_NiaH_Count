@@ -1,0 +1,154 @@
+{
+  "max_count": 64,
+  "noise_vocab_size": 64,
+  "seeds": [
+    0
+  ],
+  "split_counts": {
+    "train": 38400,
+    "val_density_shift_high": 1152,
+    "val_density_shift_low": 1152,
+    "val_id": 9600,
+    "val_length_ood": 6400
+  },
+  "split_specs": {
+    "train": {
+      "counts": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24
+      ],
+      "examples_per_pair": 512,
+      "lengths": [
+        32,
+        64,
+        128
+      ]
+    },
+    "val_density_shift_high": {
+      "counts": [
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24
+      ],
+      "examples_per_pair": 128,
+      "lengths": [
+        64
+      ]
+    },
+    "val_density_shift_low": {
+      "counts": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "examples_per_pair": 128,
+      "lengths": [
+        512
+      ]
+    },
+    "val_id": {
+      "counts": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24
+      ],
+      "examples_per_pair": 128,
+      "lengths": [
+        32,
+        64,
+        128
+      ]
+    },
+    "val_length_ood": {
+      "counts": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24
+      ],
+      "examples_per_pair": 128,
+      "lengths": [
+        256,
+        512
+      ]
+    }
+  }
+}

@@ -1,0 +1,27 @@
+data_dir: data/trace_count_v0_seed0
+model_config: configs/model/small_main.yaml
+model:
+  model_name: small_main
+  n_layer: 4
+  n_head: 4
+  n_embd: 128
+  n_inner: 512
+  activation_function: gelu_new
+  resid_pdrop: 0.0
+  embd_pdrop: 0.0
+  attn_pdrop: 0.0
+  n_positions: 2048
+  vocab_size: auto
+loss_mask: final_count_only
+final_weight: 10.0
+eos_weight: 1.0
+final_count_only_include_eos: false
+seed: 0
+device: cuda
+batch_size: 128
+grad_accum_steps: 1
+max_steps: 10000
+learning_rate: 0.0003
+weight_decay: 0.1
+warmup_steps: 1000
+precision: bf16
