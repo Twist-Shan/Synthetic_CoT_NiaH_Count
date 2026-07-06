@@ -184,8 +184,7 @@ def steering_run(args: argparse.Namespace, *, data_dir: Path, run_dir: Path) -> 
             "ans",
             "--target",
             "total_count",
-            "--alphas",
-            args.steering_alphas,
+            f"--alphas={args.steering_alphas}",
         ),
         skip_if=run_dir / "steering" / "steering_summary.csv" if args.skip_completed else None,
     )
