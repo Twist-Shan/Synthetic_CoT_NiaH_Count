@@ -45,3 +45,23 @@ def test_zero_count_renders_adjacent_think_tokens() -> None:
         "<C0>",
         "<EOS>",
     ]
+
+
+def test_answer_only_format_has_no_think_trace_tokens() -> None:
+    example = make_example(
+        split="val_id",
+        seed=0,
+        seq_len=8,
+        count=3,
+        rng=random.Random(7),
+        example_index=0,
+        max_count=10,
+        task_format="answer_only",
+    )
+    validate_example(example)
+    spans = example["spans"]
+    assert example["task_format"] == "answer_only"
+    assert spans["think_open_idx"] is None
+    assert spans["think_close_idx"] is None
+    assert spans["trace_start"] == spans["trace_end_exclusive"]
+    assert example["full_tokens"][spans["source_end_exclusive"] :] == ["<ANS>", "<C3>", "<EOS>"]

@@ -15,6 +15,14 @@ def test_parse_valid_generation() -> None:
     assert parsed["eos_after_count"] is True
 
 
+def test_parse_answer_only_generation() -> None:
+    parsed = parse_generation(["<ANS>", "<C3>", "<EOS>"], task_format="answer_only")
+    assert parsed["format_valid"] is True
+    assert parsed["pred_count"] == 3
+    assert parsed["trace_tokens"] == []
+    assert parsed["eos_after_count"] is True
+
+
 @pytest.mark.parametrize(
     ("tokens", "reason"),
     [
