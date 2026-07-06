@@ -1,0 +1,79 @@
+ .gitignore                                         |   10 [32m+[m[31m-[m
+ docs/results/full_v0_seed0/dataset_metadata.json   |  154 [32m+++[m
+ docs/results/full_v0_seed0/experiment_config.yaml  |   50 [32m+[m
+ docs/results/full_v0_seed0/manifest.json           |   10 [32m+[m
+ .../config.json                                    |   30 [32m+[m
+ .../config.yaml                                    |   27 [32m+[m
+ .../dataset_metadata.json                          |  154 [32m+++[m
+ .../eval/summary_metrics.json                      | 1184 [32m++++++++++++++++++++[m
+ .../eval/val_density_shift_high_metrics.json       |  273 [32m+++++[m
+ .../eval/val_density_shift_low_metrics.json        |  288 [32m+++++[m
+ .../eval/val_id_metrics.json                       |  318 [32m++++++[m
+ .../eval/val_length_ood_metrics.json               |  303 [32m+++++[m
+ .../plots/ar_accuracy_by_count.png                 |  Bin [31m0[m -> [32m43608[m bytes
+ .../plots/loss_breakdown_by_segment.png            |  Bin [31m0[m -> [32m96489[m bytes
+ .../plots/tf_accuracy_by_count.png                 |  Bin [31m0[m -> [32m54957[m bytes
+ .../plots/tf_accuracy_by_step.png                  |  Bin [31m0[m -> [32m32058[m bytes
+ .../plots/trace_exact_by_count.png                 |  Bin [31m0[m -> [32m44320[m bytes
+ .../plots/training_loss.png                        |  Bin [31m0[m -> [32m51291[m bytes
+ .../plots/validation_loss.png                      |  Bin [31m0[m -> [32m47372[m bytes
+ .../probes/probe_summary.csv                       |  106 [32m++[m
+ .../probes/probe_summary.json                      | 1172 [32m+++++++++++++++++++[m
+ .../vocab.json                                     |  417 [32m+++++++[m
+ .../config.json                                    |   30 [32m+[m
+ .../config.yaml                                    |   27 [32m+[m
+ .../dataset_metadata.json                          |  154 [32m+++[m
+ .../eval/summary_metrics.json                      | 1184 [32m++++++++++++++++++++[m
+ .../eval/val_density_shift_high_metrics.json       |  273 [32m+++++[m
+ .../eval/val_density_shift_low_metrics.json        |  288 [32m+++++[m
+ .../eval/val_id_metrics.json                       |  318 [32m++++++[m
+ .../eval/val_length_ood_metrics.json               |  303 [32m+++++[m
+ .../completion_final_weighted_fw5_seed0/vocab.json |  417 [32m+++++++[m
+ .../small_main/completion_only_seed0/config.json   |   30 [32m+[m
+ .../small_main/completion_only_seed0/config.yaml   |   27 [32m+[m
+ .../completion_only_seed0/dataset_metadata.json    |  154 [32m+++[m
+ .../eval/summary_metrics.json                      | 1184 [32m++++++++++++++++++++[m
+ .../eval/val_density_shift_high_metrics.json       |  273 [32m+++++[m
+ .../eval/val_density_shift_low_metrics.json        |  288 [32m+++++[m
+ .../completion_only_seed0/eval/val_id_metrics.json |  318 [32m++++++[m
+ .../eval/val_length_ood_metrics.json               |  303 [32m+++++[m
+ .../small_main/completion_only_seed0/vocab.json    |  417 [32m+++++++[m
+ .../small_main/final_count_only_seed0/config.json  |   30 [32m+[m
+ .../small_main/final_count_only_seed0/config.yaml  |   27 [32m+[m
+ .../final_count_only_seed0/dataset_metadata.json   |  154 [32m+++[m
+ .../eval/summary_metrics.json                      | 1184 [32m++++++++++++++++++++[m
+ .../eval/val_density_shift_high_metrics.json       |  273 [32m+++++[m
+ .../eval/val_density_shift_low_metrics.json        |  288 [32m+++++[m
+ .../eval/val_id_metrics.json                       |  318 [32m++++++[m
+ .../eval/val_length_ood_metrics.json               |  303 [32m+++++[m
+ .../small_main/final_count_only_seed0/vocab.json   |  417 [32m+++++++[m
+ .../config.json                                    |   30 [32m+[m
+ .../config.yaml                                    |   27 [32m+[m
+ .../dataset_metadata.json                          |  154 [32m+++[m
+ .../eval/summary_metrics.json                      | 1184 [32m++++++++++++++++++++[m
+ .../eval/val_density_shift_high_metrics.json       |  273 [32m+++++[m
+ .../eval/val_density_shift_low_metrics.json        |  288 [32m+++++[m
+ .../eval/val_id_metrics.json                       |  318 [32m++++++[m
+ .../eval/val_length_ood_metrics.json               |  303 [32m+++++[m
+ .../vocab.json                                     |  417 [32m+++++++[m
+ .../config.json                                    |   30 [32m+[m
+ .../config.yaml                                    |   27 [32m+[m
+ .../dataset_metadata.json                          |  154 [32m+++[m
+ .../eval/summary_metrics.json                      | 1184 [32m++++++++++++++++++++[m
+ .../eval/val_density_shift_high_metrics.json       |  273 [32m+++++[m
+ .../eval/val_density_shift_low_metrics.json        |  288 [32m+++++[m
+ .../eval/val_id_metrics.json                       |  318 [32m++++++[m
+ .../eval/val_length_ood_metrics.json               |  303 [32m+++++[m
+ .../vocab.json                                     |  417 [32m+++++++[m
+ .../small_main/full_sequence_seed0/config.json     |   30 [32m+[m
+ .../small_main/full_sequence_seed0/config.yaml     |   27 [32m+[m
+ .../full_sequence_seed0/dataset_metadata.json      |  154 [32m+++[m
+ .../full_sequence_seed0/eval/summary_metrics.json  | 1184 [32m++++++++++++++++++++[m
+ .../eval/val_density_shift_high_metrics.json       |  273 [32m+++++[m
+ .../eval/val_density_shift_low_metrics.json        |  288 [32m+++++[m
+ .../full_sequence_seed0/eval/val_id_metrics.json   |  318 [32m++++++[m
+ .../eval/val_length_ood_metrics.json               |  303 [32m+++++[m
+ .../runs/small_main/full_sequence_seed0/vocab.json |  417 [32m+++++++[m
+ docs/results/full_v0_seed0/runs/summary.csv        |   29 [32m+[m
+ docs/results/full_v0_seed0/summary.csv             |   29 [32m+[m
+ 78 files changed, 22513 insertions(+), 5 deletions(-)

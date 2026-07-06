@@ -7,14 +7,14 @@ __pycache__/
 .ruff_cache/
 .ipynb_checkpoints/
 
-data/
-runs/
-results/
+/data/
+/runs/
+/results/
 outputs/
 checkpoints/
 logs/
 wandb/
-paper_figs/
+/paper_figs/
 
 *.pt
 *.pth
@@ -28,3 +28,4 @@ paper_figs/
 .env
 .env.*
 .DS_Store
+/colab_results/

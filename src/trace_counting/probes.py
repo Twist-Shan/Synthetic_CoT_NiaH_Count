@@ -57,7 +57,7 @@ def anchor_positions(example: dict, anchors: set[str]) -> list[dict[str, Any]]:
         "count": spans["count_idx"],
     }
     for name, idx in fixed.items():
-        if name in anchors:
+        if name in anchors and idx is not None:
             positions.append({**base, "anchor": name, "idx": idx})
 
     if "source" in anchors:
@@ -95,25 +95,27 @@ def anchor_positions(example: dict, anchors: set[str]) -> list[dict[str, Any]]:
     if "trace_index" in anchors or "trace_marker" in anchors:
         for pair in spans["trace_pairs"]:
             if "trace_index" in anchors:
-                positions.append(
-                    {
-                        **base,
-                        "anchor": "trace_index",
-                        "idx": pair["index_idx"],
-                        "k": pair["k"],
-                        "token": f"<I{pair['k']}>",
-                    }
-                )
+                if pair.get("index_idx") is not None:
+                    positions.append(
+                        {
+                            **base,
+                            "anchor": "trace_index",
+                            "idx": pair["index_idx"],
+                            "k": pair["k"],
+                            "token": f"<I{pair['k']}>",
+                        }
+                    )
             if "trace_marker" in anchors:
-                positions.append(
-                    {
-                        **base,
-                        "anchor": "trace_marker",
-                        "idx": pair["marker_idx"],
-                        "k": pair["k"],
-                        "token": pair["marker"],
-                    }
-                )
+                if pair.get("marker_idx") is not None:
+                    positions.append(
+                        {
+                            **base,
+                            "anchor": "trace_marker",
+                            "idx": pair["marker_idx"],
+                            "k": pair["k"],
+                            "token": pair["marker"],
+                        }
+                    )
     return positions
 
 

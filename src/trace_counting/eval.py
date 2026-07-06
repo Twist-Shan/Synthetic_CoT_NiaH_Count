@@ -94,7 +94,11 @@ def _find_token(tokens: list[str], token: str, start: int = 0) -> int | None:
         return None
 
 
-def parse_generation(tokens: list[str]) -> dict[str, Any]:
+def parse_generation(tokens: list[str], *, task_format: str = "think_trace") -> dict[str, Any]:
+    if task_format == "answer_only":
+        return parse_answer_only_generation(tokens)
+    if task_format != "think_trace":
+        raise ValueError(f"Unknown task_format={task_format!r}")
     first_think = _find_token(tokens, "<Think>")
     if first_think is None:
         return {"format_valid": False, "invalid_reason": "missing_first_think", "trace_tokens": [], "pred_count": None}
@@ -134,6 +138,34 @@ def parse_generation(tokens: list[str]) -> dict[str, Any]:
         "second_think_idx": second_think,
         "ans_idx": ans_idx,
         "trace_tokens": tokens[first_think + 1 : second_think],
+        "answer_token": answer_token,
+        "pred_count": pred_count,
+        "eos_after_count": eos_after_count,
+    }
+
+
+def parse_answer_only_generation(tokens: list[str]) -> dict[str, Any]:
+    ans_idx = _find_token(tokens, "<ANS>")
+    if ans_idx is None:
+        return {"format_valid": False, "invalid_reason": "missing_ans", "trace_tokens": [], "pred_count": None}
+    if ans_idx + 1 >= len(tokens):
+        return {"format_valid": False, "invalid_reason": "missing_count_after_ans", "trace_tokens": [], "pred_count": None}
+    answer_token = tokens[ans_idx + 1]
+    pred_count = parse_count_token(answer_token)
+    if pred_count is None:
+        return {
+            "format_valid": False,
+            "invalid_reason": "invalid_count_token",
+            "trace_tokens": [],
+            "answer_token": answer_token,
+            "pred_count": None,
+        }
+    eos_after_count = ans_idx + 2 < len(tokens) and tokens[ans_idx + 2] == "<EOS>"
+    return {
+        "format_valid": True,
+        "invalid_reason": None,
+        "ans_idx": ans_idx,
+        "trace_tokens": [],
         "answer_token": answer_token,
         "pred_count": pred_count,
         "eos_after_count": eos_after_count,
@@ -231,7 +263,9 @@ def aggregate_trace_metrics(rows: list[dict]) -> dict[str, Any]:
         values = [float(row[name]) for row in rows if row.get(name) is not None]
         out[name] = _safe_mean(values)
     out["format_validity"] = _safe_mean([float(row["format_valid"]) for row in rows])
-    out["mean_trace_length_error"] = _safe_mean([abs(float(row["trace_length_error"])) for row in rows])
+    out["mean_trace_length_error"] = _safe_mean(
+        [abs(float(row["trace_length_error"])) for row in rows if row.get("trace_length_error") is not None]
+    )
     return out
 
 
@@ -272,9 +306,20 @@ def evaluate_split(
         if mode in {"both", "autoregressive"}:
             prefix = example["full_tokens"][: example["spans"]["source_end_exclusive"]]
             generated = greedy_generate(model, tokenizer, prefix, device, max_new_tokens=max_new_tokens)
-            parsed = parse_generation(generated)
+            task_format = example.get("task_format", "think_trace")
+            parsed = parse_generation(generated, task_format=task_format)
             if parsed.get("format_valid", False):
-                t_metrics = trace_metrics(parsed.get("trace_tokens", []), example["trace_tokens"])
+                if task_format == "answer_only":
+                    t_metrics = {
+                        "trace_exact_match": None,
+                        "trace_index_accuracy": None,
+                        "trace_marker_precision": None,
+                        "trace_marker_recall": None,
+                        "trace_duplicate_rate": None,
+                        "trace_length_error": None,
+                    }
+                else:
+                    t_metrics = trace_metrics(parsed.get("trace_tokens", []), example["trace_tokens"])
             else:
                 t_metrics = invalid_trace_metrics(parsed.get("trace_tokens", []), example["trace_tokens"])
             ar_row = {
