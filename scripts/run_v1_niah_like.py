@@ -11,10 +11,16 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 
 
+def _is_complete_artifact(path: Path) -> bool:
+    return path.exists() and path.stat().st_size > 0
+
+
 def _run(cmd: list[str], *, skip_if: Path | None = None) -> None:
-    if skip_if is not None and skip_if.exists():
+    if skip_if is not None and _is_complete_artifact(skip_if):
         print(f"[skip] {skip_if}", flush=True)
         return
+    if skip_if is not None and skip_if.exists():
+        print(f"[rerun] found empty/incomplete artifact: {skip_if}", flush=True)
     env = os.environ.copy()
     env["PYTHONPATH"] = str(SRC) + os.pathsep + env.get("PYTHONPATH", "")
     start = time.time()

@@ -15,17 +15,50 @@ from .io_utils import ensure_dir, read_jsonl, save_json
 from .model import load_model_from_checkpoint
 from .tokenizer import VocabTokenizer
 
+PER_HEAD_COLUMNS = [
+    "split",
+    "example_id",
+    "task_format",
+    "seq_len",
+    "count",
+    "query_anchor",
+    "layer",
+    "head",
+    "source_mass",
+    "marker_mass",
+    "noise_mass",
+    "marker_per_token",
+    "noise_per_token",
+    "marker_enrichment",
+    "top_source_is_marker",
+]
 
-def _write_csv(rows: list[dict[str, Any]], path: Path) -> None:
+SUMMARY_COLUMNS = [
+    "split",
+    "task_format",
+    "query_anchor",
+    "layer",
+    "head",
+    "n",
+    "mean_count",
+    "source_mass",
+    "marker_mass",
+    "noise_mass",
+    "marker_per_token",
+    "noise_per_token",
+    "marker_enrichment",
+    "top_source_marker_rate",
+]
+
+
+def _write_csv(rows: list[dict[str, Any]], path: Path, *, fieldnames: list[str] | None = None) -> None:
     ensure_dir(path.parent)
-    if not rows:
-        path.write_text("", encoding="utf-8")
-        return
-    keys = sorted({key for row in rows for key in row.keys()})
+    keys = fieldnames or sorted({key for row in rows for key in row.keys()})
     with path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=keys)
         writer.writeheader()
-        writer.writerows(rows)
+        if rows:
+            writer.writerows(rows)
 
 
 def _mean(values: list[float]) -> float | None:
@@ -68,6 +101,10 @@ def run_attention_analysis(args: argparse.Namespace) -> list[dict[str, Any]]:
             input_ids = torch.tensor([ids], dtype=torch.long, device=device)
             outputs = model(input_ids=input_ids, output_attentions=True)
             attentions = outputs.attentions
+            if attentions is None:
+                raise RuntimeError(
+                    "Model did not return attentions. Make sure the model forward supports output_attentions=True."
+                )
             spans = example["spans"]
             source_indices = list(range(spans["source_start"], spans["source_end_exclusive"]))
             marker_indices = set(pair["source_idx"] for pair in spans["trace_pairs"])
@@ -133,8 +170,8 @@ def run_attention_analysis(args: argparse.Namespace) -> list[dict[str, Any]]:
             }
         )
 
-    _write_csv(per_head_rows, out_dir / "attention_per_head_examples.csv")
-    _write_csv(summary_rows, out_dir / "attention_summary.csv")
+    _write_csv(per_head_rows, out_dir / "attention_per_head_examples.csv", fieldnames=PER_HEAD_COLUMNS)
+    _write_csv(summary_rows, out_dir / "attention_summary.csv", fieldnames=SUMMARY_COLUMNS)
     save_json(
         {
             "checkpoint": str(checkpoint),
