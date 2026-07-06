@@ -24,38 +24,39 @@ def code(source: str) -> dict:
 
 cells = [
     md(
-        r'''
-# Trace Count v2: fixed count-token type, quantity OOD
+        r"""
+# Synthetic NIAH-Style Counting v2
 
-这个 notebook 跑一个更干净的 NiaH-like counting 实验：**count 的 token 种类固定，ID/OOD 只改变数量**。
+This notebook follows `notebooks/pipeline_v2_codex_prompt.md`.
 
-核心设计：
+The v2 experiment is intentionally narrower than the earlier ID/OOD notebooks:
 
-- **ID:** 序列长度 `50, 100, 200`，needle 数量 `0-5`。
-- **OOD:** 同样的序列长度，但 needle 数量 `6-10`。
-- **答案格式:** 不再用 `<C0> ... <C10>` 这种不同 count token，而是用同一个 `<CNT>` 重复 `k` 次。例如 count=7 的答案是 `<ANS> <CNT> ... <CNT> <EOS>`。
-- **think 模型:** source 后生成 `<Think> <TICK>, marker ... <Think> <ANS> <CNT>*k <EOS>`。
-- **answer-only 模型:** source 后直接生成 `<ANS> <CNT>*k <EOS>`。
-- **accuracy 定义:** 无论是否带 think，主指标都只看最终答案 span 里 `<CNT>` 的数量是否等于真实 count。
+- fixed prompt-body length;
+- 64 noise-token types;
+- 10 countable marker-token types `<A>` ... `<J>`;
+- count range `1..10`;
+- two separately trained small decoder-only Transformers:
+  - `non_thinking`: directly predicts the final count after `<Ans>`;
+  - `thinking`: generates an indexed trace after `<Think/>`, then predicts the final count;
+- no ID/OOD split, no variable sequence length, no distractors, no steering.
 
-要回答的问题：
-
-1. 带 think token 的模型和不带 think token 的模型，在 **ID / OOD** final count 上有什么差异？
-2. hidden states 里有没有线性的 counter direction？哪种提取方法更好？
-3. 用不同 count direction 做 steering，能不能改善 OOD counting？
-4. think token 是否改变 attention 到 source needles 的分布，从而影响 targeted retrieval / counting？
-        '''
+The main comparison is whether explicit trace supervision helps the model learn sparse counting across low/mid/high count bins.
+        """
     ),
     code(
-        r'''
+        r"""
 from pathlib import Path
 import json
+import math
 import os
 import platform
+import random
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 REPO_URL = "https://github.com/Twist-Shan/Synthetic_CoT_NiaH_Count.git"
 INSTALL_PACKAGE = True
@@ -68,935 +69,1099 @@ if IN_COLAB:
     os.chdir(repo_dir)
 
 ROOT = Path.cwd()
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
-
 if INSTALL_PACKAGE:
     subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-e", "."], check=True)
-
-print("cwd:", ROOT)
-print("python:", sys.executable)
-print("platform:", platform.platform())
-try:
-    import torch
-
-    print("torch:", torch.__version__)
-    print("cuda:", torch.cuda.is_available())
-    if torch.cuda.is_available():
-        print("gpu:", torch.cuda.get_device_name(0))
-except Exception as exc:
-    print("torch check failed:", repr(exc))
-        '''
-    ),
-    md(
-        r'''
-## Runtime Settings
-
-默认跑完整 v2 pipeline：生成两份可比数据、训练两个模型、评估 ID/OOD、fit probe/direction、做 OOD projection、做 generation steering、做 attention analysis。
-
-如果只想补某一阶段，可以把 `PIPELINE_STAGE` 改成：
-
-- `data`
-- `train`
-- `eval`
-- `probe`
-- `projection`
-- `steering`
-- `attention`
-- `all`
-
-`SKIP_COMPLETED = True` 时，已有且非空的结果会跳过，适合断点续跑。
-        '''
-    ),
-    code(
-        r'''
-RUN_TESTS = True
-EXPERIMENT_NAME = "trace_count_v2_seed0_full_colab"
-
-MODEL_CONFIG = "configs/model/small_main.yaml"
-MODEL_NAME = "small_main"
-SEED = 0
-
-DATA_ROOT = "data/trace_count_v2_seed0"
-OUT_ROOT = f"runs/{EXPERIMENT_NAME}"
-
-LENGTHS = "50,100,200"
-ID_COUNTS = "0:5"
-OOD_COUNTS = "6:10"
-MAX_COUNT = 10
-NOISE_VOCAB_SIZE = 64
-
-EXAMPLES_PER_PAIR_TRAIN = 512
-EXAMPLES_PER_PAIR_VAL = 128
-
-MAX_STEPS = 10000
-BATCH_SIZE = 128
-LEARNING_RATE = 3e-4
-WARMUP_STEPS = 500
-EVAL_EVERY = 1000
-SAVE_EVERY = 0
-PROGRESS_EVERY = 100
-
-EVAL_LIMIT = 2048
-PROBE_LIMIT = 2048
-PROJECTION_LIMIT = 2048
-STEERING_LIMIT = 512
-ATTENTION_LIMIT = 512
-
-PIPELINE_STAGE = "all"
-SKIP_COMPLETED = True
-VARIANTS = "think_trace_repeat_count,answer_only_repeat_count"
-STEERING_ALPHAS = "-6,-4,-2,-1,0,1,2,4,6"
-
-DIRECTION_LAYERS = "all"
-PROBE_LAYERS = "all"
-PROBE_ANCHORS = "ans,think_close,source_marker,trace_index,trace_marker"
-DIRECTION_ANCHORS = "ans,think_close,source_marker,trace_index,trace_marker"
-DIRECTION_SPECS = (
-    "layer_2:ans:total_count,layer_4:ans:total_count,"
-    "layer_2:source_marker:running_count,layer_4:source_marker:running_count,"
-    "layer_2:think_close:total_count,layer_4:think_close:total_count,"
-    "layer_2:trace_marker:k,layer_4:trace_marker:k"
-)
-ATTENTION_SPLITS = "val_id,val_count_ood"
-ATTENTION_QUERY_ANCHORS = "ans,think_close,count"
-
-RESULT_DIR_OVERRIDE = None
-
-settings = {
-    "EXPERIMENT_NAME": EXPERIMENT_NAME,
-    "DATA_ROOT": DATA_ROOT,
-    "OUT_ROOT": OUT_ROOT,
-    "MODEL_CONFIG": MODEL_CONFIG,
-    "MODEL_NAME": MODEL_NAME,
-    "SEED": SEED,
-    "LENGTHS": LENGTHS,
-    "ID_COUNTS": ID_COUNTS,
-    "OOD_COUNTS": OOD_COUNTS,
-    "MAX_COUNT": MAX_COUNT,
-    "MAX_STEPS": MAX_STEPS,
-    "BATCH_SIZE": BATCH_SIZE,
-    "PIPELINE_STAGE": PIPELINE_STAGE,
-    "VARIANTS": VARIANTS,
-    "EVAL_LIMIT": EVAL_LIMIT,
-    "PROBE_LIMIT": PROBE_LIMIT,
-    "PROJECTION_LIMIT": PROJECTION_LIMIT,
-    "STEERING_LIMIT": STEERING_LIMIT,
-    "ATTENTION_LIMIT": ATTENTION_LIMIT,
-}
-print(json.dumps(settings, indent=2, ensure_ascii=False))
-        '''
-    ),
-    code(
-        r'''
-if RUN_TESTS:
-    subprocess.run([sys.executable, "-m", "pytest", "-q"], check=True)
-    subprocess.run([sys.executable, "-m", "compileall", "-q", "src", "scripts"], check=True)
-        '''
-    ),
-    md(
-        r'''
-## Run v2 Pipeline
-
-这一格会顺序跑两个模型：
-
-- `think_trace_repeat_count`: 带 think trace，trace 里每个 needle 用 `<TICK>, marker` 表示。
-- `answer_only_repeat_count`: 不带 think trace，source 后直接输出最终 count。
-
-两者 source 数据随机种子相同，所以 ID/OOD 比较更干净。训练目标都是 all-token next-token prediction (`full_sequence`)，不加 final-count 权重。
-        '''
-    ),
-    code(
-        r'''
-cmd = [
-    sys.executable,
-    "-u",
-    "scripts/run_v2_repeat_count.py",
-    "--data_root",
-    DATA_ROOT,
-    "--out_root",
-    OUT_ROOT,
-    "--model_config",
-    MODEL_CONFIG,
-    "--model_name",
-    MODEL_NAME,
-    "--seed",
-    str(SEED),
-    "--lengths",
-    LENGTHS,
-    "--id_counts",
-    ID_COUNTS,
-    "--ood_counts",
-    OOD_COUNTS,
-    "--max_count",
-    str(MAX_COUNT),
-    "--noise_vocab_size",
-    str(NOISE_VOCAB_SIZE),
-    "--examples_per_pair_train",
-    str(EXAMPLES_PER_PAIR_TRAIN),
-    "--examples_per_pair_val",
-    str(EXAMPLES_PER_PAIR_VAL),
-    "--max_steps",
-    str(MAX_STEPS),
-    "--batch_size",
-    str(BATCH_SIZE),
-    "--learning_rate",
-    str(LEARNING_RATE),
-    "--warmup_steps",
-    str(WARMUP_STEPS),
-    "--eval_every",
-    str(EVAL_EVERY),
-    "--eval_limit",
-    str(EVAL_LIMIT),
-    "--probe_limit",
-    str(PROBE_LIMIT),
-    "--projection_limit",
-    str(PROJECTION_LIMIT),
-    "--steering_limit",
-    str(STEERING_LIMIT),
-    "--attention_limit",
-    str(ATTENTION_LIMIT),
-    "--save_every",
-    str(SAVE_EVERY),
-    "--progress_every",
-    str(PROGRESS_EVERY),
-    "--variants",
-    VARIANTS,
-    "--stage",
-    PIPELINE_STAGE,
-    "--probe_layers",
-    PROBE_LAYERS,
-    "--direction_layers",
-    DIRECTION_LAYERS,
-    "--probe_anchors",
-    PROBE_ANCHORS,
-    "--direction_anchors",
-    DIRECTION_ANCHORS,
-    "--projection_specs",
-    DIRECTION_SPECS,
-    "--steering_direction_specs",
-    DIRECTION_SPECS,
-    f"--steering_alphas={STEERING_ALPHAS}",
-    "--attention_splits",
-    ATTENTION_SPLITS,
-    "--attention_query_anchors",
-    ATTENTION_QUERY_ANCHORS,
-]
-if SKIP_COMPLETED:
-    cmd.append("--skip_completed")
-
-Path(OUT_ROOT).mkdir(parents=True, exist_ok=True)
-pipeline_log = Path(OUT_ROOT) / "v2_pipeline.log"
-print(" ".join(cmd), flush=True)
-with pipeline_log.open("a", encoding="utf-8") as log:
-    log.write("\n\n" + "=" * 100 + "\n")
-    log.write(datetime.now().isoformat() + "\n")
-    log.write(" ".join(cmd) + "\n")
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-        env={**os.environ, "PYTHONUNBUFFERED": "1"},
-    )
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        print(line, end="", flush=True)
-        log.write(line)
-        log.flush()
-    returncode = proc.wait()
-if returncode != 0:
-    raise subprocess.CalledProcessError(returncode, cmd)
-print("Pipeline log:", pipeline_log)
-        '''
-    ),
-    md(
-        r'''
-## Load Results
-
-如果你是在 Colab 跑完后把结果下载回本地，只需要设置 `RESULT_DIR_OVERRIDE` 指向结果 bundle。否则这里默认读取当前 notebook 刚生成的 `data/...` 和 `runs/...`。
-        '''
-    ),
-    code(
-        r'''
-import math
-from collections import defaultdict
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+import torch
+import torch.nn.functional as F
 from IPython.display import Markdown, display
+from sklearn.linear_model import LogisticRegression, RidgeCV
+from sklearn.metrics import accuracy_score, mean_absolute_error, r2_score
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from torch.optim import AdamW
+from tqdm.auto import tqdm
+from transformers import GPT2Config, GPT2LMHeadModel
 
 sns.set_theme(style="whitegrid", context="notebook")
 plt.rcParams["figure.dpi"] = 130
 
-VARIANT_INFO = {
-    "think_trace_repeat_count": {
-        "label": "think trace",
-        "run_name": "think_trace_repeat_count_full_sequence_seed0",
-        "description": "source + <Think> trace + <Think> + repeated <CNT> answer",
+print("cwd:", ROOT)
+print("python:", sys.executable)
+print("platform:", platform.platform())
+print("torch:", torch.__version__)
+print("cuda:", torch.cuda.is_available())
+if torch.cuda.is_available():
+    print("gpu:", torch.cuda.get_device_name(0))
+        """
+    ),
+    md(
+        r"""
+## Configuration
+
+Use `PRESET = "debug"` to verify the whole pipeline quickly. Switch to `PRESET = "main"` for the full v2 experiment from the prompt.
+
+The debug run still writes every required metric file and plot, but it is not scientifically meaningful.
+        """
+    ),
+    code(
+        r"""
+PRESET = "debug"  # "debug" or "main"
+RUN_TRAINING = True
+SKIP_TRAIN_IF_FINAL_CHECKPOINT_EXISTS = True
+RUN_PROBES = True
+RUN_ATTENTION = True
+RUN_TESTS_FIRST = True
+SAVE_CHECKPOINTS_AT_EVAL = True
+
+CONFIGS = {
+    "debug": {
+        "seq_len": 64,
+        "train_steps": 200,
+        "batch_size": 32,
+        "eval_every": 50,
+        "log_every": 10,
+        "test_examples_per_count": 20,
+        "val_examples_per_count": 20,
+        "probe_train_examples_per_count": 20,
+        "probe_test_examples_per_count": 20,
+        "attention_examples_per_count": 10,
+        "seed": 1234,
     },
-    "answer_only_repeat_count": {
-        "label": "answer only",
-        "run_name": "answer_only_repeat_count_full_sequence_seed0",
-        "description": "source + repeated <CNT> answer",
+    "main": {
+        "seq_len": 256,
+        "train_steps": 20000,
+        "batch_size": 128,
+        "eval_every": 500,
+        "log_every": 50,
+        "test_examples_per_count": 1000,
+        "val_examples_per_count": 200,
+        "probe_train_examples_per_count": 500,
+        "probe_test_examples_per_count": 500,
+        "attention_examples_per_count": 100,
+        "seed": 1234,
     },
 }
-REQUESTED_VARIANTS = [v.strip() for v in VARIANTS.split(",") if v.strip()]
 
-if RESULT_DIR_OVERRIDE:
-    RESULT_DIR = Path(RESULT_DIR_OVERRIDE)
-    BASE_DATA = RESULT_DIR / "data"
-    BASE_RUNS = RESULT_DIR / "runs"
-else:
-    RESULT_DIR = None
-    BASE_DATA = Path(DATA_ROOT)
-    BASE_RUNS = Path(OUT_ROOT)
+cfg = dict(CONFIGS[PRESET])
+cfg.update(
+    {
+        "noise_vocab_size": 64,
+        "marker_vocab_size": 10,
+        "min_count": 1,
+        "max_count": 10,
+        "n_layer": 4,
+        "n_head": 4,
+        "n_embd": 256,
+        "n_positions": 320 if CONFIGS[PRESET]["seq_len"] <= 256 else CONFIGS[PRESET]["seq_len"] + 64,
+        "learning_rate": 3.0e-4,
+        "betas": (0.9, 0.95),
+        "weight_decay": 0.1,
+        "grad_clip_norm": 1.0,
+        "warmup_steps": 500 if PRESET == "main" else 20,
+        "device": "cuda" if torch.cuda.is_available() else "cpu",
+    }
+)
 
-DATA_DIRS = {v: BASE_DATA / v for v in REQUESTED_VARIANTS}
-RUNS = {v: BASE_RUNS / MODEL_NAME / VARIANT_INFO[v]["run_name"] for v in REQUESTED_VARIANTS}
+RUN_DIR = Path(f"runs/v2_marker_trace_seed{cfg['seed']}_{PRESET}")
+PLOTS_DIR = RUN_DIR / "plots"
+PROBES_DIR = RUN_DIR / "probes"
+ATTENTION_DIR = RUN_DIR / "attention"
+CHECKPOINT_DIR = RUN_DIR / "checkpoints"
+for path in [RUN_DIR, PLOTS_DIR, PROBES_DIR, ATTENTION_DIR, CHECKPOINT_DIR]:
+    path.mkdir(parents=True, exist_ok=True)
 
-def read_json(path):
-    with Path(path).open("r", encoding="utf-8") as f:
-        return json.load(f)
+with (RUN_DIR / "config.json").open("w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=2)
 
-def read_jsonl(path, limit=None):
+display(Markdown(f"**Run directory:** `{RUN_DIR}`"))
+display(pd.DataFrame([cfg]).T.rename(columns={0: "value"}))
+        """
+    ),
+    code(
+        r"""
+if RUN_TESTS_FIRST:
+    subprocess.run([sys.executable, "-m", "compileall", "-q", "src", "scripts"], check=True)
+    subprocess.run([sys.executable, "-m", "pytest", "-q"], check=True)
+        """
+    ),
+    md(
+        r"""
+## Core v2 Implementation
+
+This cell defines the custom vocabulary, data generator, rendering logic, model construction, training loop, evaluation, and required plots.
+        """
+    ),
+    code(
+        r"""
+SPECIAL_TOKENS = ["<PAD>", "<BOS>", "<EOS>", "<Ans>", "<Think/>", "</Think>"]
+NOISE_TOKENS = [f"<N{i}>" for i in range(64)]
+MARKER_TOKENS = [f"<{chr(ord('A') + i)}>" for i in range(10)]
+NUMBER_TOKENS = [f"<{i}>" for i in range(1, 11)]
+COUNT_BINS = {
+    "low": {1, 2, 3},
+    "mid": {4, 5, 6},
+    "high": {7, 8, 9, 10},
+}
+
+
+def count_bin(count: int) -> str:
+    for name, values in COUNT_BINS.items():
+        if int(count) in values:
+            return name
+    raise ValueError(count)
+
+
+@dataclass
+class Vocab:
+    token_to_id: dict[str, int]
+    id_to_token: list[str]
+
+    @classmethod
+    def build(cls) -> "Vocab":
+        tokens = SPECIAL_TOKENS + NOISE_TOKENS + MARKER_TOKENS + NUMBER_TOKENS
+        return cls({tok: i for i, tok in enumerate(tokens)}, tokens)
+
+    def encode(self, tokens: list[str]) -> list[int]:
+        return [self.token_to_id[tok] for tok in tokens]
+
+    def decode(self, ids: list[int]) -> list[str]:
+        return [self.id_to_token[int(i)] for i in ids]
+
+    @property
+    def pad_id(self) -> int:
+        return self.token_to_id["<PAD>"]
+
+    @property
+    def eos_id(self) -> int:
+        return self.token_to_id["<EOS>"]
+
+    @property
+    def numeric_ids(self) -> list[int]:
+        return [self.token_to_id[tok] for tok in NUMBER_TOKENS]
+
+    def count_to_token(self, count: int) -> str:
+        return f"<{int(count)}>"
+
+    def token_to_count(self, token: str) -> int | None:
+        if token.startswith("<") and token.endswith(">"):
+            inner = token[1:-1]
+            if inner.isdigit() and 1 <= int(inner) <= 10:
+                return int(inner)
+        return None
+
+    def save(self, path: Path) -> None:
+        with path.open("w", encoding="utf-8") as f:
+            json.dump({"token_to_id": self.token_to_id, "id_to_token": self.id_to_token}, f, indent=2)
+
+
+@dataclass
+class BaseExample:
+    seq_tokens: list[str]
+    count: int
+    needle_positions: list[int]
+    needle_markers: list[str]
+    seed: int | None = None
+
+
+def validate_base_example(ex: BaseExample, seq_len: int) -> None:
+    assert len(ex.seq_tokens) == seq_len
+    assert 1 <= ex.count <= 10
+    assert ex.count == len(ex.needle_positions) == len(ex.needle_markers)
+    assert ex.needle_positions == sorted(ex.needle_positions)
+    assert all(ex.seq_tokens[pos] == marker for pos, marker in zip(ex.needle_positions, ex.needle_markers))
+    assert sum(tok in MARKER_TOKENS for tok in ex.seq_tokens) == ex.count
+
+
+def sample_base_example(seq_len: int, rng: random.Random, *, count: int | None = None, seed: int | None = None) -> BaseExample:
+    n = rng.randint(1, 10) if count is None else int(count)
+    positions = sorted(rng.sample(range(seq_len), n))
+    markers = [rng.choice(MARKER_TOKENS) for _ in range(n)]
+    seq = [rng.choice(NOISE_TOKENS) for _ in range(seq_len)]
+    for pos, marker in zip(positions, markers):
+        seq[pos] = marker
+    ex = BaseExample(seq, n, positions, markers, seed)
+    validate_base_example(ex, seq_len)
+    return ex
+
+
+def sample_batch(seq_len: int, batch_size: int, rng: random.Random) -> list[BaseExample]:
+    return [sample_base_example(seq_len, rng) for _ in range(batch_size)]
+
+
+def balanced_examples(seq_len: int, examples_per_count: int, seed: int) -> list[BaseExample]:
+    rng = random.Random(seed)
+    examples = []
+    for count in range(1, 11):
+        for i in range(examples_per_count):
+            examples.append(sample_base_example(seq_len, rng, count=count, seed=seed + 1000 * count + i))
+    rng.shuffle(examples)
+    return examples
+
+
+def render_example(ex: BaseExample, model_type: str, vocab: Vocab) -> dict[str, Any]:
+    if model_type == "non_thinking":
+        tokens = ["<BOS>"] + ex.seq_tokens + ["<Ans>", vocab.count_to_token(ex.count), "<EOS>"]
+        ans_pos = 1 + len(ex.seq_tokens)
+        final_answer_pos = ans_pos + 1
+        labels = [-100] * len(tokens)
+        labels[final_answer_pos] = vocab.token_to_id[vocab.count_to_token(ex.count)]
+        labels[final_answer_pos + 1] = vocab.token_to_id["<EOS>"]
+        anchors = {
+            "ans_token": ans_pos,
+            "last_prompt_token": ans_pos - 1,
+            "final_answer_pos": final_answer_pos,
+            "prompt_start": 1,
+            "prompt_end_exclusive": 1 + len(ex.seq_tokens),
+        }
+    elif model_type == "thinking":
+        trace = []
+        index_positions = []
+        marker_positions = []
+        pre_index_positions = []
+        think_start_pos = 1 + len(ex.seq_tokens)
+        pos = think_start_pos + 1
+        prev_marker_pos = think_start_pos
+        for k, marker in enumerate(ex.needle_markers, start=1):
+            pre_index_positions.append(prev_marker_pos)
+            trace.extend([vocab.count_to_token(k), marker])
+            index_positions.append(pos)
+            marker_positions.append(pos + 1)
+            prev_marker_pos = pos + 1
+            pos += 2
+        tokens = ["<BOS>"] + ex.seq_tokens + ["<Think/>"] + trace + ["</Think>", "<Ans>", vocab.count_to_token(ex.count), "<EOS>"]
+        think_end_pos = think_start_pos + 1 + len(trace)
+        ans_pos = think_end_pos + 1
+        final_answer_pos = ans_pos + 1
+        labels = [-100] * len(tokens)
+        for p in range(think_start_pos + 1, len(tokens)):
+            labels[p] = vocab.token_to_id[tokens[p]]
+        anchors = {
+            "think_start": think_start_pos,
+            "think_end": think_end_pos,
+            "ans_token": ans_pos,
+            "final_answer_pos": final_answer_pos,
+            "prompt_start": 1,
+            "prompt_end_exclusive": 1 + len(ex.seq_tokens),
+            "index_positions": index_positions,
+            "marker_positions": marker_positions,
+            "pre_index_positions": pre_index_positions,
+        }
+    else:
+        raise ValueError(model_type)
+    return {
+        "tokens": tokens,
+        "input_ids": vocab.encode(tokens),
+        "labels": labels,
+        "anchors": anchors,
+        "count": ex.count,
+        "count_bin": count_bin(ex.count),
+        "needle_positions": ex.needle_positions,
+        "needle_markers": ex.needle_markers,
+        "trace_tokens": [tok for k, marker in enumerate(ex.needle_markers, start=1) for tok in (vocab.count_to_token(k), marker)],
+    }
+
+
+def collate_rendered(rendered: list[dict[str, Any]], vocab: Vocab, device: str) -> dict[str, Any]:
+    max_len = max(len(r["input_ids"]) for r in rendered)
+    input_ids, labels, attention_mask = [], [], []
+    for r in rendered:
+        pad = max_len - len(r["input_ids"])
+        input_ids.append(r["input_ids"] + [vocab.pad_id] * pad)
+        labels.append(r["labels"] + [-100] * pad)
+        attention_mask.append([1] * len(r["input_ids"]) + [0] * pad)
+    return {
+        "input_ids": torch.tensor(input_ids, dtype=torch.long, device=device),
+        "labels": torch.tensor(labels, dtype=torch.long, device=device),
+        "attention_mask": torch.tensor(attention_mask, dtype=torch.long, device=device),
+        "rendered": rendered,
+        "final_answer_pos": torch.tensor([r["anchors"]["final_answer_pos"] for r in rendered], dtype=torch.long, device=device),
+        "counts": torch.tensor([r["count"] for r in rendered], dtype=torch.long, device=device),
+    }
+
+
+def build_model(vocab: Vocab, cfg: dict[str, Any]) -> GPT2LMHeadModel:
+    model_cfg = GPT2Config(
+        vocab_size=len(vocab.id_to_token),
+        n_layer=cfg["n_layer"],
+        n_head=cfg["n_head"],
+        n_embd=cfg["n_embd"],
+        n_positions=cfg["n_positions"],
+        activation_function="gelu_new",
+        resid_pdrop=0.0,
+        embd_pdrop=0.0,
+        attn_pdrop=0.0,
+        bos_token_id=vocab.token_to_id["<BOS>"],
+        eos_token_id=vocab.token_to_id["<EOS>"],
+        pad_token_id=vocab.pad_id,
+    )
+    return GPT2LMHeadModel(model_cfg)
+
+
+def set_lr(optimizer: torch.optim.Optimizer, step: int, cfg: dict[str, Any]) -> float:
+    base = cfg["learning_rate"]
+    warmup = max(int(cfg["warmup_steps"]), 1)
+    total = max(int(cfg["train_steps"]), 1)
+    if step <= warmup:
+        lr = base * step / warmup
+    else:
+        progress = min(1.0, (step - warmup) / max(total - warmup, 1))
+        lr = base * 0.5 * (1.0 + math.cos(math.pi * progress))
+    for group in optimizer.param_groups:
+        group["lr"] = lr
+    return lr
+
+
+def final_answer_loss_from_logits(logits: torch.Tensor, batch: dict[str, Any], vocab: Vocab) -> torch.Tensor:
+    bsz = logits.shape[0]
+    positions = batch["final_answer_pos"] - 1
+    numeric_logits = logits[torch.arange(bsz, device=logits.device), positions][:, vocab.numeric_ids]
+    targets = batch["counts"] - 1
+    return F.cross_entropy(numeric_logits, targets)
+
+
+def per_example_losses(logits: torch.Tensor, labels: torch.Tensor, batch: dict[str, Any], vocab: Vocab) -> tuple[np.ndarray, np.ndarray]:
+    shift_logits = logits[:, :-1, :].contiguous()
+    shift_labels = labels[:, 1:].contiguous()
+    per_token = F.cross_entropy(
+        shift_logits.view(-1, shift_logits.shape[-1]),
+        shift_labels.view(-1),
+        ignore_index=-100,
+        reduction="none",
+    ).view(shift_labels.shape)
+    mask = (shift_labels != -100).float()
+    completion = (per_token * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1.0)
+    bsz = logits.shape[0]
+    positions = batch["final_answer_pos"] - 1
+    numeric_logits = logits[torch.arange(bsz, device=logits.device), positions][:, vocab.numeric_ids]
+    targets = batch["counts"] - 1
+    final = F.cross_entropy(numeric_logits, targets, reduction="none")
+    return completion.detach().cpu().numpy(), final.detach().cpu().numpy()
+
+
+def build_prefix(ex: BaseExample, model_type: str, vocab: Vocab) -> list[str]:
+    if model_type == "non_thinking":
+        return ["<BOS>"] + ex.seq_tokens + ["<Ans>"]
+    if model_type == "thinking":
+        return ["<BOS>"] + ex.seq_tokens + ["<Think/>"]
+    raise ValueError(model_type)
+
+
+@torch.no_grad()
+def predict_non_thinking(model: GPT2LMHeadModel, examples: list[BaseExample], vocab: Vocab, cfg: dict[str, Any], batch_size: int = 128) -> list[dict[str, Any]]:
+    model.eval()
     rows = []
-    path = Path(path)
-    if not path.exists():
-        return rows
-    with path.open("r", encoding="utf-8") as f:
-        for i, line in enumerate(f):
-            if limit is not None and i >= limit:
-                break
-            line = line.strip()
-            if line:
-                rows.append(json.loads(line))
+    device = cfg["device"]
+    for start in range(0, len(examples), batch_size):
+        batch_examples = examples[start : start + batch_size]
+        prefixes = [vocab.encode(build_prefix(ex, "non_thinking", vocab)) for ex in batch_examples]
+        input_ids = torch.tensor(prefixes, dtype=torch.long, device=device)
+        attention_mask = torch.ones_like(input_ids)
+        logits = model(input_ids=input_ids, attention_mask=attention_mask).logits[:, -1, :]
+        numeric_logits = logits[:, vocab.numeric_ids]
+        pred = torch.argmax(numeric_logits, dim=-1).detach().cpu().numpy() + 1
+        nll = F.cross_entropy(numeric_logits, torch.tensor([ex.count - 1 for ex in batch_examples], device=device), reduction="none").detach().cpu().numpy()
+        for ex, pred_count, loss in zip(batch_examples, pred, nll):
+            rows.append({"count": ex.count, "count_bin": count_bin(ex.count), "pred_count": int(pred_count), "invalid": False, "final_answer_loss": float(loss)})
     return rows
 
-def safe_read_csv(path):
-    path = Path(path)
-    if not path.exists() or path.stat().st_size == 0:
-        return pd.DataFrame()
-    try:
-        return pd.read_csv(path)
-    except pd.errors.EmptyDataError:
-        return pd.DataFrame()
 
-missing = []
-for variant in REQUESTED_VARIANTS:
-    if not DATA_DIRS[variant].exists():
-        missing.append(str(DATA_DIRS[variant]))
-    if not RUNS[variant].exists():
-        missing.append(str(RUNS[variant]))
-if missing:
-    display(Markdown("**Missing paths.** Run the pipeline cell first, or set `RESULT_DIR_OVERRIDE`.\n\n" + "\n".join(f"- `{p}`" for p in missing)))
-else:
-    display(Markdown("**Loaded v2 paths**"))
-    display(pd.DataFrame(
-        [
-            {
-                "variant": VARIANT_INFO[v]["label"],
-                "data_dir": str(DATA_DIRS[v]),
-                "run_dir": str(RUNS[v]),
-                "format": VARIANT_INFO[v]["description"],
-            }
-            for v in REQUESTED_VARIANTS
-        ]
-    ))
-        '''
-    ),
-    md(
-        r'''
-## Experiment Design Check
+def parse_thinking_generation(generated_tokens: list[str], ex: BaseExample, vocab: Vocab) -> dict[str, Any]:
+    ans_generated = "<Ans>" in generated_tokens
+    pred_count = None
+    invalid = True
+    if ans_generated:
+        ans_idx = generated_tokens.index("<Ans>")
+        if ans_idx + 1 < len(generated_tokens):
+            pred_count = vocab.token_to_count(generated_tokens[ans_idx + 1])
+            invalid = pred_count is None
+    trace_end = generated_tokens.index("</Think>") if "</Think>" in generated_tokens else len(generated_tokens)
+    generated_trace = generated_tokens[:trace_end]
+    expected_trace = [tok for k, marker in enumerate(ex.needle_markers, start=1) for tok in (vocab.count_to_token(k), marker)]
+    expected_markers = [tok for tok in expected_trace if tok in MARKER_TOKENS]
+    generated_markers = [tok for tok in generated_trace if tok in MARKER_TOKENS]
+    marker_overlap = sum((pd.Series(generated_markers).value_counts() & pd.Series(expected_markers).value_counts()).fillna(0)) if expected_markers or generated_markers else 0
+    marker_precision = 1.0 if not generated_markers and not expected_markers else float(marker_overlap) / max(len(generated_markers), 1)
+    marker_recall = 1.0 if not expected_markers else float(marker_overlap) / len(expected_markers)
+    expected_indices = expected_trace[0::2]
+    correct_indices = 0
+    for i, tok in enumerate(expected_indices):
+        pos = 2 * i
+        correct_indices += int(pos < len(generated_trace) and generated_trace[pos] == tok)
+    trace_index_accuracy = correct_indices / max(len(expected_indices), 1)
+    return {
+        "pred_count": pred_count,
+        "invalid": invalid,
+        "ans_generated": ans_generated,
+        "trace_exact_match": generated_trace == expected_trace,
+        "trace_marker_precision": marker_precision,
+        "trace_marker_recall": marker_recall,
+        "trace_index_accuracy": trace_index_accuracy,
+        "generated_tokens": generated_tokens,
+    }
 
-下面这张表确认数据设置。重点看 `count_range`：
 
-- `val_id` 是训练分布内 count：`0-5`。
-- `val_count_ood` 是数量外推 count：`6-10`。
-- 两个模型使用相同 source marker 词表和相同 answer token 类型 `<CNT>`，所以 OOD 主要考察“数量/停止位置是否能外推”。
-        '''
-    ),
-    code(
-        r'''
-dataset_rows = []
-for variant, data_dir in DATA_DIRS.items():
-    meta_path = data_dir / "dataset_metadata.json"
-    if not meta_path.exists():
-        continue
-    meta = read_json(meta_path)
-    for split, spec in meta["split_specs"].items():
-        counts = list(spec["counts"])
-        dataset_rows.append(
-            {
-                "variant": VARIANT_INFO[variant]["label"],
-                "task_format": meta.get("task_format"),
-                "split": split,
-                "n_total": meta["split_counts"].get(split),
-                "lengths": ", ".join(map(str, spec["lengths"])),
-                "count_range": f"{min(counts)}-{max(counts)}",
-                "count_values": ", ".join(map(str, counts)),
-                "examples_per_pair": spec["examples_per_pair"],
-            }
-        )
-dataset_df = pd.DataFrame(dataset_rows)
-display(dataset_df)
+@torch.no_grad()
+def predict_thinking(model: GPT2LMHeadModel, examples: list[BaseExample], vocab: Vocab, cfg: dict[str, Any], batch_size: int = 64) -> list[dict[str, Any]]:
+    model.eval()
+    rows = []
+    device = cfg["device"]
+    max_new = 2 * cfg["max_count"] + 4
+    for start in tqdm(range(0, len(examples), batch_size), desc="thinking eval", leave=False):
+        batch_examples = examples[start : start + batch_size]
+        ids = torch.tensor([vocab.encode(build_prefix(ex, "thinking", vocab)) for ex in batch_examples], dtype=torch.long, device=device)
+        prefix_len = ids.shape[1]
+        finished = torch.zeros(len(batch_examples), dtype=torch.bool, device=device)
+        for _ in range(max_new):
+            attention_mask = torch.ones_like(ids)
+            logits = model(input_ids=ids, attention_mask=attention_mask).logits[:, -1, :]
+            next_ids = torch.argmax(logits, dim=-1)
+            next_ids = torch.where(finished, torch.full_like(next_ids, vocab.pad_id), next_ids)
+            ids = torch.cat([ids, next_ids[:, None]], dim=1)
+            finished |= next_ids.eq(vocab.eos_id)
+            if bool(finished.all()):
+                break
+        gen_ids = ids[:, prefix_len:].detach().cpu().tolist()
+        for ex, gen in zip(batch_examples, gen_ids):
+            toks = [tok for tok in vocab.decode(gen) if tok != "<PAD>"]
+            parsed = parse_thinking_generation(toks, ex, vocab)
+            rows.append({"count": ex.count, "count_bin": count_bin(ex.count), **parsed})
+    return rows
 
-display(Markdown(
-    """
-**坐标/组别说明。** 后面的 ID/OOD 图里，`ID` 指 `val_id`，也就是训练见过的 count 范围 `0-5`；`OOD` 指 `val_count_ood`，也就是没见过的数量范围 `6-10`。`think trace` 和 `answer only` 是两套独立训练的模型。
-"""
-))
-        '''
-    ),
-    md(
-        r'''
-## Final-count Accuracy: Two Models, ID vs OOD
 
-图里只评价最终 count：
+@torch.no_grad()
+def eval_losses(model: GPT2LMHeadModel, model_type: str, examples: list[BaseExample], vocab: Vocab, cfg: dict[str, Any], batch_size: int = 128) -> list[dict[str, Any]]:
+    model.eval()
+    rows = []
+    device = cfg["device"]
+    for start in range(0, len(examples), batch_size):
+        batch_examples = examples[start : start + batch_size]
+        rendered = [render_example(ex, model_type, vocab) for ex in batch_examples]
+        batch = collate_rendered(rendered, vocab, device)
+        logits = model(input_ids=batch["input_ids"], attention_mask=batch["attention_mask"]).logits
+        completion, final = per_example_losses(logits, batch["labels"], batch, vocab)
+        for ex, c_loss, f_loss in zip(batch_examples, completion, final):
+            rows.append({"count": ex.count, "count_bin": count_bin(ex.count), "eval_completion_loss": float(c_loss), "eval_final_answer_loss": float(f_loss)})
+    return rows
 
-- **横轴:** 模型类型，`think trace` 或 `answer only`。
-- **纵轴:** final-count accuracy，预测的 `<CNT>` 重复次数是否等于真实 needle 数。
-- **颜色:** split，蓝色是 ID (`0-5`)，红色是 OOD (`6-10`)。
-- **teacher-forced:** 给模型真实前缀，只看下一步/answer span 的 count 读出能力。
-- **autoregressive:** 只给 source，让模型自己生成 think/answer，然后统计最终 `<CNT>` 数量。
-        '''
-    ),
-    code(
-        r'''
-eval_rows = []
-for variant, run_dir in RUNS.items():
-    summary_path = run_dir / "eval" / "summary_metrics.json"
-    if not summary_path.exists():
-        continue
-    summary = read_json(summary_path)
-    for split, split_metrics in summary.items():
-        for mode in ["teacher_forced", "autoregressive"]:
-            metrics = split_metrics.get(mode)
-            if not metrics:
-                continue
-            eval_rows.append(
-                {
-                    "variant": VARIANT_INFO[variant]["label"],
-                    "variant_key": variant,
-                    "split": split,
-                    "split_label": "ID: count 0-5" if split == "val_id" else "OOD: count 6-10",
-                    "mode": mode,
-                    "count_accuracy": metrics.get("count_accuracy"),
-                    "mae": metrics.get("mean_absolute_error"),
-                    "invalid_answer_rate": metrics.get("invalid_answer_rate"),
-                    "undercount_rate": metrics.get("undercount_rate"),
-                    "overcount_rate": metrics.get("overcount_rate"),
-                    "trace_exact_match": metrics.get("trace_exact_match"),
-                    "format_validity": metrics.get("format_validity"),
-                }
-            )
-eval_df = pd.DataFrame(eval_rows)
-display(eval_df.sort_values(["mode", "variant", "split"]))
 
-if not eval_df.empty:
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4), sharey=True)
-    palette = {"ID: count 0-5": "#2f6fed", "OOD: count 6-10": "#e03131"}
-    for ax, mode in zip(axes, ["teacher_forced", "autoregressive"]):
-        plot_df = eval_df[eval_df["mode"] == mode]
-        sns.barplot(
-            data=plot_df,
-            x="variant",
-            y="count_accuracy",
-            hue="split_label",
-            palette=palette,
-            ax=ax,
-        )
-        ax.set_title("Teacher-forced final count" if mode == "teacher_forced" else "Autoregressive final count")
-        ax.set_xlabel("model")
-        ax.set_ylabel("final-count accuracy" if ax is axes[0] else "")
-        ax.set_ylim(0, 1.05)
-        ax.legend(title="split")
-        for container in ax.containers:
-            ax.bar_label(container, fmt="%.2f", padding=2, fontsize=8)
-    fig.suptitle("V2 main comparison: fixed count-token type, ID vs OOD", y=1.03, fontsize=13, fontweight="bold")
-    plt.tight_layout()
-    plt.show()
-        '''
-    ),
-    md(
-        r'''
-## Accuracy by Count
+def summarize_eval(step: int, model_type: str, pred_rows: list[dict[str, Any]], loss_rows: list[dict[str, Any]]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    pred_df = pd.DataFrame(pred_rows)
+    loss_df = pd.DataFrame(loss_rows)
+    pred_df["correct"] = pred_df["pred_count"].fillna(-999).astype(int) == pred_df["count"].astype(int)
+    pred_df["abs_error"] = (pred_df["pred_count"].fillna(-999).astype(int) - pred_df["count"].astype(int)).abs()
+    pred_df["under"] = pred_df["pred_count"].fillna(999).astype(int) < pred_df["count"].astype(int)
+    pred_df["over"] = pred_df["pred_count"].fillna(-999).astype(int) > pred_df["count"].astype(int)
+    merged = pred_df.merge(loss_df, on=["count", "count_bin"], how="left")
 
-这张图看模型是不是只在训练范围内会数，还是能外推到更大的数量：
+    def agg(group: pd.DataFrame) -> pd.Series:
+        out = {
+            "step": step,
+            "model_type": model_type,
+            "accuracy": group["correct"].mean(),
+            "n_examples": len(group),
+            "invalid_rate": group.get("invalid", pd.Series(False, index=group.index)).mean(),
+            "eval_completion_loss": group["eval_completion_loss"].mean(),
+            "eval_final_answer_loss": group["eval_final_answer_loss"].mean(),
+            "mae": group.loc[~group.get("invalid", pd.Series(False, index=group.index)), "abs_error"].mean(),
+            "under_rate": group["under"].mean(),
+            "over_rate": group["over"].mean(),
+        }
+        for name in ["trace_exact_match", "trace_marker_precision", "trace_marker_recall", "trace_index_accuracy"]:
+            out[name + "_rate" if name == "trace_exact_match" else name] = group[name].mean() if name in group else np.nan
+        return pd.Series(out)
 
-- **横轴:** 真实 needle 数量。
-- **纵轴:** final-count accuracy。
-- **线条颜色:** 两个模型。
-- **线型:** teacher-forced / autoregressive。
-- 竖虚线右侧是 OOD 数量区间 `6-10`。
-        '''
-    ),
-    code(
-        r'''
-pred_rows = []
-for variant, run_dir in RUNS.items():
-    for split in ["val_id", "val_count_ood"]:
-        pred_path = run_dir / "eval" / f"predictions_{split}.jsonl"
-        for row in read_jsonl(pred_path):
-            base = {
-                "variant": VARIANT_INFO[variant]["label"],
-                "variant_key": variant,
-                "split": split,
-                "split_label": "ID: count 0-5" if split == "val_id" else "OOD: count 6-10",
-                "true_count": int(row["true_count"]),
-                "seq_len": int(row["seq_len"]),
-            }
-            if "tf_pred_count" in row:
-                pred_rows.append(
-                    {
-                        **base,
-                        "mode": "teacher_forced",
-                        "pred_count": row.get("tf_pred_count"),
-                        "correct": bool(row.get("tf_correct", False)),
-                        "format_valid": True,
-                    }
-                )
-            if "ar_pred_count" in row:
-                pred = row.get("ar_pred_count")
-                pred_rows.append(
-                    {
-                        **base,
-                        "mode": "autoregressive",
-                        "pred_count": pred,
-                        "correct": pred == row["true_count"],
-                        "format_valid": bool(row.get("ar_format_valid", False)),
-                    }
-                )
+    by_count = merged.groupby("count", as_index=True).apply(agg).reset_index()
+    by_bin = merged.groupby("count_bin", as_index=True).apply(agg).reset_index()
+    return by_count, by_bin
 
-pred_df = pd.DataFrame(pred_rows)
-if pred_df.empty:
-    display(Markdown("No prediction rows found yet."))
-else:
-    by_count = (
-        pred_df.groupby(["variant", "mode", "split", "true_count"], as_index=False)
-        .agg(accuracy=("correct", "mean"), format_validity=("format_valid", "mean"), n=("correct", "size"))
-        .sort_values(["variant", "mode", "true_count"])
-    )
-    display(by_count)
-    plt.figure(figsize=(10, 4.6))
-    sns.lineplot(
-        data=by_count,
-        x="true_count",
-        y="accuracy",
-        hue="variant",
-        style="mode",
-        markers=True,
-        dashes=True,
-    )
-    plt.axvline(5.5, color="black", linestyle="--", linewidth=1)
-    plt.text(2.5, 1.03, "ID counts 0-5", ha="center", va="bottom", fontsize=9)
-    plt.text(8.0, 1.03, "OOD counts 6-10", ha="center", va="bottom", fontsize=9)
-    plt.ylim(-0.03, 1.08)
-    plt.xlabel("true number of needles")
-    plt.ylabel("final-count accuracy")
-    plt.title("Final-count accuracy by true count")
-    plt.legend(title="model / decoding")
-    plt.tight_layout()
-    plt.show()
-        '''
-    ),
-    md(
-        r'''
-## Training Curves
 
-下面展示训练过程：
+def save_checkpoint(models: dict[str, GPT2LMHeadModel], vocab: Vocab, step_name: str) -> None:
+    ckpt = CHECKPOINT_DIR / step_name
+    ckpt.mkdir(parents=True, exist_ok=True)
+    for model_type, model in models.items():
+        model.save_pretrained(ckpt / model_type)
+    vocab.save(ckpt / "vocab.json")
 
-- **横轴:** training step。
-- **纵轴:** loss。
-- **颜色:** loss segment 或模型。
-- `total_weighted_loss` 是训练目标的总体 loss；本实验不加 final-count 权重，所以它基本就是 all-token next-token prediction loss。
-- `count_loss` 是 `<CNT>` answer span 的 loss。
-- `trace_index_loss` 是 think trace 里的 `<TICK>` loss。
-- `trace_marker_loss` 是 think trace 里需要复述 source marker 的 loss。
-        '''
-    ),
-    code(
-        r'''
-train_rows = []
-for variant, run_dir in RUNS.items():
-    for row in read_jsonl(run_dir / "train_log.jsonl"):
-        row = dict(row)
-        row["variant"] = VARIANT_INFO[variant]["label"]
-        row["variant_key"] = variant
-        train_rows.append(row)
-train_df = pd.DataFrame(train_rows)
 
-if train_df.empty:
-    display(Markdown("No training log rows found yet."))
-else:
-    display(train_df.tail(10))
-    plt.figure(figsize=(10, 4))
-    sns.lineplot(data=train_df, x="step", y="total_weighted_loss", hue="variant")
+def load_final_models(vocab: Vocab, cfg: dict[str, Any]) -> dict[str, GPT2LMHeadModel]:
+    models = {}
+    for model_type in ["non_thinking", "thinking"]:
+        path = CHECKPOINT_DIR / "final" / model_type
+        models[model_type] = GPT2LMHeadModel.from_pretrained(path).to(cfg["device"])
+    return models
+
+
+def evaluate_all(step: int, models: dict[str, GPT2LMHeadModel], test_examples: list[BaseExample], vocab: Vocab, cfg: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    all_count, all_bin = [], []
+    for model_type, model in models.items():
+        losses = eval_losses(model, model_type, test_examples, vocab, cfg)
+        if model_type == "non_thinking":
+            preds = predict_non_thinking(model, test_examples, vocab, cfg)
+        else:
+            preds = predict_thinking(model, test_examples, vocab, cfg)
+        by_count, by_bin = summarize_eval(step, model_type, preds, losses)
+        all_count.append(by_count)
+        all_bin.append(by_bin)
+    return pd.concat(all_count, ignore_index=True), pd.concat(all_bin, ignore_index=True)
+
+
+def plot_required(run_dir: Path) -> None:
+    plots = run_dir / "plots"
+    train = pd.read_csv(run_dir / "metrics_train.csv")
+    by_count = pd.read_csv(run_dir / "metrics_eval_by_count.csv")
+    by_bin = pd.read_csv(run_dir / "metrics_eval_by_bin.csv")
+
+    plt.figure(figsize=(9, 4.5))
+    sns.lineplot(data=train, x="step", y="train_completion_loss", hue="model_type")
+    sns.lineplot(data=train, x="step", y="train_final_answer_loss", hue="model_type", style="model_type", dashes=True, legend=False)
+    plt.title("Training losses; completion loss is longer for thinking")
     plt.xlabel("training step")
-    plt.ylabel("total weighted loss")
-    plt.title("Training loss by model")
+    plt.ylabel("loss")
     plt.tight_layout()
+    plt.savefig(plots / "train_loss_vs_step.png", bbox_inches="tight")
     plt.show()
 
-    segment_cols = [c for c in ["count_loss", "trace_index_loss", "trace_marker_loss", "answer_prefix_loss", "eos_loss"] if c in train_df.columns]
-    if segment_cols:
-        seg_df = train_df.melt(id_vars=["step", "variant"], value_vars=segment_cols, var_name="segment", value_name="loss")
-        plt.figure(figsize=(11, 4.6))
-        sns.lineplot(data=seg_df, x="step", y="loss", hue="segment", style="variant")
+    plt.figure(figsize=(8, 4))
+    sns.lineplot(data=by_count.groupby(["step", "model_type"], as_index=False)["eval_final_answer_loss"].mean(), x="step", y="eval_final_answer_loss", hue="model_type", marker="o")
+    plt.title("Test final-answer loss over steps")
+    plt.xlabel("training step")
+    plt.ylabel("final-answer cross-entropy")
+    plt.tight_layout()
+    plt.savefig(plots / "eval_final_answer_loss_vs_step.png", bbox_inches="tight")
+    plt.show()
+
+    plt.figure(figsize=(9, 4.5))
+    sns.lineplot(data=by_bin, x="step", y="accuracy", hue="model_type", style="count_bin", marker="o")
+    plt.ylim(-0.03, 1.03)
+    plt.title("Test exact-count accuracy by count bin")
+    plt.xlabel("training step")
+    plt.ylabel("accuracy")
+    plt.tight_layout()
+    plt.savefig(plots / "eval_accuracy_by_bin_vs_step.png", bbox_inches="tight")
+    plt.show()
+
+    final_step = by_count["step"].max()
+    final = by_count[by_count["step"] == final_step]
+    plt.figure(figsize=(8, 4))
+    sns.lineplot(data=final, x="count", y="accuracy", hue="model_type", marker="o")
+    plt.ylim(-0.03, 1.03)
+    plt.xticks(range(1, 11))
+    plt.title(f"Final checkpoint accuracy by exact count (step {final_step})")
+    plt.xlabel("gold count")
+    plt.ylabel("accuracy")
+    plt.tight_layout()
+    plt.savefig(plots / "final_accuracy_by_count.png", bbox_inches="tight")
+    plt.show()
+
+    for model_type in ["non_thinking", "thinking"]:
+        mat = by_count[by_count["model_type"] == model_type].pivot(index="count", columns="step", values="accuracy").sort_index()
+        plt.figure(figsize=(8, 4.5))
+        sns.heatmap(mat, vmin=0, vmax=1, cmap="viridis", annot=PRESET == "debug", fmt=".2f")
+        plt.title(f"Accuracy heatmap: {model_type}")
         plt.xlabel("training step")
-        plt.ylabel("loss")
-        plt.title("Segment losses")
+        plt.ylabel("gold count")
         plt.tight_layout()
+        plt.savefig(plots / f"accuracy_heatmap_by_count_and_step_{model_type}.png", bbox_inches="tight")
         plt.show()
-        '''
+        """
     ),
     md(
-        r'''
-## Probe and Count Direction Extraction
+        r"""
+## Train and Evaluate
 
-这里比较几种 count direction 的提取方法。它们都用 `val_id` hidden states 训练线性 probe / ridge direction：
-
-- `ans:total_count`: 在 `<ANS>` 位置读出总 count。
-- `source_marker:running_count`: 在每个 source needle 位置读出 running count，也就是第几个 needle。
-- `think_close:total_count`: 在第二个 `<Think>` 位置读出总 count，只适用于 think 模型。
-- `trace_marker:k`: 在 trace 中每个 marker 位置读出第几个 needle，只适用于 think 模型。
-
-图里：
-
-- **横轴:** direction/probe 方法。
-- **纵轴:** ridge `R²`，越高代表这个 hidden-state 位置越线性地编码目标 count。
-- **颜色:** 模型类型。
-        '''
+The training loop updates the two models on the same sampled base examples at every step, but with different renderings and label masks.
+        """
     ),
     code(
-        r'''
-probe_rows = []
-direction_rows = []
-for variant, run_dir in RUNS.items():
-    p = safe_read_csv(run_dir / "probes" / "probe_summary.csv")
-    if not p.empty:
-        p["variant"] = VARIANT_INFO[variant]["label"]
-        p["variant_key"] = variant
-        probe_rows.append(p)
-    d = safe_read_csv(run_dir / "directions" / "direction_summary.csv")
-    if not d.empty:
-        d["variant"] = VARIANT_INFO[variant]["label"]
-        d["variant_key"] = variant
-        direction_rows.append(d)
+        r"""
+vocab = Vocab.build()
+vocab.save(RUN_DIR / "vocab.json")
 
-probe_df = pd.concat(probe_rows, ignore_index=True) if probe_rows else pd.DataFrame()
-direction_df = pd.concat(direction_rows, ignore_index=True) if direction_rows else pd.DataFrame()
+test_examples = balanced_examples(cfg["seq_len"], cfg["test_examples_per_count"], cfg["seed"] + 101)
+val_examples = balanced_examples(cfg["seq_len"], cfg["val_examples_per_count"], cfg["seed"] + 202)
 
-if probe_df.empty:
-    display(Markdown("No probe summary found yet."))
+final_ckpt_ok = all((CHECKPOINT_DIR / "final" / model_type / "config.json").exists() for model_type in ["non_thinking", "thinking"])
+
+if RUN_TRAINING and not (SKIP_TRAIN_IF_FINAL_CHECKPOINT_EXISTS and final_ckpt_ok):
+    torch.manual_seed(cfg["seed"])
+    random.seed(cfg["seed"])
+    np.random.seed(cfg["seed"])
+    models = {
+        "non_thinking": build_model(vocab, cfg).to(cfg["device"]),
+        "thinking": build_model(vocab, cfg).to(cfg["device"]),
+    }
+    optimizers = {
+        name: AdamW(model.parameters(), lr=cfg["learning_rate"], betas=cfg["betas"], weight_decay=cfg["weight_decay"])
+        for name, model in models.items()
+    }
+    rng = random.Random(cfg["seed"] + 303)
+    train_rows = []
+    eval_count_frames = []
+    eval_bin_frames = []
+
+    start_time = datetime.now()
+    for step in tqdm(range(1, cfg["train_steps"] + 1), desc="v2 training"):
+        base_batch = sample_batch(cfg["seq_len"], cfg["batch_size"], rng)
+        lr = set_lr(optimizers["non_thinking"], step, cfg)
+        set_lr(optimizers["thinking"], step, cfg)
+        for model_type, model in models.items():
+            model.train()
+            rendered = [render_example(ex, model_type, vocab) for ex in base_batch]
+            batch = collate_rendered(rendered, vocab, cfg["device"])
+            optimizers[model_type].zero_grad(set_to_none=True)
+            outputs = model(input_ids=batch["input_ids"], attention_mask=batch["attention_mask"], labels=batch["labels"])
+            completion_loss = outputs.loss
+            final_loss = final_answer_loss_from_logits(outputs.logits, batch, vocab)
+            completion_loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["grad_clip_norm"])
+            optimizers[model_type].step()
+            if step == 1 or step % cfg["log_every"] == 0 or step == cfg["train_steps"]:
+                train_rows.append(
+                    {
+                        "step": step,
+                        "model_type": model_type,
+                        "train_loss": float(completion_loss.detach().cpu()),
+                        "train_completion_loss": float(completion_loss.detach().cpu()),
+                        "train_final_answer_loss": float(final_loss.detach().cpu()),
+                        "learning_rate": lr,
+                    }
+                )
+        if step == 1 or step % cfg["eval_every"] == 0 or step == cfg["train_steps"]:
+            by_count, by_bin = evaluate_all(step, models, val_examples, vocab, cfg)
+            eval_count_frames.append(by_count)
+            eval_bin_frames.append(by_bin)
+            pd.concat(eval_count_frames, ignore_index=True).to_csv(RUN_DIR / "metrics_eval_by_count.csv", index=False)
+            pd.concat(eval_bin_frames, ignore_index=True).to_csv(RUN_DIR / "metrics_eval_by_bin.csv", index=False)
+            pd.DataFrame(train_rows).to_csv(RUN_DIR / "metrics_train.csv", index=False)
+            if SAVE_CHECKPOINTS_AT_EVAL:
+                save_checkpoint(models, vocab, f"step_{step:06d}")
+            display(Markdown(f"step {step}: eval complete"))
+    save_checkpoint(models, vocab, "final")
+    pd.DataFrame(train_rows).to_csv(RUN_DIR / "metrics_train.csv", index=False)
 else:
-    display(Markdown("**Top ridge probes**"))
-    top_probe = (
-        probe_df[probe_df["probe_type"] == "ridge"]
-        .sort_values("r2", ascending=False)
-        .head(20)
-    )
-    display(top_probe)
+    display(Markdown("Loading existing final checkpoints."))
+    models = load_final_models(vocab, cfg)
 
-if direction_df.empty:
-    display(Markdown("No direction summary found yet."))
-else:
-    direction_df["ok_bool"] = direction_df["ok"].astype(str).str.lower().eq("true")
-    direction_df["method"] = direction_df["layer"] + ":" + direction_df["anchor"] + ":" + direction_df["target"]
-    rel = direction_df[direction_df["ok_bool"]].copy()
-    rel = rel[rel["method"].isin([m.strip() for m in DIRECTION_SPECS.split(",") if m.strip()])]
-    display(Markdown("**Direction extraction summary used for steering/projection**"))
-    display(rel.sort_values(["variant", "target", "anchor", "layer"]))
+if not (RUN_DIR / "metrics_eval_by_count.csv").exists():
+    by_count, by_bin = evaluate_all(cfg["train_steps"], models, val_examples, vocab, cfg)
+    by_count.to_csv(RUN_DIR / "metrics_eval_by_count.csv", index=False)
+    by_bin.to_csv(RUN_DIR / "metrics_eval_by_bin.csv", index=False)
 
-    plt.figure(figsize=(12, 4.8))
-    sns.barplot(data=rel, x="method", y="r2", hue="variant")
-    plt.xticks(rotation=35, ha="right")
-    plt.xlabel("direction method = layer:anchor:target")
-    plt.ylabel("ridge R² on ID")
-    plt.title("Which extracted count directions are most linear on ID?")
-    plt.tight_layout()
-    plt.show()
-        '''
+plot_required(RUN_DIR)
+display(pd.read_csv(RUN_DIR / "metrics_eval_by_bin.csv").tail(12))
+        """
     ),
     md(
-        r'''
-## Direction Projection on OOD Counts
+        r"""
+## Hidden-State Probes
 
-这一步不是改模型，而是把 OOD hidden states 投影到 ID 学到的 count direction 上，检查 direction 是否外推：
+Probe features are collected under teacher forcing so token positions are known.
 
-- **横轴:** OOD true count (`6-10`)。
-- **纵轴:** ridge direction 预测出的 count / running count。
-- **颜色:** direction 方法。
-- **列:** 模型类型。
-
-如果线大致跟 `y=x` 同步上升，说明这个 direction 至少在表征空间里对 OOD 数量有外推趋势。
-        '''
+Important anti-leakage rule: prefix-count probes do not use the hidden state at numeric token `<k>` itself. The `pre_index_k` anchor uses the token immediately before `<k>`.
+        """
     ),
     code(
-        r'''
-projection_rows = []
-for variant, run_dir in RUNS.items():
-    ex = safe_read_csv(run_dir / "direction_projection" / "direction_projection_examples.csv")
-    if not ex.empty:
-        ex["variant"] = VARIANT_INFO[variant]["label"]
-        ex["variant_key"] = variant
-        ex["method"] = ex["layer"] + ":" + ex["anchor"] + ":" + ex["target"]
-        projection_rows.append(ex)
-projection_df = pd.concat(projection_rows, ignore_index=True) if projection_rows else pd.DataFrame()
+        r"""
+RIDGE_ALPHAS = np.logspace(-4, 4, 17)
 
-if projection_df.empty:
-    display(Markdown("No direction projection examples found yet."))
-else:
-    display(projection_df.head())
-    plot_methods = [m.strip() for m in DIRECTION_SPECS.split(",") if m.strip()]
-    proj_plot = projection_df[projection_df["method"].isin(plot_methods)].copy()
-    proj_summary = (
-        proj_plot.groupby(["variant", "method", "true_count"], as_index=False)
-        .agg(mean_pred=("pred_value", "mean"), mae=("pred_value", lambda x: np.mean(np.abs(x - proj_plot.loc[x.index, "target_value"]))))
-    )
-    g = sns.FacetGrid(proj_summary, col="variant", height=4, aspect=1.25, sharey=False)
-    g.map_dataframe(sns.lineplot, x="true_count", y="mean_pred", hue="method", marker="o")
-    for ax in g.axes.flat:
-        lo, hi = int(proj_summary["true_count"].min()), int(proj_summary["true_count"].max())
-        ax.plot([lo, hi], [lo, hi], color="black", linestyle="--", linewidth=1, label="y=x")
-        ax.set_xlabel("OOD true count")
-        ax.set_ylabel("mean projected count value")
-    g.add_legend(title="direction method")
-    g.fig.suptitle("OOD projection onto ID-fitted count directions", y=1.05, fontsize=13, fontweight="bold")
-    plt.show()
-        '''
-    ),
-    md(
-        r'''
-## Generation Steering
 
-这一步把 ID 上学到的 count direction 加到 autoregressive generation 的 hidden state 中，只在模型已经生成 `<ANS>` 之后 steering。
+def collect_probe_records(model: GPT2LMHeadModel, model_type: str, examples: list[BaseExample], vocab: Vocab, cfg: dict[str, Any], batch_size: int = 64) -> list[dict[str, Any]]:
+    model.eval()
+    rows = []
+    with torch.no_grad():
+        for start in tqdm(range(0, len(examples), batch_size), desc=f"probe features {model_type}", leave=False):
+            batch_examples = examples[start : start + batch_size]
+            rendered = [render_example(ex, model_type, vocab) for ex in batch_examples]
+            batch = collate_rendered(rendered, vocab, cfg["device"])
+            outputs = model(input_ids=batch["input_ids"], attention_mask=batch["attention_mask"], output_hidden_states=True)
+            for layer_idx, hidden in enumerate(outputs.hidden_states):
+                lname = "embeddings" if layer_idx == 0 else f"layer_{layer_idx}"
+                hidden_np = hidden.detach().float().cpu().numpy()
+                for i, (ex, r) in enumerate(zip(batch_examples, rendered)):
+                    anchors = r["anchors"]
+                    if model_type == "non_thinking":
+                        for anchor in ["ans_token", "last_prompt_token"]:
+                            rows.append(
+                                {
+                                    "model_type": model_type,
+                                    "layer": lname,
+                                    "anchor_type": anchor,
+                                    "label_type": "final_count",
+                                    "label": ex.count,
+                                    "feature": hidden_np[i, anchors[anchor]].copy(),
+                                }
+                            )
+                    else:
+                        for anchor in ["think_start", "think_end", "ans_token"]:
+                            rows.append(
+                                {
+                                    "model_type": model_type,
+                                    "layer": lname,
+                                    "anchor_type": anchor,
+                                    "label_type": "final_count",
+                                    "label": ex.count,
+                                    "feature": hidden_np[i, anchors[anchor]].copy(),
+                                }
+                            )
+                        for k, pos in enumerate(anchors["pre_index_positions"], start=1):
+                            rows.append(
+                                {
+                                    "model_type": model_type,
+                                    "layer": lname,
+                                    "anchor_type": "pre_index_k",
+                                    "label_type": "prefix_count",
+                                    "label": k,
+                                    "feature": hidden_np[i, pos].copy(),
+                                }
+                            )
+                        for k, pos in enumerate(anchors["marker_positions"], start=1):
+                            rows.append(
+                                {
+                                    "model_type": model_type,
+                                    "layer": lname,
+                                    "anchor_type": "post_marker_k",
+                                    "label_type": "prefix_count",
+                                    "label": k,
+                                    "feature": hidden_np[i, pos].copy(),
+                                }
+                            )
+    return rows
 
-图里：
 
-- **横轴:** steering strength `alpha`。
-- **纵轴:** OOD final-count accuracy 或平均预测 count。
-- **颜色:** direction 方法。
-- **列:** 模型类型。
+def fit_probe_group(train_rows: list[dict[str, Any]], test_rows: list[dict[str, Any]]) -> dict[str, float]:
+    X_train = np.stack([r["feature"] for r in train_rows])
+    y_train = np.array([r["label"] for r in train_rows])
+    X_test = np.stack([r["feature"] for r in test_rows])
+    y_test = np.array([r["label"] for r in test_rows])
+    cls = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000, n_jobs=-1))
+    cls.fit(X_train, y_train)
+    cls_pred = cls.predict(X_test)
+    ridge = make_pipeline(StandardScaler(), RidgeCV(alphas=RIDGE_ALPHAS))
+    ridge.fit(X_train, y_train.astype(float))
+    ridge_pred = ridge.predict(X_test)
+    rounded = np.clip(np.rint(ridge_pred), 1, 10).astype(int)
+    return {
+        "probe_accuracy": float(accuracy_score(y_test, cls_pred)),
+        "ridge_rounded_accuracy": float(accuracy_score(y_test, rounded)),
+        "probe_mae": float(mean_absolute_error(y_test, rounded)),
+        "probe_r2": float(r2_score(y_test.astype(float), ridge_pred)),
+        "n_train": int(len(train_rows)),
+        "n_test": int(len(test_rows)),
+    }
 
-如果某条线在 `alpha != 0` 时比 `alpha = 0` 更高，说明该 direction 对 OOD counting 有可干预的因果效果。
-        '''
-    ),
-    code(
-        r'''
-steer_rows = []
-for variant, run_dir in RUNS.items():
-    s = safe_read_csv(run_dir / "generation_steering" / "generation_steering_summary.csv")
-    if not s.empty:
-        s["variant"] = VARIANT_INFO[variant]["label"]
-        s["variant_key"] = variant
-        steer_rows.append(s)
-steer_df = pd.concat(steer_rows, ignore_index=True) if steer_rows else pd.DataFrame()
 
-if steer_df.empty:
-    display(Markdown("No steering summary found yet."))
-else:
-    display(steer_df.sort_values(["variant", "method", "alpha"]))
-    best = (
-        steer_df.sort_values(["variant", "accuracy", "format_validity"], ascending=[True, False, False])
-        .groupby("variant", as_index=False)
-        .head(5)
-    )
-    display(Markdown("**Best steering settings by OOD accuracy**"))
-    display(best[["variant", "method", "alpha", "accuracy", "mae", "mean_pred_count", "format_validity"]])
+def run_probes(models: dict[str, GPT2LMHeadModel], vocab: Vocab, cfg: dict[str, Any]) -> pd.DataFrame:
+    train_examples = balanced_examples(cfg["seq_len"], cfg["probe_train_examples_per_count"], cfg["seed"] + 404)
+    test_examples = balanced_examples(cfg["seq_len"], cfg["probe_test_examples_per_count"], cfg["seed"] + 505)
+    train_records, test_records = [], []
+    for model_type, model in models.items():
+        train_records.extend(collect_probe_records(model, model_type, train_examples, vocab, cfg))
+        test_records.extend(collect_probe_records(model, model_type, test_examples, vocab, cfg))
+    train_df = pd.DataFrame([{k: v for k, v in r.items() if k != "feature"} for r in train_records])
+    test_df = pd.DataFrame([{k: v for k, v in r.items() if k != "feature"} for r in test_records])
+    rows = []
+    keys = ["model_type", "layer", "anchor_type", "label_type"]
+    for key_values, idxs in train_df.groupby(keys).groups.items():
+        mask_test = np.ones(len(test_df), dtype=bool)
+        for col, val in zip(keys, key_values):
+            mask_test &= test_df[col].to_numpy() == val
+        test_idxs = np.where(mask_test)[0]
+        if len(test_idxs) < 10:
+            continue
+        result = fit_probe_group([train_records[i] for i in idxs], [test_records[i] for i in test_idxs])
+        rows.append(dict(zip(keys, key_values)) | {"checkpoint_step": cfg["train_steps"], **result})
+    metrics = pd.DataFrame(rows)
+    metrics.to_csv(PROBES_DIR / "probe_metrics.csv", index=False)
+    return metrics
 
-    g = sns.FacetGrid(steer_df, col="variant", height=4.2, aspect=1.25, sharey=True)
-    g.map_dataframe(sns.lineplot, x="alpha", y="accuracy", hue="method", marker="o")
-    for ax in g.axes.flat:
-        ax.axvline(0, color="black", linestyle="--", linewidth=1)
-        ax.set_ylim(-0.03, 1.03)
-        ax.set_xlabel("steering alpha")
-        ax.set_ylabel("OOD final-count accuracy")
-    g.add_legend(title="direction method")
-    g.fig.suptitle("Generation steering on OOD counts", y=1.05, fontsize=13, fontweight="bold")
-    plt.show()
 
-    g = sns.FacetGrid(steer_df, col="variant", height=4.2, aspect=1.25, sharey=True)
-    g.map_dataframe(sns.lineplot, x="alpha", y="mean_pred_count", hue="method", marker="o")
-    for ax in g.axes.flat:
-        ax.axhspan(6, 10, color="#e03131", alpha=0.08, label="OOD target range")
-        ax.axvline(0, color="black", linestyle="--", linewidth=1)
-        ax.set_xlabel("steering alpha")
-        ax.set_ylabel("mean predicted count")
-    g.add_legend(title="direction method")
-    g.fig.suptitle("Does steering move the generated count upward/downward?", y=1.05, fontsize=13, fontweight="bold")
-    plt.show()
-        '''
-    ),
-    md(
-        r'''
-## Attention Analysis
-
-这里看模型在 answer/think/count 位置是否把 attention 集中到 source needles 上：
-
-- **横轴:** transformer layer。
-- **纵轴 1:** `marker_enrichment`，source needle 单 token 平均 attention / source noise 单 token 平均 attention。大于 1 表示更偏向 needle。
-- **纵轴 2:** `top_source_marker_rate`，source 里 attention 最大的位置是不是 needle。
-- **颜色:** split，ID 或 OOD。
-- **列:** 模型类型和 query anchor。
-
-这不是最终性能指标，而是解释 targeted retrieval 的辅助证据：think token 如果有用，可能表现为 answer 前后更稳定地关注 source needles。
-        '''
-    ),
-    code(
-        r'''
-attention_rows = []
-missing_attention = []
-for variant, run_dir in RUNS.items():
-    a = safe_read_csv(run_dir / "attention" / "attention_summary.csv")
-    if a.empty:
-        missing_attention.append({"variant": VARIANT_INFO[variant]["label"], "path": str(run_dir / "attention" / "attention_summary.csv")})
-    else:
-        a["variant"] = VARIANT_INFO[variant]["label"]
-        a["variant_key"] = variant
-        a["split_label"] = a["split"].map({"val_id": "ID: count 0-5", "val_count_ood": "OOD: count 6-10"}).fillna(a["split"])
-        attention_rows.append(a)
-
-attention_df = pd.concat(attention_rows, ignore_index=True) if attention_rows else pd.DataFrame()
-if missing_attention:
-    display(Markdown("**Some attention summaries are missing or empty.**"))
-    display(pd.DataFrame(missing_attention))
-
-if attention_df.empty:
-    display(Markdown("No attention rows found. Rerun with `PIPELINE_STAGE = 'attention'` and `SKIP_COMPLETED = True`."))
-else:
-    attn_agg = (
-        attention_df.groupby(["variant", "split_label", "query_anchor", "layer"], as_index=False)
-        .agg(
-            marker_enrichment=("marker_enrichment", "mean"),
-            top_source_marker_rate=("top_source_marker_rate", "mean"),
-            source_mass=("source_mass", "mean"),
-            marker_mass=("marker_mass", "mean"),
-            noise_mass=("noise_mass", "mean"),
-        )
-    )
-    display(attn_agg.head())
-    for metric, ylabel in [
-        ("marker_enrichment", "needle attention enrichment"),
-        ("top_source_marker_rate", "top source token is needle rate"),
-    ]:
-        g = sns.FacetGrid(attn_agg, row="query_anchor", col="variant", height=3.2, aspect=1.25, sharey=False)
-        g.map_dataframe(sns.lineplot, x="layer", y=metric, hue="split_label", marker="o")
-        for ax in g.axes.flat:
-            ax.set_xlabel("transformer layer")
-            ax.set_ylabel(ylabel)
-        g.add_legend(title="split")
-        g.fig.suptitle(f"Attention analysis: {metric}", y=1.02, fontsize=13, fontweight="bold")
+def plot_probe_results(metrics: pd.DataFrame) -> None:
+    if metrics.empty:
+        return
+    for model_type in ["non_thinking", "thinking"]:
+        final = metrics[(metrics["model_type"] == model_type) & (metrics["label_type"] == "final_count")]
+        if not final.empty:
+            mat = final.pivot_table(index="anchor_type", columns="layer", values="probe_accuracy", aggfunc="max")
+            plt.figure(figsize=(8, 3.5))
+            sns.heatmap(mat, vmin=0, vmax=1, cmap="viridis", annot=True, fmt=".2f")
+            plt.title(f"Final-count probe accuracy: {model_type}")
+            plt.tight_layout()
+            plt.savefig(PROBES_DIR / f"probe_final_count_accuracy_heatmap_{model_type}.png", bbox_inches="tight")
+            plt.show()
+    prefix = metrics[(metrics["model_type"] == "thinking") & (metrics["label_type"] == "prefix_count")]
+    if not prefix.empty:
+        for metric, name in [("probe_accuracy", "accuracy"), ("probe_mae", "mae")]:
+            mat = prefix.pivot_table(index="anchor_type", columns="layer", values=metric, aggfunc="max" if metric == "probe_accuracy" else "min")
+            plt.figure(figsize=(8, 3.5))
+            sns.heatmap(mat, cmap="viridis" if metric == "probe_accuracy" else "mako_r", annot=True, fmt=".2f")
+            plt.title(f"Thinking prefix-count probe {name}")
+            plt.tight_layout()
+            plt.savefig(PROBES_DIR / f"probe_prefix_count_{name}_heatmap_thinking.png", bbox_inches="tight")
+            plt.show()
+    key = metrics[
+        ((metrics["model_type"] == "non_thinking") & (metrics["anchor_type"] == "ans_token") & (metrics["label_type"] == "final_count"))
+        | ((metrics["model_type"] == "thinking") & (metrics["anchor_type"].isin(["think_start", "think_end", "ans_token"])) & (metrics["label_type"] == "final_count"))
+    ].copy()
+    if not key.empty:
+        key["curve"] = key["model_type"] + ":" + key["anchor_type"] + ":" + key["layer"]
+        plt.figure(figsize=(9, 4))
+        sns.barplot(data=key.sort_values("probe_accuracy", ascending=False).head(20), x="curve", y="probe_accuracy")
+        plt.xticks(rotation=45, ha="right")
+        plt.ylim(0, 1)
+        plt.title("Key final-count probe accuracies")
+        plt.tight_layout()
+        plt.savefig(PROBES_DIR / "probe_accuracy_vs_training_step_ans_token.png", bbox_inches="tight")
         plt.show()
-        '''
+
+
+if RUN_PROBES:
+    probe_metrics = run_probes(models, vocab, cfg)
+    display(probe_metrics.sort_values("probe_accuracy", ascending=False).head(20))
+    plot_probe_results(probe_metrics)
+        """
     ),
     md(
-        r'''
-## Chinese Analysis Summary
+        r"""
+## Attention and Retrieval Analysis
 
-下面这个 cell 会根据当前结果自动生成中文总结。它会先写明模型和数据设置，再分别回答：
-
-1. ID/OOD final count 是否成功；
-2. think token 是否有帮助；
-3. probe/direction 是否显示 counter；
-4. steering 是否能改善 OOD；
-5. attention 是否支持 targeted retrieval 的解释。
-        '''
+Attention is diagnostic rather than causal. The thinking analysis measures whether trace item `k` attends to prompt needle `j`, especially along the diagonal `k=j`.
+        """
     ),
     code(
-        r'''
-def _metric(df, variant, split, mode, column):
-    if df.empty:
-        return None
-    sub = df[(df["variant"] == variant) & (df["split"] == split) & (df["mode"] == mode)]
+        r"""
+def attention_entropy(weights: np.ndarray) -> float:
+    p = weights / max(float(weights.sum()), 1e-12)
+    p = p[p > 0]
+    return float(-(p * np.log(p)).sum())
+
+
+@torch.no_grad()
+def run_attention(models: dict[str, GPT2LMHeadModel], vocab: Vocab, cfg: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    examples = balanced_examples(cfg["seq_len"], cfg["attention_examples_per_count"], cfg["seed"] + 606)
+    non_rows = []
+    think_rows = []
+    for model_type, source_model in models.items():
+        # Hugging Face defaults to SDPA attention on recent torch/transformers builds.
+        # SDPA is faster but does not materialize attention matrices. Reload only the
+        # attention-analysis copy with eager attention, leaving training/eval untouched.
+        eager_path = CHECKPOINT_DIR / "final" / model_type
+        if eager_path.exists():
+            model = GPT2LMHeadModel.from_pretrained(eager_path, attn_implementation="eager").to(cfg["device"])
+        else:
+            model = source_model
+            model.config._attn_implementation = "eager"
+        model.eval()
+        for ex in tqdm(examples, desc=f"attention {model_type}", leave=False):
+            r = render_example(ex, model_type, vocab)
+            input_ids = torch.tensor([r["input_ids"]], dtype=torch.long, device=cfg["device"])
+            attention_mask = torch.ones_like(input_ids)
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask, output_attentions=True)
+            attentions = outputs.attentions
+            prompt_indices = list(range(r["anchors"]["prompt_start"], r["anchors"]["prompt_end_exclusive"]))
+            needle_indices = [1 + pos for pos in ex.needle_positions]
+            noise_indices = [idx for idx in prompt_indices if idx not in set(needle_indices)]
+            if model_type == "non_thinking":
+                q = r["anchors"]["ans_token"]
+                n = ex.count
+                for layer_idx, layer_attn in enumerate(attentions, start=1):
+                    arr = layer_attn[0, :, q, :].detach().float().cpu().numpy()
+                    for head, weights in enumerate(arr):
+                        needle_mass = float(weights[needle_indices].sum())
+                        noise_mass = float(weights[noise_indices].sum())
+                        top_prompt = np.array(prompt_indices)[np.argsort(weights[prompt_indices])[-n:]]
+                        recall = len(set(top_prompt.tolist()) & set(needle_indices)) / n
+                        non_rows.append(
+                            {
+                                "model_type": model_type,
+                                "count": ex.count,
+                                "count_bin": count_bin(ex.count),
+                                "layer": layer_idx,
+                                "head": head,
+                                "ans_to_all_needles_mass": needle_mass,
+                                "ans_to_noise_mass": noise_mass,
+                                "needle_vs_noise_ratio": needle_mass / (noise_mass + 1e-12),
+                                "attention_entropy_over_prompt_body": attention_entropy(weights[prompt_indices]),
+                                "top_n_retrieval_recall": recall,
+                            }
+                        )
+            else:
+                anchors = r["anchors"]
+                query_sets = {
+                    "index_token_k": anchors["index_positions"],
+                    "marker_token_k": anchors["marker_positions"],
+                    "pre_index_k": anchors["pre_index_positions"],
+                }
+                for query_anchor, query_positions in query_sets.items():
+                    for layer_idx, layer_attn in enumerate(attentions, start=1):
+                        arr = layer_attn[0, :, :, :].detach().float().cpu().numpy()
+                        for head in range(arr.shape[0]):
+                            A = np.zeros((ex.count, ex.count), dtype=np.float32)
+                            needle_mass_total = 0.0
+                            noise_mass_total = 0.0
+                            top1 = []
+                            for k_idx, q in enumerate(query_positions):
+                                weights = arr[head, q, :]
+                                A[k_idx] = weights[needle_indices]
+                                needle_mass_total += float(weights[needle_indices].sum())
+                                noise_mass_total += float(weights[noise_indices].sum())
+                                top1.append(int(np.argmax(weights[needle_indices]) == k_idx))
+                            diag = float(np.diag(A).mean())
+                            off = float((A.sum() - np.diag(A).sum()) / max(ex.count * (ex.count - 1), 1))
+                            think_rows.append(
+                                {
+                                    "model_type": model_type,
+                                    "count": ex.count,
+                                    "count_bin": count_bin(ex.count),
+                                    "layer": layer_idx,
+                                    "head": head,
+                                    "query_anchor": query_anchor,
+                                    "diagonal_mass": diag,
+                                    "off_diagonal_mass": off,
+                                    "diagonal_dominance": diag / (diag + off + 1e-12),
+                                    "correct_top1_rate": float(np.mean(top1)),
+                                    "needle_attention_mass": needle_mass_total / ex.count,
+                                    "noise_attention_mass": noise_mass_total / ex.count,
+                                    "needle_vs_noise_ratio": needle_mass_total / (noise_mass_total + 1e-12),
+                                    "matrix_json": json.dumps(A.tolist()),
+                                }
+                            )
+    non = pd.DataFrame(non_rows)
+    think = pd.DataFrame(think_rows)
+    non.to_csv(ATTENTION_DIR / "attention_nonthinking_metrics.csv", index=False)
+    think.to_csv(ATTENTION_DIR / "attention_thinking_metrics.csv", index=False)
+    return non, think
+
+
+def plot_attention(non: pd.DataFrame, think: pd.DataFrame) -> None:
+    if not think.empty:
+        for metric, filename, title in [
+            ("diagonal_dominance", "attention_thinking_diagonal_dominance_by_layer_head.png", "Thinking diagonal dominance"),
+            ("correct_top1_rate", "attention_thinking_correct_top1_by_layer_head.png", "Thinking correct top-1 retrieval"),
+        ]:
+            best_anchor = think.groupby("query_anchor")[metric].mean().sort_values(ascending=False).index[0]
+            agg = think[think["query_anchor"] == best_anchor].groupby(["layer", "head"], as_index=False)[metric].mean()
+            mat = agg.pivot(index="layer", columns="head", values=metric)
+            plt.figure(figsize=(5.5, 4))
+            sns.heatmap(mat, vmin=0, vmax=1, cmap="viridis", annot=True, fmt=".2f")
+            plt.title(f"{title} ({best_anchor})")
+            plt.tight_layout()
+            plt.savefig(ATTENTION_DIR / filename, bbox_inches="tight")
+            plt.show()
+        best = think.sort_values("diagonal_dominance", ascending=False).iloc[0]
+        for bin_name in ["low", "mid", "high"]:
+            rows = think[
+                (think["query_anchor"] == best["query_anchor"])
+                & (think["layer"] == best["layer"])
+                & (think["head"] == best["head"])
+                & (think["count_bin"] == bin_name)
+            ]
+            if rows.empty:
+                continue
+            matrices = [np.array(json.loads(x), dtype=float) for x in rows["matrix_json"]]
+            max_n = max(m.shape[0] for m in matrices)
+            padded = []
+            for m in matrices:
+                p = np.full((max_n, max_n), np.nan)
+                p[: m.shape[0], : m.shape[1]] = m
+                padded.append(p)
+            avg = np.nanmean(np.stack(padded), axis=0)
+            plt.figure(figsize=(5, 4))
+            sns.heatmap(avg, cmap="mako", annot=PRESET == "debug", fmt=".3f")
+            plt.xlabel("prompt needle index j")
+            plt.ylabel("trace item index k")
+            plt.title(f"Thinking attention matrix: {bin_name}")
+            plt.tight_layout()
+            plt.savefig(ATTENTION_DIR / f"attention_matrix_thinking_best_head_{bin_name}.png", bbox_inches="tight")
+            plt.show()
+    if not non.empty:
+        for metric, filename, title in [
+            ("ans_to_all_needles_mass", "attention_nonthinking_ans_needle_mass_by_layer_head.png", "Non-thinking <Ans> needle mass"),
+            ("top_n_retrieval_recall", "attention_nonthinking_topn_recall_by_layer_head.png", "Non-thinking top-n needle recall"),
+        ]:
+            agg = non.groupby(["layer", "head"], as_index=False)[metric].mean()
+            mat = agg.pivot(index="layer", columns="head", values=metric)
+            plt.figure(figsize=(5.5, 4))
+            sns.heatmap(mat, vmin=0, vmax=1 if metric == "top_n_retrieval_recall" else None, cmap="viridis", annot=True, fmt=".2f")
+            plt.title(title)
+            plt.tight_layout()
+            plt.savefig(ATTENTION_DIR / filename, bbox_inches="tight")
+            plt.show()
+
+
+if RUN_ATTENTION:
+    non_attn, think_attn = run_attention(models, vocab, cfg)
+    display(Markdown("**Non-thinking attention summary**"))
+    display(non_attn.groupby(["layer", "head"], as_index=False)[["ans_to_all_needles_mass", "top_n_retrieval_recall"]].mean().head())
+    display(Markdown("**Thinking attention summary**"))
+    display(think_attn.groupby(["query_anchor", "layer", "head"], as_index=False)[["diagonal_dominance", "correct_top1_rate"]].mean().head())
+    plot_attention(non_attn, think_attn)
+        """
+    ),
+    md(
+        r"""
+## Result Summary
+
+This cell reads the saved CSV files and prints a compact interpretation.
+        """
+    ),
+    code(
+        r"""
+train_df = pd.read_csv(RUN_DIR / "metrics_train.csv") if (RUN_DIR / "metrics_train.csv").exists() else pd.DataFrame()
+count_df = pd.read_csv(RUN_DIR / "metrics_eval_by_count.csv")
+bin_df = pd.read_csv(RUN_DIR / "metrics_eval_by_bin.csv")
+final_step = int(count_df["step"].max())
+final_count = count_df[count_df["step"] == final_step]
+final_bin = bin_df[bin_df["step"] == final_step]
+
+display(Markdown(f"### Final step: {final_step}"))
+display(final_bin[["model_type", "count_bin", "accuracy", "eval_final_answer_loss", "invalid_rate", "mae"]])
+display(final_count[["model_type", "count", "accuracy", "eval_final_answer_loss", "invalid_rate", "mae"]])
+
+lines = []
+for model_type in ["non_thinking", "thinking"]:
+    sub = final_bin[final_bin["model_type"] == model_type]
     if sub.empty:
-        return None
-    value = sub.iloc[0].get(column)
-    return None if pd.isna(value) else float(value)
-
-def _fmt(value):
-    return "NA" if value is None or (isinstance(value, float) and not math.isfinite(value)) else f"{value:.3f}"
-
-analysis_lines = []
-analysis_lines.append("### 实验设置")
-analysis_lines.append(f"- 模型：`{MODEL_NAME}`，配置 `{MODEL_CONFIG}`，seed `{SEED}`，训练 `{MAX_STEPS}` steps，batch size `{BATCH_SIZE}`。")
-analysis_lines.append("- 训练目标：all-token next-token prediction (`full_sequence`)，没有 final-count 加权。")
-analysis_lines.append(f"- 数据：source 长度 `{LENGTHS}`；ID count `{ID_COUNTS}`；OOD count `{OOD_COUNTS}`；positive marker 词表固定为 `X/Y/Z`。")
-analysis_lines.append("- v2 的关键控制：答案统一用 `<CNT>` 重复 k 次表示 count，think trace 统一用 `<TICK>` 表示每一次计数，因此 ID/OOD 的主要差异是数量，不是新 token 类别。")
-
-if not eval_df.empty:
-    analysis_lines.append("\n### 1. 两个模型的 ID/OOD final-count 表现")
-    for variant_label in [VARIANT_INFO[v]["label"] for v in REQUESTED_VARIANTS]:
-        id_ar = _metric(eval_df, variant_label, "val_id", "autoregressive", "count_accuracy")
-        ood_ar = _metric(eval_df, variant_label, "val_count_ood", "autoregressive", "count_accuracy")
-        id_tf = _metric(eval_df, variant_label, "val_id", "teacher_forced", "count_accuracy")
-        ood_tf = _metric(eval_df, variant_label, "val_count_ood", "teacher_forced", "count_accuracy")
-        analysis_lines.append(
-            f"- `{variant_label}`: autoregressive ID={_fmt(id_ar)}, OOD={_fmt(ood_ar)}；teacher-forced ID={_fmt(id_tf)}, OOD={_fmt(ood_tf)}。"
-        )
-    analysis_lines.append("- 这里的 accuracy 只看最终 `<CNT>` 数量，不要求 think trace 完全正确。若 teacher-forced 高但 autoregressive 低，说明内部读出 count 可以，但自由生成格式/停止机制失败；若两者 OOD 都低，说明 count 表征本身也没有外推。")
-
-if not direction_df.empty:
-    analysis_lines.append("\n### 2. Probe / count direction")
-    ok_dir = direction_df[direction_df["ok"].astype(str).str.lower().eq("true")].copy()
-    if not ok_dir.empty:
-        ok_dir["method"] = ok_dir["layer"] + ":" + ok_dir["anchor"] + ":" + ok_dir["target"]
-        top = ok_dir.sort_values("r2", ascending=False).head(5)
-        for _, row in top.iterrows():
-            analysis_lines.append(f"- `{row['variant']}` 的 `{row['method']}`: R²={_fmt(float(row['r2']))}, MAE={_fmt(float(row['mae']))}。")
-        analysis_lines.append("- 如果 `source_marker:running_count` 或 `trace_marker:k` R² 高，说明模型在每个 needle/trace 位置形成了局部递增 counter；如果 `ans:total_count` 或 `think_close:total_count` R² 高，说明最终读出处聚合了总数。")
-
-if not steer_df.empty:
-    analysis_lines.append("\n### 3. Steering")
-    zero = steer_df[np.isclose(steer_df["alpha"], 0.0)]
-    best = steer_df.sort_values(["variant", "accuracy", "format_validity"], ascending=[True, False, False]).groupby("variant").head(1)
+        continue
+    low = sub[sub["count_bin"] == "low"]["accuracy"].mean()
+    mid = sub[sub["count_bin"] == "mid"]["accuracy"].mean()
+    high = sub[sub["count_bin"] == "high"]["accuracy"].mean()
+    lines.append(f"- `{model_type}` final accuracy by bin: low={low:.3f}, mid={mid:.3f}, high={high:.3f}.")
+if not final_bin.empty:
+    winner = final_bin.groupby("model_type")["accuracy"].mean().sort_values(ascending=False)
+    lines.append(f"- Overall final-bin average winner: `{winner.index[0]}` ({winner.iloc[0]:.3f}).")
+if RUN_PROBES and (PROBES_DIR / "probe_metrics.csv").exists():
+    probes = pd.read_csv(PROBES_DIR / "probe_metrics.csv")
+    best = probes.sort_values("probe_accuracy", ascending=False).head(5)
+    lines.append("- Best probe rows:")
     for _, row in best.iterrows():
-        z = zero[zero["variant"] == row["variant"]]
-        baseline = None if z.empty else float(z["accuracy"].max())
-        delta = None if baseline is None else float(row["accuracy"]) - baseline
-        analysis_lines.append(
-            f"- `{row['variant']}` 最好 steering 是 `{row['method']}` alpha={row['alpha']}: OOD acc={_fmt(float(row['accuracy']))}, baseline(alpha=0)={_fmt(baseline)}, delta={_fmt(delta)}。"
-        )
-    analysis_lines.append("- 如果 steering 只改变 mean predicted count 但不提高 accuracy，说明 direction 能推动数量偏置，但还没有精确控制停止位置。")
+        lines.append(f"  - {row['model_type']} {row['layer']} {row['anchor_type']} {row['label_type']}: acc={row['probe_accuracy']:.3f}, mae={row['probe_mae']:.3f}, r2={row['probe_r2']:.3f}.")
+if RUN_ATTENTION and (ATTENTION_DIR / "attention_thinking_metrics.csv").exists():
+    think = pd.read_csv(ATTENTION_DIR / "attention_thinking_metrics.csv")
+    if not think.empty:
+        best = think.groupby(["query_anchor", "layer", "head"], as_index=False)["diagonal_dominance"].mean().sort_values("diagonal_dominance", ascending=False).head(3)
+        lines.append("- Best thinking retrieval-like attention heads by diagonal dominance:")
+        for _, row in best.iterrows():
+            lines.append(f"  - {row['query_anchor']} layer={int(row['layer'])} head={int(row['head'])}: diagonal_dominance={row['diagonal_dominance']:.3f}.")
 
-if not attention_df.empty:
-    analysis_lines.append("\n### 4. Attention / targeted retrieval")
-    attn_best = attention_df.sort_values("marker_enrichment", ascending=False).head(5)
-    for _, row in attn_best.iterrows():
-        analysis_lines.append(
-            f"- `{row['variant']}` split `{row['split']}` query `{row['query_anchor']}` layer {row['layer']} head {row['head']}: marker_enrichment={_fmt(float(row['marker_enrichment']))}, top_marker_rate={_fmt(float(row['top_source_marker_rate']))}。"
-        )
-    analysis_lines.append("- `marker_enrichment > 1` 表示该 query 位置更偏向 source needles 而不是 noise。若 think 模型在 OOD 仍保持较高 enrichment，但 OOD accuracy 低，瓶颈更可能是 counting/termination；若 enrichment 本身掉了，瓶颈更像 retrieval。")
-
-analysis_lines.append("\n### 下一步建议")
-analysis_lines.append("- 如果 v2 OOD 仍差，可以把 OOD 进一步拆成 interpolation (`0-5` 内不同长度) 和 extrapolation (`6-10`)；同时增加 curriculum：先训练 `0-3`，再扩到 `0-5`，看 counter 是否更可外推。")
-analysis_lines.append("- 如果 probe R² 高但 steering 效果弱，建议尝试 activation patching 或者在 answer span 的每一步用不同 alpha schedule，而不是固定 alpha。")
-analysis_lines.append("- 如果 answer-only 和 think trace 的差距小，说明当前 think trace 可能只是额外监督而没有形成可用算法；可以把 trace 改成显式 running total，例如 `<TICK> <CNT>` 前缀累积。")
-
-display(Markdown("\n".join(analysis_lines)))
-        '''
+display(Markdown("\n".join(lines)))
+        """
     ),
     md(
-        r'''
-## Save Result Bundle to Google Drive / Local `colab_results`
+        r"""
+## Save Result Bundle
 
-这个 cell 会把 data、runs、当前 notebook 和关键配置打包到结果目录。
-
-Colab 默认保存到：
+In Colab, this saves to:
 
 `/content/drive/MyDrive/Colab_Notebooks/CoT_Counting/Synthetic_CoT_NiaH_Count/colab_results/`
-
-本地默认保存到：
-
-`colab_results/`
-        '''
+        """
     ),
     code(
-        r'''
+        r"""
 SAVE_RESULTS = True
 DRIVE_RESULTS_ROOT = Path("/content/drive/MyDrive/Colab_Notebooks/CoT_Counting/Synthetic_CoT_NiaH_Count/colab_results")
 LOCAL_RESULTS_ROOT = Path("colab_results")
@@ -1009,61 +1174,49 @@ if SAVE_RESULTS:
         results_root = DRIVE_RESULTS_ROOT
     else:
         results_root = LOCAL_RESULTS_ROOT
-
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    bundle_dir = results_root / f"{EXPERIMENT_NAME}_{MODEL_NAME}_steps{MAX_STEPS}_{timestamp}"
+    bundle_dir = results_root / f"v2_marker_trace_{PRESET}_seed{cfg['seed']}_{timestamp}"
     bundle_dir.mkdir(parents=True, exist_ok=True)
-
-    def copy_dir(src, dst):
-        src = Path(src)
-        if src.exists():
-            shutil.copytree(src, dst, dirs_exist_ok=True)
-
-    copy_dir(DATA_ROOT, bundle_dir / "data")
-    copy_dir(OUT_ROOT, bundle_dir / "runs")
-    (bundle_dir / "notebooks").mkdir(exist_ok=True)
-    notebook_src = Path("notebooks/Trace_Count_v2_Colab.ipynb")
-    if notebook_src.exists():
-        shutil.copy2(notebook_src, bundle_dir / "notebooks" / notebook_src.name)
-    shutil.copy2("scripts/run_v2_repeat_count.py", bundle_dir / "run_v2_repeat_count.py")
+    shutil.copytree(RUN_DIR, bundle_dir / "run", dirs_exist_ok=True)
+    nb_src = Path("notebooks/Trace_Count_v2_Colab.ipynb")
+    if nb_src.exists():
+        (bundle_dir / "notebooks").mkdir(exist_ok=True)
+        shutil.copy2(nb_src, bundle_dir / "notebooks" / nb_src.name)
     with (bundle_dir / "manifest.json").open("w", encoding="utf-8") as f:
-        json.dump(settings | {"saved_at": timestamp, "repo": REPO_URL}, f, indent=2, ensure_ascii=False)
-    print("Saved result bundle:", bundle_dir)
-        '''
+        json.dump({"preset": PRESET, "config": cfg, "run_dir": str(RUN_DIR), "saved_at": timestamp}, f, indent=2)
+    print("Saved:", bundle_dir)
+        """
     ),
     md(
-        r'''
-## Commit / Push Notebook and Code to GitHub
+        r"""
+## Optional GitHub Push
 
-这个 cell 默认不会执行。确认结果和 notebook 没问题后，把 `PUSH_TO_GITHUB = True`。
-
-默认只提交代码、notebook 和测试，不提交大型 `runs/` / `data/` 结果目录。结果建议放 Google Drive。
-        '''
+This cell is disabled by default. It commits the notebook and supporting files, not large run outputs.
+        """
     ),
     code(
-        r'''
+        r"""
 PUSH_TO_GITHUB = False
-ADD_RESULTS_TO_GIT = False
-COMMIT_MESSAGE = "Add Trace Count v2 repeated-count notebook"
+COMMIT_MESSAGE = "Rewrite Trace Count v2 marker-trace notebook"
 
 if PUSH_TO_GITHUB:
-    paths = [
-        "notebooks/Trace_Count_v2_Colab.ipynb",
-        "scripts/run_v2_repeat_count.py",
-        "src/trace_counting",
-        "tests",
-        "README.md",
-        "pyproject.toml",
-    ]
-    if ADD_RESULTS_TO_GIT:
-        paths += [DATA_ROOT, OUT_ROOT]
     subprocess.run(["git", "status", "--short"], check=False)
-    subprocess.run(["git", "add", *paths], check=True)
+    subprocess.run(
+        [
+            "git",
+            "add",
+            "notebooks/Trace_Count_v2_Colab.ipynb",
+            "notebooks/pipeline_v2_codex_prompt.md",
+            "scripts/build_v2_notebook.py",
+            "README.md",
+        ],
+        check=True,
+    )
     subprocess.run(["git", "commit", "-m", COMMIT_MESSAGE], check=False)
     subprocess.run(["git", "push"], check=True)
 else:
-    print("PUSH_TO_GITHUB is False; no git command was run.")
-        '''
+    print("PUSH_TO_GITHUB is False; no git commands were run.")
+        """
     ),
 ]
 
@@ -1087,5 +1240,5 @@ nb = {
 }
 
 OUT.parent.mkdir(parents=True, exist_ok=True)
-OUT.write_text(json.dumps(nb, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+OUT.write_text(json.dumps(nb, indent=1, ensure_ascii=True) + "\n", encoding="utf-8")
 print(f"Wrote {OUT}")
