@@ -91,7 +91,8 @@ def token_segment(example: dict, idx: int) -> str | None:
     token = example["full_tokens"][idx]
     if spans["source_start"] <= idx < spans["source_end_exclusive"]:
         return "source_loss"
-    if idx in {spans["think_open_idx"], spans["think_close_idx"]}:
+    think_indices = {value for value in (spans.get("think_open_idx"), spans.get("think_close_idx")) if value is not None}
+    if idx in think_indices:
         return "think_boundary_loss"
     if spans["trace_start"] <= idx < spans["trace_end_exclusive"]:
         return "trace_index_loss" if token.startswith("<I") else "trace_marker_loss"
