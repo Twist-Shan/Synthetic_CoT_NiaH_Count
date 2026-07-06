@@ -134,7 +134,7 @@ CONFIGS = {
     },
     "main": {
         "seq_len": 256,
-        "train_steps": 20000,
+        "train_steps": 10000,
         "batch_size": 128,
         "eval_every": 500,
         "log_every": 50,
@@ -1149,6 +1149,457 @@ if RUN_ATTENTION and (ATTENTION_DIR / "attention_thinking_metrics.csv").exists()
             lines.append(f"  - {row['query_anchor']} layer={int(row['layer'])} head={int(row['head'])}: diagonal_dominance={row['diagonal_dominance']:.3f}.")
 
 display(Markdown("\n".join(lines)))
+        """
+    ),
+    md(
+        r"""
+## Targeted Retrieval Deep Dive
+
+This section tests the three most interesting mechanistic hypotheses from the v2 result:
+
+1. **Targeted retrieval head.** The thinking model may contain a trace-time head that maps trace item `k` to prompt needle `k`.
+2. **Broad aggregation in non-thinking.** The non-thinking model may solve the final answer through a less sequential, more global aggregation path.
+3. **Mechanistic importance.** If the targeted head is meaningful, it should appear during training and/or affect behavior when ablated.
+
+The cells below are post-hoc analyses. They read existing metrics/checkpoints from `RUN_DIR` and do not retrain the models.
+        """
+    ),
+    code(
+        r"""
+DEEP_DIVE_ATTENTION_EXAMPLES_PER_COUNT = 20
+RUN_DEEP_DIVE_DYNAMICS = True
+RUN_DEEP_DIVE_HEAD_ABLATION = True
+DEEP_DIVE_ABLATION_EXAMPLES_PER_COUNT = 50
+
+
+def latest_saved_v2_run() -> Path | None:
+    candidates = sorted(Path("colab_results").glob("v2_marker_trace_*_seed*/run"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0] if candidates else None
+
+
+def resolve_analysis_run_dir() -> Path:
+    if (RUN_DIR / "metrics_eval_by_count.csv").exists():
+        return RUN_DIR
+    saved = latest_saved_v2_run()
+    if saved is not None:
+        return saved
+    raise FileNotFoundError("Could not find v2 run metrics. Run training/attention first or copy a saved bundle into colab_results/.")
+
+
+ANALYSIS_RUN_DIR = resolve_analysis_run_dir()
+ANALYSIS_CHECKPOINT_DIR = ANALYSIS_RUN_DIR / "checkpoints"
+ANALYSIS_ATTENTION_DIR = ANALYSIS_RUN_DIR / "attention"
+ANALYSIS_DEEP_DIVE_DIR = ANALYSIS_RUN_DIR / "targeted_retrieval_deep_dive"
+ANALYSIS_DEEP_DIVE_DIR.mkdir(parents=True, exist_ok=True)
+ANALYSIS_CFG = dict(cfg)
+analysis_config_path = ANALYSIS_RUN_DIR / "config.json"
+if analysis_config_path.exists():
+    with analysis_config_path.open("r", encoding="utf-8") as f:
+        ANALYSIS_CFG.update(json.load(f))
+ANALYSIS_CFG["device"] = cfg["device"]
+
+display(Markdown(f"**Deep-dive source run:** `{ANALYSIS_RUN_DIR}`"))
+
+count_eval_dd = pd.read_csv(ANALYSIS_RUN_DIR / "metrics_eval_by_count.csv")
+bin_eval_dd = pd.read_csv(ANALYSIS_RUN_DIR / "metrics_eval_by_bin.csv")
+non_attn_dd = pd.read_csv(ANALYSIS_ATTENTION_DIR / "attention_nonthinking_metrics.csv")
+think_attn_dd = pd.read_csv(ANALYSIS_ATTENTION_DIR / "attention_thinking_metrics.csv")
+
+display(Markdown(
+    "**Metric definitions.** "
+    "`correct_top1_rate` = for trace step k, whether the highest-attended prompt needle is needle k. "
+    "`diagonal_dominance` = diagonal attention mass divided by diagonal plus off-diagonal needle mass. "
+    "`top_n_retrieval_recall` = for non-thinking <Ans>, among the top n prompt positions, what fraction are true needles. "
+    "`needle_attention_mass` and `ans_to_all_needles_mass` are raw attention mass to true needle positions."
+))
+        """
+    ),
+    md(
+        r"""
+### Hypothesis 1: thinking has a targeted retrieval head
+
+The table ranks thinking-model heads by whether trace item `k` attends to prompt needle `k`.  
+Rows are grouped by `query_anchor`, `layer`, and `head`:
+
+- `index_token_k`: the generated count index token `<k>` in the trace;
+- `marker_token_k`: the generated marker token after `<k>`;
+- `pre_index_k`: the token immediately before index `<k>`.
+        """
+    ),
+    code(
+        r"""
+thinking_head_rank = (
+    think_attn_dd
+    .groupby(["query_anchor", "layer", "head"], as_index=False)
+    .agg(
+        diagonal_dominance=("diagonal_dominance", "mean"),
+        correct_top1_rate=("correct_top1_rate", "mean"),
+        needle_attention_mass=("needle_attention_mass", "mean"),
+        noise_attention_mass=("noise_attention_mass", "mean"),
+        needle_vs_noise_ratio=("needle_vs_noise_ratio", "mean"),
+    )
+    .sort_values(["correct_top1_rate", "diagonal_dominance", "needle_attention_mass"], ascending=False)
+)
+
+display(thinking_head_rank.head(12))
+
+best_thinking_head = thinking_head_rank.iloc[0].to_dict()
+BEST_QUERY_ANCHOR = str(best_thinking_head["query_anchor"])
+BEST_LAYER = int(best_thinking_head["layer"])
+BEST_HEAD = int(best_thinking_head["head"])
+
+display(Markdown(
+    f"**Best targeted-retrieval candidate:** `{BEST_QUERY_ANCHOR}`, layer `{BEST_LAYER}`, head `{BEST_HEAD}`; "
+    f"correct_top1={best_thinking_head['correct_top1_rate']:.3f}, "
+    f"diagonal_dominance={best_thinking_head['diagonal_dominance']:.3f}, "
+    f"needle_mass={best_thinking_head['needle_attention_mass']:.3f}."
+))
+
+for metric, title, filename in [
+    ("correct_top1_rate", "Thinking targeted retrieval: correct top-1 by head", "h1_thinking_correct_top1_by_head.png"),
+    ("diagonal_dominance", "Thinking targeted retrieval: diagonal dominance by head", "h1_thinking_diagonal_dominance_by_head.png"),
+    ("needle_attention_mass", "Thinking targeted retrieval: needle attention mass by head", "h1_thinking_needle_mass_by_head.png"),
+]:
+    agg = thinking_head_rank[thinking_head_rank["query_anchor"] == BEST_QUERY_ANCHOR]
+    mat = agg.pivot(index="layer", columns="head", values=metric)
+    plt.figure(figsize=(5.8, 4.2))
+    sns.heatmap(mat, vmin=0, vmax=1 if metric != "needle_attention_mass" else None, cmap="viridis", annot=True, fmt=".2f")
+    plt.title(f"{title}\nanchor={BEST_QUERY_ANCHOR}")
+    plt.xlabel("attention head")
+    plt.ylabel("layer")
+    plt.tight_layout()
+    plt.savefig(ANALYSIS_DEEP_DIVE_DIR / filename, bbox_inches="tight")
+    plt.show()
+
+rows = think_attn_dd[
+    (think_attn_dd["query_anchor"] == BEST_QUERY_ANCHOR)
+    & (think_attn_dd["layer"] == BEST_LAYER)
+    & (think_attn_dd["head"] == BEST_HEAD)
+].copy()
+
+for bin_name in ["low", "mid", "high"]:
+    sub = rows[rows["count_bin"] == bin_name]
+    if sub.empty:
+        continue
+    matrices = [np.array(json.loads(x), dtype=float) for x in sub["matrix_json"]]
+    max_n = max(m.shape[0] for m in matrices)
+    padded = []
+    for m in matrices:
+        p = np.full((max_n, max_n), np.nan)
+        p[: m.shape[0], : m.shape[1]] = m
+        padded.append(p)
+    avg = np.nanmean(np.stack(padded), axis=0)
+    plt.figure(figsize=(5.2, 4.5))
+    sns.heatmap(avg, cmap="mako", annot=False)
+    plt.title(f"H1 matrix: {BEST_QUERY_ANCHOR} L{BEST_LAYER}H{BEST_HEAD}, {bin_name} counts")
+    plt.xlabel("prompt needle index j")
+    plt.ylabel("trace item index k")
+    plt.tight_layout()
+    plt.savefig(ANALYSIS_DEEP_DIVE_DIR / f"h1_matrix_{BEST_QUERY_ANCHOR}_L{BEST_LAYER}H{BEST_HEAD}_{bin_name}.png", bbox_inches="tight")
+    plt.show()
+        """
+    ),
+    md(
+        r"""
+### Hypothesis 2: non-thinking uses a broader aggregation route
+
+This comparison is intentionally conservative: the metrics are not identical across models.
+
+- For **non-thinking**, the query is the final `<Ans>` token. We measure whether its top-`n` prompt positions include the `n` needles, plus attention entropy over the prompt body.
+- For **thinking**, the query is each trace item. We measure whether trace item `k` retrieves prompt needle `k`.
+
+If the hypothesis is right, thinking should show a sharper diagonal trace-to-needle pattern, while non-thinking may retrieve many needles at once or distribute attention more broadly.
+        """
+    ),
+    code(
+        r"""
+non_head_rank = (
+    non_attn_dd
+    .groupby(["layer", "head"], as_index=False)
+    .agg(
+        top_n_retrieval_recall=("top_n_retrieval_recall", "mean"),
+        ans_to_all_needles_mass=("ans_to_all_needles_mass", "mean"),
+        ans_to_noise_mass=("ans_to_noise_mass", "mean"),
+        needle_vs_noise_ratio=("needle_vs_noise_ratio", "mean"),
+        attention_entropy_over_prompt_body=("attention_entropy_over_prompt_body", "mean"),
+    )
+    .sort_values(["top_n_retrieval_recall", "ans_to_all_needles_mass"], ascending=False)
+)
+
+display(Markdown("**Best non-thinking <Ans> retrieval heads**"))
+display(non_head_rank.head(12))
+
+best_non_head = non_head_rank.iloc[0].to_dict()
+BEST_NON_LAYER = int(best_non_head["layer"])
+BEST_NON_HEAD = int(best_non_head["head"])
+
+comparison_rows = [
+    {
+        "route": f"non-thinking <Ans> L{BEST_NON_LAYER}H{BEST_NON_HEAD}",
+        "retrieval_metric": "top_n_retrieval_recall",
+        "retrieval_value": best_non_head["top_n_retrieval_recall"],
+        "needle_mass": best_non_head["ans_to_all_needles_mass"],
+        "noise_mass": best_non_head["ans_to_noise_mass"],
+        "entropy_or_diagonal": best_non_head["attention_entropy_over_prompt_body"],
+        "entropy_or_diagonal_name": "prompt attention entropy",
+    },
+    {
+        "route": f"thinking {BEST_QUERY_ANCHOR} L{BEST_LAYER}H{BEST_HEAD}",
+        "retrieval_metric": "correct_top1_rate",
+        "retrieval_value": best_thinking_head["correct_top1_rate"],
+        "needle_mass": best_thinking_head["needle_attention_mass"],
+        "noise_mass": best_thinking_head["noise_attention_mass"],
+        "entropy_or_diagonal": best_thinking_head["diagonal_dominance"],
+        "entropy_or_diagonal_name": "diagonal dominance",
+    },
+]
+route_comparison = pd.DataFrame(comparison_rows)
+display(route_comparison)
+
+plot_df = route_comparison.melt(
+    id_vars=["route"],
+    value_vars=["retrieval_value", "needle_mass", "noise_mass"],
+    var_name="metric",
+    value_name="value",
+)
+plt.figure(figsize=(8, 4.2))
+sns.barplot(data=plot_df, x="metric", y="value", hue="route")
+plt.ylim(0, max(1.05, float(plot_df["value"].max()) * 1.15))
+plt.title("H2 broad vs targeted retrieval summary")
+plt.xlabel("metric")
+plt.ylabel("value")
+plt.tight_layout()
+plt.savefig(ANALYSIS_DEEP_DIVE_DIR / "h2_broad_vs_targeted_summary.png", bbox_inches="tight")
+plt.show()
+
+for metric, title, filename in [
+    ("top_n_retrieval_recall", "Non-thinking <Ans>: top-n needle recall", "h2_nonthinking_topn_recall.png"),
+    ("attention_entropy_over_prompt_body", "Non-thinking <Ans>: prompt-body attention entropy", "h2_nonthinking_entropy.png"),
+    ("ans_to_all_needles_mass", "Non-thinking <Ans>: total attention mass to needles", "h2_nonthinking_needle_mass.png"),
+]:
+    mat = non_head_rank.pivot(index="layer", columns="head", values=metric)
+    plt.figure(figsize=(5.8, 4.2))
+    sns.heatmap(mat, vmin=0 if metric != "attention_entropy_over_prompt_body" else None, vmax=1 if metric == "top_n_retrieval_recall" else None, cmap="viridis", annot=True, fmt=".2f")
+    plt.title(title)
+    plt.xlabel("attention head")
+    plt.ylabel("layer")
+    plt.tight_layout()
+    plt.savefig(ANALYSIS_DEEP_DIVE_DIR / filename, bbox_inches="tight")
+    plt.show()
+
+display(Markdown(
+    f"**Interpretation checkpoint.** The best non-thinking head has top-n recall "
+    f"{best_non_head['top_n_retrieval_recall']:.3f}, but its raw mass to all needles is "
+    f"{best_non_head['ans_to_all_needles_mass']:.3f}. The best thinking head has correct top-1 "
+    f"{best_thinking_head['correct_top1_rate']:.3f} with diagonal dominance "
+    f"{best_thinking_head['diagonal_dominance']:.3f}. This supports a difference between broad final-answer aggregation and trace-indexed retrieval."
+))
+        """
+    ),
+    md(
+        r"""
+### Hypothesis 3: the targeted head should matter mechanistically
+
+This cell runs two optional checks:
+
+1. **Checkpoint dynamics.** Recompute the best thinking head's targeted-retrieval metrics at saved checkpoints, then compare them with final-answer accuracy.
+2. **Head ablation.** Zero one attention head's value contribution before the output projection during autoregressive thinking generation.
+
+The ablation is deliberately lightweight and local. A large accuracy drop would be strong evidence; no drop would mean the head is diagnostic or redundant rather than individually necessary.
+        """
+    ),
+    code(
+        r"""
+def checkpoint_step_dirs(checkpoint_dir: Path) -> list[tuple[int, Path]]:
+    out = []
+    for path in checkpoint_dir.glob("step_*"):
+        try:
+            step = int(path.name.split("_")[1])
+        except Exception:
+            continue
+        if (path / "thinking" / "config.json").exists():
+            out.append((step, path))
+    return sorted(out)
+
+
+def mean_selected_thinking_head_metrics(
+    model: GPT2LMHeadModel,
+    examples: list[BaseExample],
+    query_anchor: str,
+    layer: int,
+    head: int,
+    vocab: Vocab,
+    cfg: dict[str, Any],
+) -> dict[str, float]:
+    model.eval()
+    diag_vals = []
+    top1_vals = []
+    needle_vals = []
+    noise_vals = []
+    layer_idx = layer - 1
+    for ex in examples:
+        rendered = render_example(ex, "thinking", vocab)
+        input_ids = torch.tensor([rendered["input_ids"]], dtype=torch.long, device=cfg["device"])
+        attention_mask = torch.ones_like(input_ids)
+        outputs = model(input_ids=input_ids, attention_mask=attention_mask, output_attentions=True)
+        weights_all = outputs.attentions[layer_idx][0, head].detach().float().cpu().numpy()
+        prompt_indices = list(range(rendered["anchors"]["prompt_start"], rendered["anchors"]["prompt_end_exclusive"]))
+        needle_indices = [1 + pos for pos in ex.needle_positions]
+        noise_indices = [idx for idx in prompt_indices if idx not in set(needle_indices)]
+        query_positions = rendered["anchors"][{
+            "index_token_k": "index_positions",
+            "marker_token_k": "marker_positions",
+            "pre_index_k": "pre_index_positions",
+        }[query_anchor]]
+        A = np.zeros((ex.count, ex.count), dtype=np.float32)
+        top1 = []
+        needle_mass = 0.0
+        noise_mass = 0.0
+        for k_idx, q in enumerate(query_positions):
+            weights = weights_all[q, :]
+            A[k_idx] = weights[needle_indices]
+            top1.append(int(np.argmax(weights[needle_indices]) == k_idx))
+            needle_mass += float(weights[needle_indices].sum())
+            noise_mass += float(weights[noise_indices].sum())
+        diag = float(np.diag(A).mean())
+        off = float((A.sum() - np.diag(A).sum()) / max(ex.count * (ex.count - 1), 1))
+        diag_vals.append(diag / (diag + off + 1e-12))
+        top1_vals.append(float(np.mean(top1)))
+        needle_vals.append(needle_mass / ex.count)
+        noise_vals.append(noise_mass / ex.count)
+    return {
+        "diagonal_dominance": float(np.mean(diag_vals)),
+        "correct_top1_rate": float(np.mean(top1_vals)),
+        "needle_attention_mass": float(np.mean(needle_vals)),
+        "noise_attention_mass": float(np.mean(noise_vals)),
+    }
+
+
+if RUN_DEEP_DIVE_DYNAMICS:
+    dynamics_path = ANALYSIS_DEEP_DIVE_DIR / f"h3_dynamics_{BEST_QUERY_ANCHOR}_L{BEST_LAYER}H{BEST_HEAD}.csv"
+    if dynamics_path.exists():
+        dynamics = pd.read_csv(dynamics_path)
+    else:
+        dyn_examples = balanced_examples(ANALYSIS_CFG["seq_len"], DEEP_DIVE_ATTENTION_EXAMPLES_PER_COUNT, ANALYSIS_CFG["seed"] + 909)
+        dyn_rows = []
+        for step, ckpt_path in tqdm(checkpoint_step_dirs(ANALYSIS_CHECKPOINT_DIR), desc="deep-dive checkpoint attention"):
+            model = GPT2LMHeadModel.from_pretrained(ckpt_path / "thinking", attn_implementation="eager").to(ANALYSIS_CFG["device"])
+            metrics = mean_selected_thinking_head_metrics(model, dyn_examples, BEST_QUERY_ANCHOR, BEST_LAYER, BEST_HEAD, vocab, ANALYSIS_CFG)
+            metrics.update({"step": step, "query_anchor": BEST_QUERY_ANCHOR, "layer": BEST_LAYER, "head": BEST_HEAD})
+            dyn_rows.append(metrics)
+            del model
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        dynamics = pd.DataFrame(dyn_rows)
+        dynamics.to_csv(dynamics_path, index=False)
+
+    acc_curve = (
+        bin_eval_dd[bin_eval_dd["model_type"] == "thinking"]
+        .groupby("step", as_index=False)
+        .agg(thinking_accuracy=("accuracy", "mean"), high_count_accuracy=("accuracy", lambda s: s[bin_eval_dd.loc[s.index, "count_bin"].eq("high")].mean()))
+    )
+    dynamics_plot = dynamics.merge(acc_curve, on="step", how="left")
+    display(dynamics_plot)
+
+    plot_cols = ["correct_top1_rate", "diagonal_dominance", "needle_attention_mass", "thinking_accuracy", "high_count_accuracy"]
+    plot_long = dynamics_plot.melt(id_vars=["step"], value_vars=[c for c in plot_cols if c in dynamics_plot], var_name="metric", value_name="value")
+    plt.figure(figsize=(9, 4.6))
+    sns.lineplot(data=plot_long, x="step", y="value", hue="metric", marker="o")
+    plt.ylim(-0.03, 1.05)
+    plt.title(f"H3 training dynamics: {BEST_QUERY_ANCHOR} L{BEST_LAYER}H{BEST_HEAD}")
+    plt.xlabel("checkpoint step")
+    plt.ylabel("value")
+    plt.tight_layout()
+    plt.savefig(ANALYSIS_DEEP_DIVE_DIR / "h3_targeted_head_training_dynamics.png", bbox_inches="tight")
+    plt.show()
+
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def ablate_gpt2_attention_head(model: GPT2LMHeadModel, layer: int, head: int):
+    attn = model.transformer.h[layer - 1].attn
+    head_dim = model.config.n_embd // model.config.n_head
+    start = head * head_dim
+    stop = start + head_dim
+
+    def pre_hook(module, inputs):
+        x = inputs[0].clone()
+        x[..., start:stop] = 0.0
+        return (x,) + tuple(inputs[1:])
+
+    handle = attn.c_proj.register_forward_pre_hook(pre_hook)
+    try:
+        yield
+    finally:
+        handle.remove()
+
+
+def summarize_thinking_predictions(rows: list[dict[str, Any]]) -> dict[str, float]:
+    df = pd.DataFrame(rows)
+    correct = df["pred_count"].fillna(-999).astype(int).eq(df["count"].astype(int))
+    return {
+        "accuracy": float(correct.mean()),
+        "invalid_rate": float(df["invalid"].mean()),
+        "trace_exact_match_rate": float(df["trace_exact_match"].mean()),
+        "trace_marker_recall": float(df["trace_marker_recall"].mean()),
+        "trace_index_accuracy": float(df["trace_index_accuracy"].mean()),
+    }
+
+
+if RUN_DEEP_DIVE_HEAD_ABLATION:
+    ablation_path = ANALYSIS_DEEP_DIVE_DIR / "h3_thinking_head_ablation.csv"
+    if ablation_path.exists():
+        ablation_df = pd.read_csv(ablation_path)
+    else:
+        ablation_examples = balanced_examples(ANALYSIS_CFG["seq_len"], DEEP_DIVE_ABLATION_EXAMPLES_PER_COUNT, ANALYSIS_CFG["seed"] + 1009)
+        final_thinking_path = ANALYSIS_CHECKPOINT_DIR / "final" / "thinking"
+        if not final_thinking_path.exists():
+            final_steps = checkpoint_step_dirs(ANALYSIS_CHECKPOINT_DIR)
+            final_thinking_path = final_steps[-1][1] / "thinking"
+        ablation_heads = [
+            ("baseline_no_ablation", None, None),
+            (f"target_{BEST_QUERY_ANCHOR}_L{BEST_LAYER}H{BEST_HEAD}", BEST_LAYER, BEST_HEAD),
+            (f"same_layer_control_L{BEST_LAYER}H{(BEST_HEAD + 1) % ANALYSIS_CFG['n_head']}", BEST_LAYER, (BEST_HEAD + 1) % ANALYSIS_CFG["n_head"]),
+            ("early_control_L1H0", 1, 0),
+        ]
+        rows = []
+        for name, layer, head in tqdm(ablation_heads, desc="deep-dive head ablation"):
+            model = GPT2LMHeadModel.from_pretrained(final_thinking_path).to(ANALYSIS_CFG["device"])
+            if layer is None:
+                preds = predict_thinking(model, ablation_examples, vocab, ANALYSIS_CFG, batch_size=64)
+            else:
+                with ablate_gpt2_attention_head(model, int(layer), int(head)):
+                    preds = predict_thinking(model, ablation_examples, vocab, ANALYSIS_CFG, batch_size=64)
+            metrics = summarize_thinking_predictions(preds)
+            metrics.update({"condition": name, "layer": layer, "head": head, "n_examples": len(ablation_examples)})
+            rows.append(metrics)
+            del model
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        ablation_df = pd.DataFrame(rows)
+        ablation_df.to_csv(ablation_path, index=False)
+
+    display(ablation_df)
+    plot_long = ablation_df.melt(
+        id_vars=["condition"],
+        value_vars=["accuracy", "trace_exact_match_rate", "trace_marker_recall", "trace_index_accuracy"],
+        var_name="metric",
+        value_name="value",
+    )
+    plt.figure(figsize=(10, 4.8))
+    sns.barplot(data=plot_long, x="condition", y="value", hue="metric")
+    plt.ylim(0, 1.05)
+    plt.xticks(rotation=20, ha="right")
+    plt.title("H3 final-checkpoint thinking behavior under head ablation")
+    plt.xlabel("ablation condition")
+    plt.ylabel("rate")
+    plt.tight_layout()
+    plt.savefig(ANALYSIS_DEEP_DIVE_DIR / "h3_thinking_head_ablation.png", bbox_inches="tight")
+    plt.show()
+
+display(Markdown(f"Deep-dive outputs saved under `{ANALYSIS_DEEP_DIVE_DIR}`."))
         """
     ),
     md(
