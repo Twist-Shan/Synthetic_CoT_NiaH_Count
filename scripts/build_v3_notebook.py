@@ -65,22 +65,42 @@ import sys
 from typing import Any
 
 REPO_URL = "https://github.com/Twist-Shan/Synthetic_CoT_NiaH_Count.git"
-INSTALL_PACKAGE = True
+# v3 is self-contained. Keeping this False avoids Colab numpy/pandas ABI
+# breakage from changing package versions inside an already-running kernel.
+INSTALL_PACKAGE = False
 
 IN_COLAB = "google.colab" in sys.modules or Path("/content").exists()
 if IN_COLAB:
     repo_dir = Path("/content/Synthetic_CoT_NiaH_Count")
-    if not (repo_dir / ".git").exists():
+    cwd = Path.cwd()
+    if (cwd / ".git").exists() or (cwd / "pyproject.toml").exists():
+        repo_dir = cwd
+    elif (repo_dir / ".git").exists():
+        pass
+    elif repo_dir.exists() and any(repo_dir.iterdir()):
+        print(f"Using existing non-git directory: {repo_dir}")
+    else:
+        if repo_dir.exists():
+            repo_dir.rmdir()
         subprocess.run(["git", "clone", REPO_URL, str(repo_dir)], check=True)
     os.chdir(repo_dir)
 
 ROOT = Path.cwd()
-if INSTALL_PACKAGE:
+if INSTALL_PACKAGE and (ROOT / "pyproject.toml").exists():
     subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-e", "."], check=True)
+elif INSTALL_PACKAGE:
+    print("pyproject.toml not found; skipped editable install.")
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
+try:
+    import pandas as pd
+except Exception as exc:
+    raise RuntimeError(
+        "Pandas failed to import, usually because a previous pip install changed NumPy "
+        "inside this Colab kernel. Restart the runtime, keep INSTALL_PACKAGE=False, "
+        "and rerun from the first cell."
+    ) from exc
 import seaborn as sns
 import torch
 import torch.nn as nn
