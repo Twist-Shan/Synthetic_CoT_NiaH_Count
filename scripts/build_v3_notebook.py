@@ -72,6 +72,17 @@ if IN_COLAB:
     os.chdir(repo_dir)
 
 ROOT = Path.cwd()
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+if not (ROOT / "synthetic_niah_v3").exists() and (ROOT / ".git").exists():
+    print("synthetic_niah_v3/ not found; trying git pull --ff-only ...")
+    subprocess.run(["git", "pull", "--ff-only"], check=False)
+if not (ROOT / "synthetic_niah_v3").exists():
+    raise FileNotFoundError(
+        "Could not find synthetic_niah_v3/. This Colab runtime has the v3 notebook "
+        "but not the new v3 package files. Push/pull the latest repo, or upload the "
+        "synthetic_niah_v3 directory plus configs/syn_v3_no_loss_*.yaml."
+    )
 if INSTALL_PACKAGE and (ROOT / "pyproject.toml").exists():
     subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-e", "."], check=True)
 
@@ -167,6 +178,12 @@ if SKIP_COMPLETED:
     cmd.append("--skip_completed")
 if SKIP_TRAINING:
     cmd.append("--skip_training")
+
+if not Path("synthetic_niah_v3/run_v3.py").exists():
+    raise FileNotFoundError(
+        "Missing synthetic_niah_v3/run_v3.py in this runtime. Rerun the setup cell after "
+        "git pulling the latest repo, or upload the synthetic_niah_v3/ package directory."
+    )
 
 print(" ".join(cmd), flush=True)
 log_file = Path(OUT_ROOT) / "last_pipeline.log"

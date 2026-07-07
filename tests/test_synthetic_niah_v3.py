@@ -9,6 +9,8 @@ from synthetic_niah_v3.attention import _entropy
 from synthetic_niah_v3.data import balanced_examples, make_example
 from synthetic_niah_v3.objectives import build_training_weights
 from synthetic_niah_v3.render import render_non_thinking, render_thinking, trace_tokens_for_example
+from synthetic_niah_v3.model import make_model
+from synthetic_niah_v3.train import load_checkpoint, save_checkpoint
 from synthetic_niah_v3.trace_parse import parse_thinking_generation
 from synthetic_niah_v3.vocab import Vocab
 
@@ -47,3 +49,20 @@ def test_eval_parser_and_attention_metric_sanity():
     assert not parsed.invalid
     assert parsed.final_count == 2
     assert _entropy(np.eye(3)[0]) >= 0.0
+
+
+def test_checkpoint_save_load_roundtrip(tmp_path):
+    cfg = {
+        "vocab_size": 90,
+        "n_layers": 1,
+        "n_heads": 1,
+        "d_model": 16,
+        "d_mlp": 32,
+        "dropout": 0.0,
+        "context_len": 64,
+    }
+    model = make_model(cfg, "cpu")
+    path = tmp_path / "ckpt.pt"
+    save_checkpoint(model, path, {"config": cfg, "note": "metadata is intentionally present"})
+    other = make_model(cfg, "cpu")
+    load_checkpoint(other, path, "cpu")

@@ -49,7 +49,10 @@ def save_checkpoint(model, path: Path, metadata: dict[str, Any]) -> None:
 
 
 def load_checkpoint(model, path: Path, device: str | torch.device):
-    obj = torch.load(path, map_location=device)
+    try:
+        obj = torch.load(path, map_location=device, weights_only=False)
+    except TypeError:
+        obj = torch.load(path, map_location=device)
     model.load_state_dict(obj["model_state_dict"])
     return model
 
