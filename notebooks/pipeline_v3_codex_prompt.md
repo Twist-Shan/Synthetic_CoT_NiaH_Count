@@ -1,20 +1,17 @@
-# Codex Prompt: Synthetic NIAH Counting v3
+# Codex Prompt: Synthetic NIAH Counting v3, no loss-mask ablation
 
-Refactor the current synthetic counting pipeline into **v3** and run the v3 experiment suite.
+Refactor the current synthetic counting pipeline into **v3-no-loss-ablation** and run the experiment suite.
 
-This prompt assumes the repo already has a v2 pipeline similar to:
+This version intentionally removes the old Round 2 loss-mask ablation. Use only one fixed objective per model type:
 
-```text
-non-thinking:
-<BOS> seq_tokens <Ans> <n> <EOS>
+- `non_thinking`: train final count readout from `<Ans>`.
+- `thinking`: train indexed trace generation plus final count readout from `<Think/>`.
 
-thinking:
-<BOS> seq_tokens <Think/> <1> marker_1 <2> marker_2 ... <n> marker_n </Think> <Ans> <n> <EOS>
-```
+The goal is to focus compute on hard length/noise evaluation, corrupted-trace diagnostics, and mechanistic analysis.
 
-The v2 result was behaviorally saturated: both non-thinking and thinking models reached final-count accuracy near 1.0. The useful signal was mechanistic: the thinking model developed a strong trace-indexed retrieval pattern, while the non-thinking model looked more like broad aggregation at the final answer token.
+The current v2 result was behaviorally saturated at `seq_len = 256`: both non-thinking and thinking reached final count accuracy near 1.0. The useful v2 signal was mechanistic: thinking developed a strong trace-indexed retrieval pattern, while non-thinking looked more like broad aggregation at `<Ans>`. v3 should make the task harder by testing longer noise sequences and should test whether the trace route is robust, interpretable, and causally relevant.
 
-The goal of v3 is to make the experiment harder and more diagnostic without adding natural language, distractors, JSON, city-score records, or query templates.
+Do **not** implement realistic NIAH, natural language, JSON, city-score records, distractors, query templates, or loss-policy sweeps in this run.
 
 ---
 
@@ -22,14 +19,20 @@ The goal of v3 is to make the experiment harder and more diagnostic without addi
 
 We want to test whether explicit indexed think traces create a different and more robust sparse-counting route than direct answering.
 
-Specifically, v3 should answer four questions:
+The v3-no-loss-ablation suite should answer three questions:
 
 1. **Hard evaluation:** when training length is fixed at 256, does the thinking model generalize better to longer noise sequences such as 512 and 1024?
-2. **Loss-mask ablation:** which supervision policy creates the best final-count accuracy, trace quality, and retrieval geometry?
-3. **Corrupted-trace readout:** when the trace conflicts with the prompt, does the final answer follow the prompt count, the generated trace length, the last index token, or the marker contents?
-4. **Mechanistic evidence:** are hidden states and attention heads merely diagnostic, or do they causally mediate retrieval and counting?
+2. **Corrupted-trace readout:** when the trace conflicts with the prompt, does the final answer follow the prompt count, the trace pair count, the last index token, the max index token, or the marker count?
+3. **Mechanistic evidence:** are hidden states and attention heads merely diagnostic, or do they causally mediate retrieval and counting?
 
-Do **not** implement realistic NIAH in this v3. Stay in the symbolic small-transformer setting.
+Use only two main training conditions:
+
+```text
+non_thinking
+thinking
+```
+
+No loss-mask ablation. No `full_lm`, `final_heavy`, `trace_only`, or other policy sweep.
 
 ---
 
@@ -162,7 +165,7 @@ Example:
 <Think/> <1> <A> <2> <B> <3> <C> </Think> <Ans> <3> <EOS>
 ```
 
-Thinking evaluation prefix for free-run mode:
+Thinking evaluation prefix for generated-trace mode:
 
 ```text
 <BOS> seq_tokens <Think/>
@@ -179,7 +182,34 @@ Final accuracy is still computed only from the numeric token after `<Ans>`.
 Important: the trace must enumerate prompt markers from left to right. If the prompt contains repeated markers, the trace repeats the same marker identities:
 
 ```text
-<BOS> ... <C> ... <C> ... <C> <Think/> <1> <C> <2> <C> <3> <C> </Think> <Ans> <3> <EOS>
+<BOS> ... <C> ... <C> ... <C>
+<Think/> <1> <C> <2> <C> <3> <C> </Think> <Ans> <3> <EOS>
+```
+
+### 1.4 Render span metadata
+
+Every renderer must return token IDs plus span metadata.
+
+```python
+@dataclass
+class RenderSpans:
+    bos_pos: int
+    seq_start: int
+    seq_end_exclusive: int
+    think_open_pos: int | None
+    trace_token_positions: list[int]       # positions of <1>, marker_1, <2>, marker_2, ...
+    trace_index_positions: list[int]       # positions of <1>, <2>, ...
+    trace_marker_positions: list[int]      # positions of marker_1, marker_2, ...
+    think_close_pos: int | None
+    ans_pos: int
+    final_count_pos: int
+    eos_pos: int
+```
+
+Also keep prompt needle positions in rendered-token coordinates:
+
+```python
+prompt_needle_token_positions = [seq_start + p for p in base.needle_positions]
 ```
 
 ---
@@ -188,12 +218,12 @@ Important: the trace must enumerate prompt markers from left to right. If the pr
 
 Train small decoder-only Transformers from scratch.
 
-Use two separately initialized models for the main comparison:
+Train exactly two separately initialized model types per seed:
 
-1. `non_thinking`
-2. `thinking`
-
-For loss-mask ablations, train separate models for each `(model_type, loss_policy, seed)` condition.
+```text
+non_thinking
+thinking
+```
 
 ### 2.1 Required architecture
 
@@ -217,9 +247,9 @@ max_eval_seq_len + max_trace_len + answer_suffix
 = 1024 + 2 * 10 + 4 = 1048
 ```
 
-Set model context length to at least 1152 or 2048.
+Set model context length to at least `1152`; `2048` is safer.
 
-### 2.2 Training optimizer defaults
+### 2.2 Optimizer defaults
 
 Use AdamW:
 
@@ -247,6 +277,8 @@ eval_every: 50
 checkpoint_every: 100
 seq_lens_eval: [256, 512]
 test_examples_per_count: 20
+probe_examples_per_count: 50
+attention_examples_per_count: 20
 seeds: [1234]
 ```
 
@@ -269,125 +301,115 @@ If compute is limited, implement all code paths and run `debug` first. The `main
 
 ---
 
-## 3. Loss-mask policies
+## 3. Fixed training objectives
 
-All training is standard causal next-token prediction with shifted labels. The only difference between regimes is the per-position loss weight.
+All training is standard causal next-token prediction with shifted labels. The pipeline still needs a loss mask, but only to implement the two fixed objectives. Do **not** expose or sweep loss policies.
 
-Use a function:
+Use:
 
 ```python
-def build_loss_weights(tokens: list[int], spans: RenderSpans, policy: str, model_type: str) -> torch.Tensor:
-    """Return a float tensor of shape [seq_len] with one weight per label position.
+def build_training_weights(tokens: list[int], spans: RenderSpans, model_type: str) -> torch.Tensor:
+    """Return float tensor of shape [seq_len] with one weight per label position.
     A weight of 0 masks the position.
     A positive weight includes the next-token CE at that position.
+    CE at position t predicts tokens[t + 1].
     """
 ```
 
-Remember that the CE at position `t` predicts token `tokens[t + 1]`. Therefore if we want to supervise the final answer token `<n>`, the loss weight should be placed on the position immediately before `<n>`, usually the `<Ans>` position.
+### 3.1 Non-thinking objective
 
-### 3.1 Required span metadata
-
-Every renderer must return token IDs plus spans/positions:
-
-```python
-@dataclass
-class RenderSpans:
-    bos_pos: int
-    seq_start: int
-    seq_end_exclusive: int
-    think_open_pos: int | None
-    trace_token_positions: list[int]       # positions of <1>, marker_1, <2>, marker_2, ...
-    trace_index_positions: list[int]       # positions of <1>, <2>, ...
-    trace_marker_positions: list[int]      # positions of marker_1, marker_2, ...
-    think_close_pos: int | None
-    ans_pos: int
-    final_count_pos: int
-    eos_pos: int
-```
-
-### 3.2 Non-thinking policies
-
-Implement these policies:
-
-#### `non_full_lm`
-
-Weight 1.0 on every next-token position except padding. This includes random prompt-body tokens, so the prompt portion has irreducible loss. Keep this policy because it tests whether all-token LM loss dilutes the counting objective.
-
-#### `non_completion_equal`
-
-Weight 1.0 only on positions that predict:
+Rendered tokens:
 
 ```text
-<Ans>, final count token, <EOS>
+<BOS> seq_tokens <Ans> <n> <EOS>
 ```
 
-In practice, for non-thinking, this means include the position before `<Ans>`, the `<Ans>` position, and the final-count position. If supervising `<Ans>` is inconvenient, at minimum include the `<Ans>` position and final-count position.
-
-#### `non_final_heavy`
-
-Same as `non_completion_equal`, but multiply the loss on the final count token by `final_weight = 10.0`.
-
-#### `non_final_only`
-
-Weight only the `<Ans>` position, which predicts the final numeric token.
-
-### 3.3 Thinking policies
-
-Implement these policies:
-
-#### `think_full_lm`
-
-Weight 1.0 on every next-token position except padding. This includes random prompt body and trace/completion.
-
-#### `think_trace_and_final`
-
-Mask prompt body. Weight 1.0 on positions that predict:
+Train only answer readout:
 
 ```text
-<Think/>, trace index tokens, trace marker tokens, </Think>, <Ans>, final count token, <EOS>
+weight 1.0 at <Ans> position          # predicts final numeric token <n>
+weight 1.0 at final count position    # predicts <EOS>
+weight 0.0 everywhere else
 ```
 
-If the input prefix always includes `<Think/>`, it is acceptable not to supervise `<Think/>`; but supervise all generated trace tokens, `</Think>`, `<Ans>`, final count, and `<EOS>`.
+Do not supervise random prompt-body tokens. Do not supervise generation of `<Ans>`, because evaluation provides `<Ans>`.
 
-#### `think_final_heavy`
-
-Same as `think_trace_and_final`, but multiply the loss on the final count token by `final_weight = 10.0`.
-
-#### `think_final_only`
-
-Weight only the `<Ans>` position, which predicts the final numeric token. The gold trace is present during teacher-forced training but trace tokens themselves are not supervised. This regime is expected to do well in oracle-trace final-readout but may fail in free-run generation.
-
-#### `think_trace_only`
-
-Weight trace generation and delimiters but not the final numeric token. Include positions that predict:
+Diagnostic losses to log:
 
 ```text
-trace index tokens, trace marker tokens, </Think>, <Ans>
+train_total_loss
+train_final_count_ce
+train_eos_ce
 ```
 
-Mask the `<Ans>` position that predicts the final numeric token. This tests whether retrieval trace can be learned independently of final count readout.
+### 3.2 Thinking objective
 
-### 3.4 Metrics to log during training
+Rendered tokens:
 
-At every `log_every` step log:
+```text
+<BOS> seq_tokens <Think/> <1> marker_1 <2> marker_2 ... <n> marker_n </Think> <Ans> <n> <EOS>
+```
+
+Train trace generation plus answer readout:
+
+```text
+weight 1.0 at <Think/> position          # predicts <1>
+weight 1.0 on every trace token position # predicts the next trace token or </Think>
+weight 1.0 at </Think> position          # predicts <Ans>
+weight 1.0 at <Ans> position             # predicts final numeric token <n>
+weight 1.0 at final count position       # predicts <EOS>
+weight 0.0 on <BOS> and prompt-body positions
+```
+
+Do not supervise random prompt-body tokens. Do not supervise generation of `<Think/>`, because evaluation provides `<Think/>`.
+
+Diagnostic losses to log:
+
+```text
+train_total_loss
+train_trace_index_ce
+train_trace_marker_ce
+train_think_close_ce
+train_ans_token_ce
+train_final_count_ce
+train_eos_ce
+```
+
+### 3.3 Training logs
+
+At every `log_every` step, log:
 
 ```text
 step
 model_type
-loss_policy
 seed
 train_total_loss
-train_prompt_loss
-train_trace_loss
-train_final_answer_loss
+train_final_count_ce
+train_trace_ce              # thinking only; NaN for non-thinking
+train_eos_ce
 learning_rate
 ```
 
-The reported `train_total_loss` should be the actual weighted objective used for backprop. The decomposed losses should be unweighted diagnostic CE values over their respective token groups.
+At every `eval_every` step, run the hard-eval subset and log:
+
+```text
+step
+model_type
+seed
+seq_len_eval
+count
+count_bin
+final_accuracy
+final_mae
+final_answer_ce
+trace_exact_rate            # thinking only
+trace_marker_recall          # thinking only
+invalid_generation_rate      # thinking only
+```
 
 ---
 
-## 4. Round 1: Hard evaluation
+## 4. Round 1: Hard length/noise evaluation
 
 ### 4.1 Purpose
 
@@ -399,11 +421,11 @@ This isolates the question:
 
 ### 4.2 Training
 
-Train these two baseline conditions first:
+Train two baseline conditions:
 
 ```text
-non_thinking + non_final_only
-thinking + think_trace_and_final
+non_thinking
+thinking
 ```
 
 Use training examples with:
@@ -479,10 +501,12 @@ Parse generated tokens:
 
 A sample is invalid if:
 
-- `</Think>` is missing;
-- `<Ans>` is missing;
-- no numeric token appears after `<Ans>`;
-- the numeric token is not in `<1>` through `<10>`.
+```text
+</Think> is missing
+<Ans> is missing
+no numeric token appears after <Ans>
+the numeric token is not in <1> through <10>
+```
 
 Metrics:
 
@@ -509,7 +533,25 @@ Trace exact means the generated trace equals exactly:
 
 Do not require the final answer to be correct for trace exact; report both separately.
 
-### 4.6 Plots for Round 1
+### 4.6 Oracle-trace final-readout evaluation
+
+For the thinking model, also run an oracle-trace readout check:
+
+```text
+<BOS> seq_tokens <Think/> gold_trace </Think> <Ans>
+```
+
+Take logits at `<Ans>` and restrict to numeric tokens. This measures whether the model can read the final count from a correct trace, separated from its ability to generate the trace.
+
+Metrics:
+
+```text
+oracle_trace_final_accuracy
+oracle_trace_final_mae
+oracle_trace_final_answer_ce
+```
+
+### 4.7 Round 1 plots and tables
 
 Create:
 
@@ -519,6 +561,7 @@ figures/round1_final_accuracy_by_step_and_seq_len.png
 figures/round1_accuracy_by_count_final.png
 figures/round1_accuracy_heatmap_count_x_seq_len.png
 figures/round1_trace_metrics_by_seq_len.png
+figures/round1_oracle_vs_generated_trace_accuracy.png
 ```
 
 The key plot is accuracy vs step with separate lines for:
@@ -536,121 +579,29 @@ step_to_99_accuracy
 AUC_accuracy_over_training
 ```
 
-for each condition, length, and bin.
+for each model type, length, and bin.
+
+Write:
+
+```text
+tables/round1_eval_by_step.csv
+tables/round1_final_checkpoint_by_count.csv
+tables/round1_step_to_thresholds.csv
+```
 
 ---
 
-## 5. Round 2: Loss-mask ablation
+## 5. Round 2: Corrupted-trace evaluation
 
 ### 5.1 Purpose
 
-Determine which supervision policy creates the best behavioral and mechanistic outcome.
-
-The question is not only final accuracy. Track whether the loss policy induces:
-
-- reliable trace generation;
-- length generalization;
-- early emergence of retrieval heads;
-- clean hidden-state count decodability;
-- robust final readout.
-
-### 5.2 Required conditions
-
-Train these conditions:
-
-```text
-non_thinking + non_full_lm
-non_thinking + non_completion_equal
-non_thinking + non_final_heavy
-non_thinking + non_final_only
-
-thinking + think_full_lm
-thinking + think_trace_and_final
-thinking + think_final_heavy
-thinking + think_final_only
-thinking + think_trace_only
-```
-
-Use the same architecture, optimizer, seed list, train length, and count range for all conditions.
-
-### 5.3 Evaluation
-
-Run the same hard evaluation as Round 1:
-
-```text
-seq_len_eval in {256, 512, 1024}
-count in {1..10}
-count bins: low, mid, high
-```
-
-For thinking models, report both:
-
-1. **generated-trace final accuracy** from prefix `<BOS> seq <Think/>`;
-2. **oracle-trace final accuracy** from prefix `<BOS> seq <Think/> gold_trace </Think> <Ans>`.
-
-This distinction is crucial for `think_final_only`, which may learn final readout under gold trace but may not learn to generate the trace.
-
-### 5.4 Plots for Round 2
-
-Create:
-
-```text
-figures/round2_loss_policy_train_losses.png
-figures/round2_loss_policy_accuracy_by_step.png
-figures/round2_loss_policy_step_to_95.png
-figures/round2_loss_policy_auc.png
-figures/round2_loss_policy_trace_quality.png
-figures/round2_loss_policy_final_length_generalization.png
-```
-
-Also write summary tables:
-
-```text
-tables/round2_summary_by_policy.csv
-tables/round2_final_checkpoint_by_count.csv
-tables/round2_step_to_thresholds.csv
-```
-
-Minimum columns for `round2_summary_by_policy.csv`:
-
-```text
-model_type
-loss_policy
-seed
-seq_len_eval
-count_bin
-final_accuracy_last
-final_answer_loss_last
-trace_exact_last
-invalid_generation_rate_last
-step_to_90
-step_to_95
-step_to_99
-auc_accuracy
-```
-
----
-
-## 6. Round 3: Corrupted-trace evaluation
-
-### 6.1 Purpose
-
-Separate three computations:
+Separate three computations in the thinking model:
 
 1. generating a correct retrieval trace;
 2. reading the final count from the trace;
-3. relying on shortcut cues such as the last index token.
+3. relying on shortcut cues such as trace length or the last index token.
 
-This round applies only to thinking models.
-
-Run it at least for:
-
-```text
-thinking + think_trace_and_final
-thinking + think_final_heavy
-thinking + think_final_only
-thinking + think_trace_only
-```
+This round applies only to the `thinking` model.
 
 Use the final checkpoint and optionally selected checkpoints:
 
@@ -658,7 +609,7 @@ Use the final checkpoint and optionally selected checkpoints:
 steps: [1000, 2000, 4000, 6000, 8000, 10000]
 ```
 
-### 6.2 Evaluation modes
+### 5.2 Evaluation modes
 
 #### Mode A: generated-trace eval
 
@@ -768,7 +719,17 @@ Keep indices but remove markers:
 <1> <2> <3>
 ```
 
-### 6.3 Diagnostic labels for corrupted traces
+##### `empty_trace`
+
+Use no trace tokens at all:
+
+```text
+<BOS> seq_tokens <Think/> </Think> <Ans>
+```
+
+This tests whether the model can fall back to the prompt when trace information is absent.
+
+### 5.3 Diagnostic labels for corrupted traces
 
 For each corrupted trace, compute these possible answer rules:
 
@@ -793,30 +754,30 @@ other
 
 A prediction can match multiple rules; record all boolean flags.
 
-### 6.4 Plots for Round 3
+### 5.4 Round 2 plots and tables
 
 Create:
 
 ```text
-figures/round3_corruption_accuracy_by_type.png
-figures/round3_follow_rule_breakdown.png
-figures/round3_confusion_pred_vs_prompt_count.png
-figures/round3_confusion_pred_vs_trace_pair_count.png
-figures/round3_confusion_pred_vs_last_index.png
+figures/round2_corruption_accuracy_by_type.png
+figures/round2_follow_rule_breakdown.png
+figures/round2_confusion_pred_vs_prompt_count.png
+figures/round2_confusion_pred_vs_trace_pair_count.png
+figures/round2_confusion_pred_vs_last_index.png
+figures/round2_corruption_by_seq_len.png
 ```
 
 Write:
 
 ```text
-tables/round3_corrupted_trace_results.csv
-tables/round3_follow_rule_summary.csv
+tables/round2_corrupted_trace_results.csv
+tables/round2_follow_rule_summary.csv
 ```
 
 Minimum columns:
 
 ```text
 model_type
-loss_policy
 seed
 checkpoint_step
 seq_len_eval
@@ -839,28 +800,30 @@ invalid
 
 ---
 
-## 7. Round 4: Hidden-state probes, attention retrieval, and causal tests
+## 6. Round 3: Hidden-state probes, attention retrieval, and causal tests
 
-### 7.1 Purpose
+### 6.1 Purpose
 
-Round 4 should determine whether the mechanistic differences observed in v2 are robust and whether they are causal.
+Round 3 should determine whether mechanistic differences observed in v2 are robust and whether they are causal.
 
-The v3 report should avoid claiming that a head or probe is causal unless an intervention changes behavior.
+The report must avoid claiming that a head or probe is causal unless an intervention changes behavior.
 
-Run Round 4 on at least these final checkpoints:
+Run Round 3 on final checkpoints for:
 
 ```text
-non_thinking + non_final_only
-thinking + think_trace_and_final
-thinking + think_final_heavy
-thinking + think_final_only
+non_thinking
+thinking
 ```
 
-If compute allows, include all Round 2 conditions.
+Optionally also run on selected checkpoints:
+
+```text
+steps: [1000, 2000, 4000, 6000, 8000, 10000]
+```
 
 ---
 
-## 7.2 Hidden-state cache export
+### 6.2 Hidden-state cache export
 
 Implement a cache function that returns residual-stream hidden states and attention probabilities.
 
@@ -882,9 +845,9 @@ Save caches only for probe/attention subsets, not the whole test set.
 
 ---
 
-## 7.3 Probe analysis
+### 6.3 Probe analysis
 
-### 7.3.1 Anchors
+#### 6.3.1 Anchors
 
 Non-thinking anchors:
 
@@ -910,7 +873,7 @@ pre_ans_pos              # token immediately before <Ans>
 
 Do not use `index_k_pos` as the main prefix-count evidence because the token identity itself leaks `k`. It is allowed as a sanity check only.
 
-### 7.3.2 Probe targets
+#### 6.3.2 Probe targets
 
 Fit probes for:
 
@@ -920,7 +883,7 @@ prefix_count: k in 1..n, only for per-item anchors
 is_needle: binary marker-vs-noise for prompt positions
 ```
 
-### 7.3.3 Probe models
+#### 6.3.3 Probe models
 
 Implement:
 
@@ -931,7 +894,7 @@ ridge regression for numeric count prediction
 
 Use scikit-learn if available. Otherwise implement a simple PyTorch linear probe.
 
-### 7.3.4 Probe controls
+#### 6.3.4 Probe controls
 
 Implement these controls:
 
@@ -942,22 +905,21 @@ Implement these controls:
 
 The report should not treat probe accuracy as causal evidence.
 
-### 7.3.5 Probe outputs
+#### 6.3.5 Probe outputs
 
 Write:
 
 ```text
-tables/round4_probe_results.csv
-figures/round4_probe_accuracy_layer_by_anchor.png
-figures/round4_probe_r2_layer_by_anchor.png
-figures/round4_probe_vs_position_baseline.png
+tables/round3_probe_results.csv
+figures/round3_probe_accuracy_layer_by_anchor.png
+figures/round3_probe_r2_layer_by_anchor.png
+figures/round3_probe_vs_position_baseline.png
 ```
 
 Minimum columns:
 
 ```text
 model_type
-loss_policy
 seed
 checkpoint_step
 seq_len_eval
@@ -973,13 +935,14 @@ mae
 position_only_accuracy
 trace_length_only_accuracy
 embedding_only_accuracy
+leakage_prone
 ```
 
 ---
 
-## 7.4 Attention retrieval analysis
+### 6.4 Attention retrieval analysis
 
-### 7.4.1 Thinking trace-to-prompt retrieval
+#### 6.4.1 Thinking trace-to-prompt retrieval
 
 For each thinking example with gold or generated trace, construct a matrix:
 
@@ -1011,7 +974,7 @@ off_diagonal_mass
 
 Use left-to-right needle index `k` as the gold retrieval target.
 
-### 7.4.2 Non-thinking final-answer retrieval
+#### 6.4.2 Non-thinking final-answer retrieval
 
 For non-thinking, use `<Ans>` as the query position.
 
@@ -1033,28 +996,28 @@ needle_to_noise_ratio
 entropy_over_prompt_positions
 ```
 
-### 7.4.3 Attention plots
+#### 6.4.3 Attention plots and tables
 
 Create:
 
 ```text
-figures/round4_attention_head_leaderboard.png
-figures/round4_thinking_trace_to_prompt_heatmap_best_head.png
-figures/round4_nonthinking_ans_to_prompt_attention.png
-figures/round4_attention_metrics_by_count_bin.png
+figures/round3_attention_head_leaderboard.png
+figures/round3_thinking_trace_to_prompt_heatmap_best_head.png
+figures/round3_nonthinking_ans_to_prompt_attention.png
+figures/round3_attention_metrics_by_count_bin.png
+figures/round3_attention_metrics_by_seq_len.png
 ```
 
 Write:
 
 ```text
-tables/round4_attention_head_metrics.csv
+tables/round3_attention_head_metrics.csv
 ```
 
 Minimum columns:
 
 ```text
 model_type
-loss_policy
 seed
 checkpoint_step
 seq_len_eval
@@ -1073,11 +1036,11 @@ top_n_recall
 
 ---
 
-## 7.5 Causal tests: head ablation and attention masking
+### 6.5 Causal tests: head ablation and attention masking
 
 Attention alone is not causal. Implement at least simple causal tests.
 
-### 7.5.1 Single-head ablation
+#### 6.5.1 Single-head ablation
 
 For each top attention head from the leaderboard, run ablation on evaluation examples:
 
@@ -1092,12 +1055,12 @@ Measure change in:
 ```text
 final_accuracy
 final_answer_logit_margin
-trace_exact_rate
-marker_recall
-correct_top1_attention    # if attention recomputed
+trace_exact_rate              # thinking only
+marker_recall                 # thinking only
+correct_top1_attention        # if attention recomputed
 ```
 
-### 7.5.2 Multi-head ablation
+#### 6.5.2 Multi-head ablation
 
 Ablate:
 
@@ -1110,7 +1073,7 @@ all heads with diagonal_dominance >= threshold
 
 Report whether behavior drops more than single-head ablation. If single-head ablation has little effect but multi-head ablation drops trace exact or final accuracy, interpret as redundancy.
 
-### 7.5.3 Targeted attention masking
+#### 6.5.3 Targeted attention masking
 
 For thinking models, implement masking for query anchor `index_k_pos` or `marker_k_pos`:
 
@@ -1122,9 +1085,9 @@ mask attention from trace item k to all non-needle positions
 
 Measure final accuracy and trace generation quality.
 
-If modifying attention masks is too invasive, implement only head ablation and leave attention masking as a clearly marked TODO.
+If modifying attention masks is too invasive, implement only head ablation and leave attention masking as a clearly marked TODO in the report.
 
-### 7.5.4 Optional path patching
+#### 6.5.4 Optional path patching
 
 If the codebase already has activation patching utilities, add Q/K/V/O path patching for the top retrieval head:
 
@@ -1137,22 +1100,21 @@ patch o at trace query position
 
 This is optional for v3. Do not block the main report on it.
 
-### 7.5.5 Causal-test outputs
+#### 6.5.5 Causal-test outputs
 
 Write:
 
 ```text
-tables/round4_head_ablation_results.csv
-tables/round4_attention_masking_results.csv
-figures/round4_head_ablation_effects.png
-figures/round4_attention_masking_effects.png
+tables/round3_head_ablation_results.csv
+tables/round3_attention_masking_results.csv
+figures/round3_head_ablation_effects.png
+figures/round3_attention_masking_effects.png
 ```
 
 Minimum columns:
 
 ```text
 model_type
-loss_policy
 seed
 checkpoint_step
 seq_len_eval
@@ -1175,22 +1137,21 @@ delta_logit_margin
 
 ---
 
-## 8. Report generation
+## 7. Report generation
 
 Generate a single self-contained report:
 
 ```text
-run_dir/syn_v3_report.html
+run_dir/syn_v3_no_loss_report.html
 ```
 
 The report should include:
 
 1. Config and run metadata.
 2. Round 1 hard-eval results.
-3. Round 2 loss-mask ablation results.
-4. Round 3 corrupted-trace diagnostics.
-5. Round 4 probes, attention, and causal tests.
-6. A short interpretation section with explicit limitations.
+3. Round 2 corrupted-trace diagnostics.
+4. Round 3 probes, attention, and causal tests.
+5. A short interpretation section with explicit limitations.
 
 Also write a machine-readable summary:
 
@@ -1207,14 +1168,14 @@ Required summary keys:
   "train_seq_len": 256,
   "seq_lens_eval": [256, 512, 1024],
   "count_range": [1, 10],
-  "seeds": [...],
-  "best_nonthinking_condition": "...",
-  "best_thinking_condition": "...",
+  "seeds": [],
+  "non_thinking_final_accuracy_by_len": {},
+  "thinking_final_accuracy_by_len": {},
+  "thinking_trace_exact_by_len": {},
   "round1_main_takeaway": "...",
   "round2_main_takeaway": "...",
   "round3_main_takeaway": "...",
-  "round4_main_takeaway": "...",
-  "limitations": [...]
+  "limitations": []
 }
 ```
 
@@ -1222,16 +1183,18 @@ The interpretation section must distinguish:
 
 ```text
 behavioral evidence
+trace-generation evidence
+corrupted-trace evidence
 probe evidence
 attention evidence
-causal intervention evidence
+causal-intervention evidence
 ```
 
 Do not state that a retrieval head is causal unless ablation or masking changes behavior.
 
 ---
 
-## 9. File organization
+## 8. File organization
 
 Create or refactor into a clear module structure. Suggested layout:
 
@@ -1242,10 +1205,11 @@ synthetic_niah_v3/
   data.py
   render.py
   model.py
-  loss_masks.py
+  objectives.py
   train.py
   eval.py
   trace_parse.py
+  corrupted_trace.py
   probes.py
   attention.py
   interventions.py
@@ -1253,14 +1217,14 @@ synthetic_niah_v3/
   report.py
   run_v3.py
 configs/
-  syn_v3_debug.yaml
-  syn_v3_main.yaml
+  syn_v3_no_loss_debug.yaml
+  syn_v3_no_loss_main.yaml
 ```
 
 Run outputs:
 
 ```text
-runs/syn_v3/{timestamp}_{preset}/
+runs/syn_v3_no_loss/{timestamp}_{preset}/
   config.yaml
   vocab.json
   checkpoints/
@@ -1270,20 +1234,24 @@ runs/syn_v3/{timestamp}_{preset}/
     eval_by_count.csv
     eval_by_bin.csv
   tables/
-    round2_summary_by_policy.csv
-    round3_corrupted_trace_results.csv
-    round4_probe_results.csv
-    round4_attention_head_metrics.csv
-    round4_head_ablation_results.csv
+    round1_eval_by_step.csv
+    round1_final_checkpoint_by_count.csv
+    round1_step_to_thresholds.csv
+    round2_corrupted_trace_results.csv
+    round2_follow_rule_summary.csv
+    round3_probe_results.csv
+    round3_attention_head_metrics.csv
+    round3_head_ablation_results.csv
+    round3_attention_masking_results.csv
   figures/
     *.png
   summary.json
-  syn_v3_report.html
+  syn_v3_no_loss_report.html
 ```
 
 ---
 
-## 10. CLI requirements
+## 9. CLI requirements
 
 Implement these commands:
 
@@ -1296,9 +1264,8 @@ python -m synthetic_niah_v3.run_v3 --preset main --round all
 
 # individual rounds
 python -m synthetic_niah_v3.run_v3 --preset main --round 1_hard_eval
-python -m synthetic_niah_v3.run_v3 --preset main --round 2_loss_masks
-python -m synthetic_niah_v3.run_v3 --preset main --round 3_corrupted_trace
-python -m synthetic_niah_v3.run_v3 --preset main --round 4_mechanistic
+python -m synthetic_niah_v3.run_v3 --preset main --round 2_corrupted_trace
+python -m synthetic_niah_v3.run_v3 --preset main --round 3_mechanistic
 ```
 
 Also support:
@@ -1313,7 +1280,7 @@ If the repo already has a different CLI framework, adapt this interface while pr
 
 ---
 
-## 11. Unit tests and sanity checks
+## 10. Unit tests and sanity checks
 
 Add unit tests or script-level assertions for:
 
@@ -1339,13 +1306,13 @@ Add unit tests or script-level assertions for:
 - span metadata points to the correct tokens.
 ```
 
-### Loss masks
+### Training objectives
 
 ```text
-- final-only policy weights only the position predicting final count;
-- trace-only policy masks final count;
-- full-lm policy includes prompt-body positions;
-- final-heavy policy gives final count token weight 10.0.
+- non-thinking objective weights only <Ans> -> final count and final count -> <EOS>;
+- thinking objective masks prompt-body positions;
+- thinking objective weights <Think/> -> <1>, trace tokens, </Think> -> <Ans>, <Ans> -> final count, and final count -> <EOS>;
+- no loss-policy sweep exists in CLI or config.
 ```
 
 ### Evaluation
@@ -1354,7 +1321,8 @@ Add unit tests or script-level assertions for:
 - non-thinking eval reads logits after <Ans>;
 - thinking free-run parser handles valid and invalid generations;
 - oracle-trace eval reads logits after <Ans>;
-- corrupted trace labels are computed correctly.
+- corrupted trace labels are computed correctly;
+- results are grouped by exact count, count bin, and eval sequence length.
 ```
 
 ### Attention/probe
@@ -1363,29 +1331,30 @@ Add unit tests or script-level assertions for:
 - attention matrices align trace item k to prompt needle j;
 - diagonal dominance is high for a manually constructed diagonal matrix;
 - position-only probe baseline does not use hidden states;
-- index-token probes are marked leakage-prone.
+- index-token probes are marked leakage-prone;
+- head ablation changes only the requested layer/head.
 ```
 
 ---
 
-## 12. Acceptance criteria
+## 11. Acceptance criteria
 
-The v3 implementation is acceptable when:
+The implementation is acceptable when:
 
-1. `debug` preset runs end-to-end on CPU or GPU and produces `syn_v3_report.html`.
-2. The report contains all four rounds, even if some optional interventions are marked TODO.
+1. `debug` preset runs end-to-end on CPU or GPU and produces `syn_v3_no_loss_report.html`.
+2. The report contains all three rounds.
 3. Round 1 shows accuracy and loss curves by step, count bin, and eval sequence length.
-4. Round 2 compares all required loss policies.
-5. Round 3 reports corrupted-trace follow-rule diagnostics.
-6. Round 4 reports probes and attention retrieval metrics.
-7. At least single-head ablation is implemented for the top retrieval head. If attention masking is not implemented, the report must say so explicitly.
-8. All generated figures and CSV files are saved under the run directory.
-9. The implementation does not overwrite v2 results.
+4. Round 2 reports corrupted-trace follow-rule diagnostics.
+5. Round 3 reports probes and attention retrieval metrics.
+6. At least single-head ablation is implemented for the top retrieval head. If attention masking is not implemented, the report must say so explicitly.
+7. All generated figures and CSV files are saved under the run directory.
+8. The implementation does not overwrite v2 results.
+9. The implementation does not include the old Round 2 loss-mask ablation.
 10. The final output path is printed at the end of the run.
 
 ---
 
-## 13. Expected interpretation template
+## 12. Expected interpretation template
 
 At the end of the report, use this structure:
 
@@ -1393,23 +1362,26 @@ At the end of the report, use this structure:
 Behavior:
 - Did thinking outperform non-thinking at longer seq_len?
 - Which count bin broke first?
-- Which loss policy reached high accuracy fastest?
+- Does the gap grow from seq_len 256 to 512 to 1024?
 
 Trace:
 - Did thinking generate exact traces?
 - Did trace quality degrade before final accuracy or vice versa?
+- Are failures missing items, extra items, wrong marker identities, wrong indices, or invalid delimiters?
 
 Corrupted trace:
-- Does final count follow prompt count, trace pair count, last index, or marker count?
-- Does this differ by loss policy?
+- Does final count follow prompt count, trace pair count, last index, max index, or marker count?
+- Does the model fall back to prompt count when the trace is empty or malformed?
 
 Hidden states:
 - Which anchors/layers decode final count or prefix count?
 - Does probe accuracy exceed position-only and trace-length-only baselines?
+- Are index-token probes clearly marked as leakage-prone?
 
 Attention:
 - Are there near-diagonal trace-to-prompt retrieval heads?
 - Does non-thinking rely on broad <Ans>-to-prompt aggregation?
+- Does retrieval geometry degrade at seq_len 512 or 1024?
 
 Causality:
 - Does ablating top retrieval heads reduce trace exact or final accuracy?
@@ -1420,5 +1392,6 @@ Limitations:
 - Counts are still limited to 1..10.
 - The trace exposes count length, so final readout may exploit trace-length or last-index shortcuts.
 - Probe decodability is not causal evidence.
+- Attention patterns are not causal unless ablation or masking changes behavior.
+- There is no loss-mask ablation in this version by design.
 ```
-

@@ -29,7 +29,7 @@ For the more NiaH-like v1 experiment, open `notebooks/Trace_Count_v1_Colab.ipynb
 
 For the controlled marker-trace v2 experiment, open `notebooks/Trace_Count_v2_Colab.ipynb`. This notebook follows `notebooks/pipeline_v2_codex_prompt.md`: fixed prompt length, 64 noise-token types, 10 countable marker-token types, count range `1..10`, and two separately trained random-init decoder-only Transformers (`non_thinking` and `thinking`). It intentionally has no ID/OOD split, no variable sequence length, and no steering. The notebook reports training/eval curves by low/mid/high count bin, exact-count accuracy, hidden-state probes, and attention/retrieval diagnostics.
 
-For the harder v3 experiment, open `notebooks/Trace_Count_v3_Colab.ipynb`. It follows `notebooks/pipeline_v3_codex_prompt.md` and keeps the symbolic setting while adding length generalization to `512/1024`, loss-mask ablations, corrupted-trace readout diagnostics, hidden-state probes, attention retrieval analysis, and single-head ablation. The notebook uses a small RoPE decoder-only Transformer rather than GPT-2 learned absolute position embeddings.
+For the harder v3 experiment, open `notebooks/Trace_Count_v3_Colab.ipynb`. It follows `notebooks/pipeline_v3_codex_prompt.md` as a **no-loss-ablation** suite: exactly two model types are trained per seed, `non_thinking` and `thinking`. v3 keeps the symbolic setting while adding length generalization to `512/1024`, corrupted-trace readout diagnostics, hidden-state probes, attention retrieval analysis, and single-head ablation. The implementation lives in `synthetic_niah_v3/` and uses a small RoPE decoder-only Transformer rather than GPT-2 learned absolute position embeddings.
 
 Manual v1 run:
 
@@ -43,7 +43,19 @@ python scripts/run_v1_niah_like.py \
   --skip_completed
 ```
 
-The v2/v3 implementations are self-contained in their Colab notebooks. Use `PRESET = "debug"` for a quick end-to-end artifact check, then switch to `PRESET = "main"` for the full 10k-step runs.
+The v2 notebook is self-contained. The v3 notebook is a Colab wrapper around the `synthetic_niah_v3` package. Use `PRESET = "debug"` for a quick end-to-end artifact check, then switch to `PRESET = "main"` for the full 10k-step runs.
+
+Manual v3 runs:
+
+```bash
+python -m synthetic_niah_v3.run_v3 --preset debug --round all
+python -m synthetic_niah_v3.run_v3 --preset main --round all --device cuda --seeds 1234
+python -m synthetic_niah_v3.run_v3 --preset main --round all --seeds 1234,1235
+python -m synthetic_niah_v3.run_v3 --preset main --round 2_corrupted_trace --skip_completed
+python -m synthetic_niah_v3.run_v3 --preset main --round 3_mechanistic --skip_completed
+```
+
+For paper-quality uncertainty estimates, rerun v3 with the full preset seed list by omitting `--seeds` or passing `--seeds 1234,1235,1236,1237,1238`.
 
 ## Full v0 Sweep
 
