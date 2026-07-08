@@ -72,6 +72,9 @@ def _anchor_position(example: BaseExample, model_type: str, anchor_name: str, an
 def _select_direction_configs(direction_df: pd.DataFrame, cfg: Any) -> pd.DataFrame:
     if direction_df.empty:
         return direction_df
+    if "projection_r2" not in direction_df.columns:
+        direction_df = direction_df.copy()
+        direction_df["projection_r2"] = 0.0
     sub = direction_df[
         direction_df["target"].eq("final_count")
         & direction_df["anchor_name"].isin(FINAL_STEERING_ANCHORS)
@@ -83,6 +86,38 @@ def _select_direction_configs(direction_df: pd.DataFrame, cfg: Any) -> pd.DataFr
     if sub.empty:
         sub = direction_df.head(int(cfg.steering.max_direction_configs)).copy()
     return sub.sort_values("projection_r2", ascending=False).head(int(cfg.steering.max_direction_configs))
+
+
+def _load_direction_configs(run_dir: Path) -> pd.DataFrame:
+    artifacts = run_dir / "artifacts"
+    tables = run_dir / "tables"
+    direction_meta_path = artifacts / "directions.csv"
+    direction_metrics_path = tables / "direction_metrics.csv"
+    direction_df = pd.read_csv(direction_meta_path) if direction_meta_path.exists() else pd.DataFrame()
+    if direction_df.empty:
+        return direction_df
+    metrics_df = pd.read_csv(direction_metrics_path) if direction_metrics_path.exists() and direction_metrics_path.stat().st_size > 0 else pd.DataFrame()
+    if metrics_df.empty or "projection_r2" not in metrics_df.columns:
+        direction_df = direction_df.copy()
+        direction_df["projection_r2"] = 0.0
+        direction_df["projection_slope"] = 0.0
+        return direction_df
+    key_cols = ["model_type", "eval_mode", "anchor_name", "anchor_k", "hook_name", "layer", "direction_type", "target"]
+    left = direction_df.copy()
+    right = metrics_df.copy()
+    for col in key_cols:
+        if col not in left.columns:
+            left[col] = ""
+        if col not in right.columns:
+            right[col] = ""
+        left[f"__key_{col}"] = left[col].fillna("").astype(str)
+        right[f"__key_{col}"] = right[col].fillna("").astype(str)
+    merge_cols = [f"__key_{col}" for col in key_cols]
+    keep = merge_cols + ["projection_r2", "projection_slope"]
+    merged = left.merge(right[keep].drop_duplicates(merge_cols), on=merge_cols, how="left")
+    merged["projection_r2"] = merged["projection_r2"].fillna(0.0)
+    merged["projection_slope"] = merged["projection_slope"].fillna(0.0)
+    return merged.drop(columns=merge_cols)
 
 
 def _distribution(preds: list[int]) -> np.ndarray:
@@ -102,9 +137,8 @@ def run_steering(
 ) -> pd.DataFrame:
     artifacts = run_dir / "artifacts"
     tables = run_dir / "tables"
-    direction_meta_path = artifacts / "directions.csv"
     direction_npz_path = artifacts / "directions.npz"
-    direction_df = pd.read_csv(direction_meta_path) if direction_meta_path.exists() else pd.DataFrame()
+    direction_df = _load_direction_configs(run_dir)
     if direction_df.empty or not direction_npz_path.exists():
         out = pd.DataFrame(columns=STEERING_COLUMNS)
         out.to_csv(tables / "steering_results.csv", index=False)
