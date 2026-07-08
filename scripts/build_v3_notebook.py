@@ -131,6 +131,7 @@ display(Markdown(f"**Device available:** `{'cuda' if torch.cuda.is_available() e
 # V2_RUN_DIR_OVERRIDE = "runs/v2_marker_trace_seed1234_main"
 # V2_RUN_DIR_OVERRIDE = "/content/drive/MyDrive/Colab_Notebooks/CoT_Counting/Synthetic_CoT_NiaH_Count/colab_results/v2_marker_trace_main_seed1234_20260706_215757/run"
 V2_RUN_DIR_OVERRIDE = ""
+AUTO_MOUNT_DRIVE_FOR_V2_INPUTS = True
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -145,6 +146,7 @@ REUSE_EXISTING_TABLES = True
 
 print({
     "V2_RUN_DIR_OVERRIDE": V2_RUN_DIR_OVERRIDE or "<auto>",
+    "AUTO_MOUNT_DRIVE_FOR_V2_INPUTS": AUTO_MOUNT_DRIVE_FOR_V2_INPUTS,
     "DEVICE": DEVICE,
     "ATTENTION_EXAMPLES_PER_COUNT": ATTENTION_EXAMPLES_PER_COUNT,
     "ABLATION_EXAMPLES_PER_COUNT": ABLATION_EXAMPLES_PER_COUNT,
@@ -350,7 +352,23 @@ def latest(paths: list[Path]) -> Path | None:
     return sorted(paths, key=lambda p: p.stat().st_mtime, reverse=True)[0]
 
 
+def maybe_mount_drive_for_v2_inputs() -> None:
+    if not IN_COLAB or not AUTO_MOUNT_DRIVE_FOR_V2_INPUTS:
+        return
+    drive_root = Path("/content/drive/MyDrive")
+    if drive_root.exists():
+        return
+    try:
+        from google.colab import drive
+
+        print("Mounting Google Drive to search for saved v2 checkpoints...")
+        drive.mount("/content/drive")
+    except Exception as e:
+        print(f"Google Drive mount skipped or failed: {e}")
+
+
 def candidate_v2_run_dirs() -> list[Path]:
+    maybe_mount_drive_for_v2_inputs()
     out = []
     if V2_RUN_DIR_OVERRIDE:
         out.append(Path(V2_RUN_DIR_OVERRIDE))
@@ -384,8 +402,12 @@ def resolve_v2_run_dir() -> Path:
     if not valid:
         display(pd.DataFrame({"candidate": [str(p) for p in candidates], "exists": [p.exists() for p in candidates]}))
         raise FileNotFoundError(
-            "Could not find a v2 final thinking checkpoint. Run Trace_Count_v2_Colab first, "
-            "or set V2_RUN_DIR_OVERRIDE to a directory containing checkpoints/final/thinking."
+            "Could not find a v2 final thinking checkpoint. v3 is analysis-only and needs a v2 run. "
+            "Run Trace_Count_v2_Colab first, copy the v2 bundle to Google Drive, or set "
+            "V2_RUN_DIR_OVERRIDE to a directory containing checkpoints/final/thinking. For your usual "
+            "Drive layout this is often something like "
+            "/content/drive/MyDrive/Colab_Notebooks/CoT_Counting/Synthetic_CoT_NiaH_Count/"
+            "colab_results/v2_marker_trace_main_seed1234_20260706_215757/run"
         )
     if V2_RUN_DIR_OVERRIDE:
         return valid[0]
