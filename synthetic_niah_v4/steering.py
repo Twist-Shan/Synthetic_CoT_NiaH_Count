@@ -43,6 +43,8 @@ STEERING_COLUMNS = [
 
 
 FINAL_STEERING_ANCHORS = {"ans_token", "pre_ans_pos", "last_prompt_token", "think_end", "think_start"}
+TRACE_STEERING_ANCHORS = {"pre_index_k", "index_k_pos", "marker_k_pos", "post_marker_k", "prompt_marker_k"}
+STEERING_DIRECTION_TYPES = {"ridge", "dom", "matched_delta", "logistic_adjacent"}
 
 
 def _prefix(example: BaseExample, model_type: str, vocab: Vocab) -> list[int]:
@@ -75,11 +77,16 @@ def _select_direction_configs(direction_df: pd.DataFrame, cfg: Any) -> pd.DataFr
     if "projection_r2" not in direction_df.columns:
         direction_df = direction_df.copy()
         direction_df["projection_r2"] = 0.0
-    sub = direction_df[
-        direction_df["target"].eq("final_count")
-        & direction_df["anchor_name"].isin(FINAL_STEERING_ANCHORS)
-        & direction_df["direction_type"].isin(["ridge", "dom", "matched_delta", "logistic_adjacent"])
+    typed = direction_df[direction_df["direction_type"].isin(STEERING_DIRECTION_TYPES)].copy()
+    final_sub = typed[
+        typed["target"].eq("final_count")
+        & typed["anchor_name"].isin(FINAL_STEERING_ANCHORS)
     ].copy()
+    trace_sub = typed[
+        typed["target"].eq("prefix_count")
+        & typed["anchor_name"].isin(TRACE_STEERING_ANCHORS)
+    ].copy()
+    sub = pd.concat([final_sub, trace_sub], ignore_index=True)
     resid = sub[sub["hook_name"].astype(str).str.startswith("resid_post_layer_")]
     if not resid.empty:
         sub = resid

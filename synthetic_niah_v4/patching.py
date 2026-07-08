@@ -33,6 +33,9 @@ PATCH_COLUMNS = [
     "n_examples",
 ]
 
+FINAL_PATCH_ANCHORS = {"ans_token", "pre_ans_pos", "last_prompt_token", "think_end", "think_start"}
+TRACE_PATCH_ANCHORS = {"pre_index_k", "index_k_pos", "marker_k_pos", "post_marker_k", "prompt_marker_k"}
+
 
 def _prefix(example: BaseExample, model_type: str, vocab: Vocab) -> list[int]:
     if model_type == "non_thinking":
@@ -67,18 +70,50 @@ def _hidden_at(model, prefix: list[int], hook_name: str, position: int, vocab: V
 
 
 def _select_patch_configs(run_dir: Path, limit: int = 6) -> pd.DataFrame:
-    path = run_dir / "artifacts" / "directions.csv"
-    if not path.exists():
+    artifacts = run_dir / "artifacts"
+    tables = run_dir / "tables"
+    direction_path = artifacts / "directions.csv"
+    metrics_path = tables / "direction_metrics.csv"
+    if not direction_path.exists():
         return pd.DataFrame()
-    df = pd.read_csv(path)
-    sub = df[
+    df = pd.read_csv(direction_path)
+    if metrics_path.exists() and metrics_path.stat().st_size > 0:
+        metrics = pd.read_csv(metrics_path)
+        if "projection_r2" in metrics.columns:
+            key_cols = ["model_type", "eval_mode", "anchor_name", "anchor_k", "hook_name", "layer", "direction_type", "target"]
+            left = df.copy()
+            right = metrics.copy()
+            for col in key_cols:
+                if col not in left.columns:
+                    left[col] = ""
+                if col not in right.columns:
+                    right[col] = ""
+                left[f"__key_{col}"] = left[col].fillna("").astype(str)
+                right[f"__key_{col}"] = right[col].fillna("").astype(str)
+            merge_cols = [f"__key_{col}" for col in key_cols]
+            keep = merge_cols + ["projection_r2"]
+            df = left.merge(right[keep].drop_duplicates(merge_cols), on=merge_cols, how="left").drop(columns=merge_cols)
+    if "projection_r2" not in df.columns:
+        df["projection_r2"] = 0.0
+    final_sub = df[
         df["target"].eq("final_count")
-        & df["anchor_name"].isin(["ans_token", "pre_ans_pos", "last_prompt_token", "think_end", "think_start"])
-        & df["hook_name"].astype(str).str.startswith("resid_post_layer_")
+        & df["anchor_name"].isin(FINAL_PATCH_ANCHORS)
     ]
+    trace_sub = df[
+        df["target"].eq("prefix_count")
+        & df["anchor_name"].isin(TRACE_PATCH_ANCHORS)
+    ]
+    sub = pd.concat([final_sub, trace_sub], ignore_index=True)
+    resid = sub[sub["hook_name"].astype(str).str.startswith("resid_post_layer_")]
+    if not resid.empty:
+        sub = resid
     if sub.empty:
-        sub = df[df["target"].eq("final_count")]
-    return sub.drop_duplicates(["model_type", "eval_mode", "anchor_name", "anchor_k", "hook_name", "layer"]).head(limit)
+        sub = df.copy()
+    return (
+        sub.sort_values("projection_r2", ascending=False)
+        .drop_duplicates(["model_type", "eval_mode", "anchor_name", "anchor_k", "hook_name", "layer"])
+        .head(limit)
+    )
 
 
 def run_patching(models: dict[str, Any], examples: list[BaseExample], vocab: Vocab, cfg: Any, run_dir: Path) -> pd.DataFrame:
@@ -92,9 +127,12 @@ def run_patching(models: dict[str, Any], examples: list[BaseExample], vocab: Voc
     for ex in examples:
         by_count.setdefault(ex.count, []).append(ex)
     pairs: list[tuple[BaseExample, BaseExample]] = []
-    for count in range(1, 10):
-        if by_count.get(count) and by_count.get(count + 1):
-            pairs.append((by_count[count][0], by_count[count + 1][0]))
+    counts = sorted(by_count)
+    for receiver_count in counts:
+        for donor_count in counts:
+            if receiver_count == donor_count:
+                continue
+            pairs.append((by_count[receiver_count][0], by_count[donor_count][0]))
     if not pairs and len(examples) >= 2:
         pairs = [(examples[0], examples[-1])]
 
@@ -104,7 +142,7 @@ def run_patching(models: dict[str, Any], examples: list[BaseExample], vocab: Voc
         hook_name = str(cfg_row["hook_name"])
         anchor_name = str(cfg_row["anchor_name"])
         anchor_k = cfg_row.get("anchor_k", "")
-        for receiver, donor in pairs[:10]:
+        for receiver, donor in pairs[:90]:
             receiver_pos = _anchor_position(receiver, model_type, anchor_name, anchor_k, vocab)
             donor_pos = _anchor_position(donor, model_type, anchor_name, anchor_k, vocab)
             if receiver_pos is None or donor_pos is None:

@@ -46,6 +46,20 @@ def _has_finite(series: pd.Series) -> bool:
     return bool(np.isfinite(values).any())
 
 
+def _select_probe_accuracy_rows(raw: pd.DataFrame) -> pd.DataFrame:
+    if raw.empty:
+        return raw
+    logistic = raw[raw["probe_type"].eq("multiclass_logistic")].copy()
+    if _has_columns(logistic, ["accuracy"]) and _has_finite(logistic["accuracy"]):
+        logistic["display_probe_type"] = "logistic"
+        return logistic
+    ridge = raw[raw["probe_type"].eq("ridge_scalar")].copy()
+    if _has_columns(ridge, ["accuracy"]) and _has_finite(ridge["accuracy"]):
+        ridge["display_probe_type"] = "ridge_rounded"
+        return ridge
+    return pd.DataFrame()
+
+
 def _plot_bar_or_placeholder(
     df: pd.DataFrame,
     path: Path,
@@ -101,13 +115,11 @@ def make_probe_plots(run_dir: Path) -> None:
         _placeholder(figures / "probe_minus_baseline_heatmap.png", "Probe minus baseline")
         return
     raw = probe[probe["raw_or_residualized"].eq("raw")]
-    acc = raw[raw["probe_type"].eq("multiclass_logistic")]
-    if acc.empty:
-        acc = raw
+    acc = _select_probe_accuracy_rows(raw)
     _plot_bar_or_placeholder(
         acc,
         figures / "probe_acc_by_layer_anchor.png",
-        "v4 probe accuracy by layer and anchor",
+        "v4 count-probe accuracy by layer and anchor",
         x="anchor_name",
         y="accuracy",
         hue="layer",
