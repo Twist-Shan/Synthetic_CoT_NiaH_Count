@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .config import STAGES, build_config, ensure_output_dirs
 from .data import balanced_examples
-from .train import checkpoint_path, load_models, train_all
+from .train import checkpoint_is_compatible, checkpoint_path, load_models, train_all
 from .vocab import Vocab
 
 
@@ -29,9 +29,12 @@ def _ensure_models(cfg, vocab: Vocab, run_dir: Path, skip_completed: bool):
         checkpoint_path(run_dir, model_type, seed)
         for seed in cfg.seeds
         for model_type in ["non_thinking", "thinking"]
-        if not checkpoint_path(run_dir, model_type, seed).exists()
+        if not checkpoint_is_compatible(checkpoint_path(run_dir, model_type, seed), cfg, vocab)
     ]
     if missing:
+        print("[v4] missing/incompatible checkpoints; training required:", flush=True)
+        for path in missing:
+            print(f"  - {path}", flush=True)
         train_all(cfg, vocab, run_dir, skip_completed=skip_completed)
     return load_models(cfg, vocab, run_dir, seed=cfg.seeds[0])
 

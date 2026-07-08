@@ -41,6 +41,53 @@ def checkpoint_path(run_dir: Path, model_type: str, seed: int) -> Path:
     return run_dir / "checkpoints" / f"{model_type}_seed{seed}" / "final.pt"
 
 
+def _expected_model_signature(cfg: V4Config, vocab: Vocab) -> dict[str, int]:
+    return {
+        "vocab_size": len(vocab.id_to_token),
+        "n_layer": int(cfg.model.n_layer),
+        "n_head": int(cfg.model.n_head),
+        "n_embd": int(cfg.model.n_embd),
+        "n_positions": int(cfg.model.n_positions),
+    }
+
+
+def _metadata_model_signature(metadata: dict[str, Any]) -> dict[str, int] | None:
+    config = metadata.get("config") or {}
+    model = config.get("model") or {}
+    if not model:
+        return None
+    return {
+        "vocab_size": int(model.get("vocab_size", 90)),
+        "n_layer": int(model.get("n_layer", -1)),
+        "n_head": int(model.get("n_head", -1)),
+        "n_embd": int(model.get("n_embd", -1)),
+        "n_positions": int(model.get("n_positions", -1)),
+    }
+
+
+def checkpoint_is_compatible(path: Path, cfg: V4Config, vocab: Vocab) -> bool:
+    if not path.exists():
+        return False
+    try:
+        try:
+            obj = torch.load(path, map_location="cpu", weights_only=False)
+        except TypeError:
+            obj = torch.load(path, map_location="cpu")
+        metadata = obj.get("metadata") or {}
+        saved = _metadata_model_signature(metadata)
+        expected = _expected_model_signature(cfg, vocab)
+        if saved is not None:
+            return saved == expected
+        state = obj.get("model_state_dict") or {}
+        emb = state.get("gpt2.transformer.wte.weight")
+        if emb is None:
+            return False
+        return tuple(emb.shape) == (expected["vocab_size"], expected["n_embd"])
+    except Exception as exc:
+        print(f"[v4] ignoring unreadable checkpoint {path}: {exc}", flush=True)
+        return False
+
+
 def save_checkpoint(model, path: Path, metadata: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save({"model_state_dict": model.state_dict(), "metadata": metadata}, path)
@@ -58,8 +105,10 @@ def load_checkpoint(model, path: Path, device: str | torch.device):
 def train_model(cfg: V4Config, model_type: str, seed: int, vocab: Vocab, run_dir: Path, skip_completed: bool = True) -> pd.DataFrame:
     final_path = checkpoint_path(run_dir, model_type, seed)
     log_path = run_dir / "metrics" / f"train_log_{model_type}_seed{seed}.csv"
-    if skip_completed and final_path.exists() and log_path.exists():
+    if skip_completed and final_path.exists() and log_path.exists() and checkpoint_is_compatible(final_path, cfg, vocab):
         return pd.read_csv(log_path)
+    if skip_completed and final_path.exists() and not checkpoint_is_compatible(final_path, cfg, vocab):
+        print(f"[v4 train] existing checkpoint is incompatible with current config; retraining: {final_path}", flush=True)
 
     torch.manual_seed(seed)
     rng = random.Random(seed)
@@ -125,8 +174,14 @@ def load_models(cfg: V4Config, vocab: Vocab, run_dir: Path, seed: int | None = N
     selected_seed = int(seed if seed is not None else cfg.seeds[0])
     models = {}
     for model_type in MODEL_TYPES:
+        path = checkpoint_path(run_dir, model_type, selected_seed)
+        if not checkpoint_is_compatible(path, cfg, vocab):
+            raise RuntimeError(
+                f"Checkpoint is missing or incompatible with the current v4 config: {path}. "
+                "Use a separate --run-name/--out-root for debug vs main, or rerun training."
+            )
         model = make_model(cfg, len(vocab.id_to_token), cfg.device)
-        load_checkpoint(model, checkpoint_path(run_dir, model_type, selected_seed), cfg.device)
+        load_checkpoint(model, path, cfg.device)
         model.eval()
         models[model_type] = model
     return models
