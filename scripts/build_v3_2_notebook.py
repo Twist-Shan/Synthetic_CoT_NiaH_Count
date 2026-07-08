@@ -1617,35 +1617,70 @@ if not local_patch_df.empty:
     local_resid = local_patch_df[local_patch_df["site_type"].eq("resid_after_block")].copy()
     if not local_resid.empty:
         target_types = list(local_resid["target_type"].drop_duplicates())
-        fig, axes = plt.subplots(1, len(target_types), figsize=(max(8, 4.8 * len(target_types)), 3.8), squeeze=False)
+        pretty_target = {
+            "marker_after_final_index": "Marker after final trace index",
+            "answer_after_ans": "Final answer after <Ans>",
+        }
+        pretty_position = {
+            "index_token_last": "last trace\nindex token",
+            "ans_token": "<Ans>\ntoken",
+            "think_end": "</think>\ntoken",
+        }
+        fig, axes = plt.subplots(1, len(target_types), figsize=(max(8, 4.8 * len(target_types)), 3.9), squeeze=False)
+        last_im = None
         for ax, target_type in zip(axes[0], target_types):
             sub = local_resid[local_resid["target_type"].eq(target_type)]
             mat = sub.groupby(["position_scope", "layer"], as_index=False)["normalized_recovery"].mean().pivot(index="position_scope", columns="layer", values="normalized_recovery")
-            im = ax.imshow(mat.fillna(0).values, aspect="auto", cmap="coolwarm", vmin=-1, vmax=1)
-            ax.set_title(target_type)
-            ax.set_yticks(range(len(mat.index)), mat.index)
+            last_im = ax.imshow(mat.fillna(0).values, aspect="auto", cmap="coolwarm", vmin=-1, vmax=1)
+            ax.set_title(pretty_target.get(target_type, target_type), fontsize=11, pad=8)
+            ax.set_yticks(range(len(mat.index)), [pretty_position.get(x, x.replace("_", "\n")) for x in mat.index])
             ax.set_xticks(range(len(mat.columns)), mat.columns)
             ax.set_xlabel("residual stream after layer")
             ax.set_ylabel("patched token position")
-        fig.colorbar(im, ax=axes.ravel().tolist(), label="normalized recovery", shrink=0.9)
-        fig.suptitle("Local residual patching recovery by target, layer, and position")
+            ax.tick_params(axis="both", labelsize=9)
+        fig.subplots_adjust(left=0.11, right=0.88, top=0.80, bottom=0.20, wspace=0.38)
+        cax = fig.add_axes([0.90, 0.24, 0.015, 0.50])
+        fig.colorbar(last_im, cax=cax, label="normalized recovery")
+        fig.suptitle("Local residual patching recovery by target, layer, and position", y=0.95)
         savefig("patching_recovery_by_layer_position.png")
 
 if not path_df.empty:
     target_types = list(path_df["target_type"].drop_duplicates()) if "target_type" in path_df.columns else ["all"]
-    fig, axes = plt.subplots(1, len(target_types), figsize=(max(8, 5 * len(target_types)), max(3.5, 0.5 * path_df["path_name"].nunique() + 1.5)), squeeze=False)
+    pretty_target = {
+        "marker_after_final_index": "Marker after final trace index",
+        "answer_after_ans": "Final answer after <Ans>",
+    }
+    pretty_component = {
+        "control_top2": "control\ntop-2",
+        "plus_one_top1_index": "+1 head\nlast index",
+        "plus_one_top1_pre_index": "+1 head\npre-index",
+        "retrieval_top1": "retrieval\ntop-1",
+        "retrieval_top2": "retrieval\ntop-2",
+        "retrieval_top4": "retrieval\ntop-4",
+    }
+    pretty_path = {
+        "control_path": "control",
+        "final_prompt_needle_to_retrieval_head_to_marker_or_answer": "prompt-final-needle\nvia retrieval head",
+        "local_trace_to_plus_one_head_to_marker_or_answer": "local trace\nvia +1 head",
+    }
+    fig_h = max(3.2, 0.45 * path_df["path_name"].nunique() + 2.0)
+    fig, axes = plt.subplots(1, len(target_types), figsize=(max(8, 5.2 * len(target_types)), fig_h), squeeze=False)
+    last_im = None
     for ax, target_type in zip(axes[0], target_types):
         sub = path_df[path_df["target_type"].eq(target_type)] if target_type != "all" else path_df
         path_sum = sub.groupby(["path_name", "intervention_name"], as_index=False)["normalized_recovery"].mean()
         mat = path_sum.pivot(index="path_name", columns="intervention_name", values="normalized_recovery").fillna(0)
-        im = ax.imshow(mat.values, aspect="auto", cmap="coolwarm", vmin=-1, vmax=1)
-        ax.set_yticks(range(len(mat.index)), mat.index)
-        ax.set_xticks(range(len(mat.columns)), mat.columns, rotation=35, ha="right")
+        last_im = ax.imshow(mat.values, aspect="auto", cmap="coolwarm", vmin=-1, vmax=1)
+        ax.set_yticks(range(len(mat.index)), [pretty_path.get(x, x.replace("_", "\n")) for x in mat.index])
+        ax.set_xticks(range(len(mat.columns)), [pretty_component.get(x, x.replace("_", "\n")) for x in mat.columns], rotation=0, ha="center")
         ax.set_xlabel("patched component")
         ax.set_ylabel("causal path hypothesis")
-        ax.set_title(target_type)
-    fig.colorbar(im, ax=axes.ravel().tolist(), label="normalized recovery", shrink=0.9)
-    fig.suptitle("Minimal path patching recovery heatmap")
+        ax.set_title(pretty_target.get(target_type, target_type), fontsize=11, pad=8)
+        ax.tick_params(axis="both", labelsize=8)
+    fig.subplots_adjust(left=0.18, right=0.88, top=0.80, bottom=0.28, wspace=0.52)
+    cax = fig.add_axes([0.90, 0.29, 0.015, 0.42])
+    fig.colorbar(last_im, cax=cax, label="normalized recovery")
+    fig.suptitle("Minimal path patching recovery heatmap", y=0.95)
     savefig("path_patching_recovery_heatmap.png")
         """
     ),
