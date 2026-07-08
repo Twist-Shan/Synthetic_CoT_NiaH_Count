@@ -29,7 +29,16 @@ For the more NiaH-like v1 experiment, open `notebooks/Trace_Count_v1_Colab.ipynb
 
 For the controlled marker-trace v2 experiment, open `notebooks/Trace_Count_v2_Colab.ipynb`. This notebook follows `notebooks/pipeline_v2_codex_prompt.md`: fixed prompt length, 64 noise-token types, 10 countable marker-token types, count range `1..10`, and two separately trained random-init decoder-only Transformers (`non_thinking` and `thinking`). It intentionally has no ID/OOD split, no variable sequence length, and no steering. The notebook reports training/eval curves by low/mid/high count bin, exact-count accuracy, hidden-state probes, and attention/retrieval diagnostics.
 
-For the harder v3 experiment, open `notebooks/Trace_Count_v3_Colab.ipynb`. It follows `notebooks/pipeline_v3_codex_prompt.md` as a **no-loss-ablation** suite: exactly two model types are trained per seed, `non_thinking` and `thinking`. v3 keeps the symbolic setting while adding length generalization to `512/1024`, corrupted-trace readout diagnostics, hidden-state probes, attention retrieval analysis, and single-head ablation. The implementation lives in `synthetic_niah_v3/` and uses a small RoPE decoder-only Transformer rather than GPT-2 learned absolute position embeddings.
+For the v3 attention-head deep dive, open `notebooks/Trace_Count_v3_Colab.ipynb` after a v2 run has produced `checkpoints/final/thinking`. v3 is now analysis-only: it reloads the v2 GPT-2-style thinking model, decomposes attention for the final trace index token into prompt-needle vs previous-trace-token mass, and runs lightweight targeted-head ablations. It does not train a new model, does not generate HTML, and follows `notebooks/pipeline_v3_codex_prompt.md`.
+
+For the v4 steering experiment, open `notebooks/Trace_Count_v4_Colab.ipynb` or run:
+
+```bash
+python -m synthetic_niah_v4.run_v4 --preset debug --stage all
+python -m synthetic_niah_v4.run_v4 --preset main --stage all --device cuda --seeds 1234
+```
+
+v4 deliberately returns to the v2 setting: two separately trained random-init GPT-2 LMs with learned absolute positional embeddings, fixed prompt length, count range `1..10`, and no loss-mask ablation. Its purpose is mechanistic: cache hidden states, fit count directions, compare direction extraction methods, and test causal steering/patching.
 
 Manual v1 run:
 
@@ -43,19 +52,22 @@ python scripts/run_v1_niah_like.py \
   --skip_completed
 ```
 
-The v2 notebook is self-contained. The v3 notebook is a Colab wrapper around the `synthetic_niah_v3` package. Use `PRESET = "debug"` for a quick end-to-end artifact check, then switch to `PRESET = "main"` for the full 10k-step runs.
+The v2 notebook is self-contained and produces the checkpoints that v3 analyzes. The v3 notebook is also self-contained, but it expects to find a v2 run under `runs/v2_marker_trace_seed1234_main` or `colab_results/v2_marker_trace_*_seed*/run`; set `V2_RUN_DIR_OVERRIDE` in the notebook if your v2 artifacts live elsewhere.
 
-Manual v3 runs:
+For the v5 mixed thinking-toggle experiment, use `notebooks/Trace_Count_v5_Colab.ipynb` or run:
 
 ```bash
-python -m synthetic_niah_v3.run_v3 --preset debug --round all
-python -m synthetic_niah_v3.run_v3 --preset main --round all --device cuda --seeds 1234
-python -m synthetic_niah_v3.run_v3 --preset main --round all --seeds 1234,1235
-python -m synthetic_niah_v3.run_v3 --preset main --round 2_corrupted_trace --skip_completed
-python -m synthetic_niah_v3.run_v3 --preset main --round 3_mechanistic --skip_completed
+python -m synthetic_niah_v5.run_v5 --preset debug --stage all
+python -m synthetic_niah_v5.run_v5 --preset main --stage all --device cuda
 ```
 
-For paper-quality uncertainty estimates, rerun v3 with the full preset seed list by omitting `--seeds` or passing `--seeds 1234,1235,1236,1237,1238`.
+v5 trains one shared v2-style GPT-2 LM with learned absolute positional embeddings. The query controls the mode with either `<Think/>` or `<Think/> </Think>`. In the default conflict-free objective, the non-thinking `</Think>` token is masked out of the loss; pass `--ablate-no-conflict-mask` only when you want to test that shortcut explicitly.
+
+To rebuild the v3 notebook after editing its generator:
+
+```bash
+python scripts/build_v3_notebook.py
+```
 
 ## Full v0 Sweep
 
