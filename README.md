@@ -63,6 +63,15 @@ python -m synthetic_niah_v5.run_v5 --preset main --stage all --device cuda
 
 v5 trains one shared v2-style GPT-2 LM with learned absolute positional embeddings. The query controls the mode with either `<Think/>` or `<Think/> </Think>`. In the default conflict-free objective, the non-thinking `</Think>` token is masked out of the loss; pass `--ablate-no-conflict-mask` only when you want to test that shortcut explicitly.
 
+For the v6 separator-trace experiment, use `notebooks/Trace_Count_v6_Colab.ipynb` or run:
+
+```bash
+python -m synthetic_counting_v6.run_v6_experiment --preset debug --stage all
+python -m synthetic_counting_v6.run_v6_experiment --config synthetic_counting_v6/configs/main.yaml --stage all --device cuda --skip-completed
+```
+
+v6 is directly comparable to v2, except the thinking trace removes numeric index tokens. Instead of `<Think/> <1> <A> <2> <B> ...`, it uses `<Think/> <Sep> <A> <Sep> <B> ...`. The final answer still uses numeric tokens `<1>` through `<10>`. This tests whether the targeted-retrieval/counting behavior survives without explicit prefix-count leakage in the trace.
+
 To rebuild the v3 notebook after editing its generator:
 
 ```bash
