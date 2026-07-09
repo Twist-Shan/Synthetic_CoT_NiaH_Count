@@ -1600,58 +1600,90 @@ if RUN_FOLLOWUP_MECHANISM:
 
     ROOT = _resolve_followup_repo_root()
     os.chdir(ROOT)
-    if str(ROOT) not in sys.path:
-        sys.path.insert(0, str(ROOT))
+    root_str = str(ROOT)
+    if root_str in sys.path:
+        sys.path.remove(root_str)
+    sys.path.insert(0, root_str)
 
-    from synthetic_counting_extensions.v2_2_followup import run_v2_2_followup
+    import importlib
+    import inspect
 
-    followup_outputs = run_v2_2_followup(
-        V2_RUN_DIR,
-        examples_per_count=FOLLOWUP_EXAMPLES_PER_COUNT,
-        causal_examples_per_count=FOLLOWUP_CAUSAL_EXAMPLES_PER_COUNT,
-        device=DEVICE,
-    )
+    module_name = "synthetic_counting_extensions.v2_2_followup"
+    sys.modules.pop(module_name, None)
+    v22_followup = importlib.import_module(module_name)
+    run_v2_2_followup = v22_followup.run_v2_2_followup
+    followup_signature = inspect.signature(run_v2_2_followup)
+    display(Markdown(f"**Follow-up module:** `{Path(v22_followup.__file__).resolve()}`"))
+    display(Markdown(f"**Follow-up signature:** `{followup_signature}`"))
+
+    followup_kwargs = {
+        "v2_run_dir": V2_RUN_DIR,
+        "examples_per_count": FOLLOWUP_EXAMPLES_PER_COUNT,
+        "device": DEVICE,
+    }
+    if "causal_examples_per_count" in followup_signature.parameters:
+        followup_kwargs["causal_examples_per_count"] = FOLLOWUP_CAUSAL_EXAMPLES_PER_COUNT
+    else:
+        display(Markdown(
+            "**Warning:** this runtime imported an older `v2_2_followup.py` without "
+            "`causal_examples_per_count`. The older follow-up will run, but the new "
+            "causal-ablation / multi-head-mask diagnostics will be missing. Sync the latest "
+            "repo files, then rerun this cell for the full results."
+        ))
+
+    followup_outputs = run_v2_2_followup(**followup_kwargs)
     FOLLOWUP_DIR = V2_RUN_DIR / "v2_2_followup_mechanism"
     display(Markdown(f"**Follow-up output dir:** `{FOLLOWUP_DIR}`"))
     display(Markdown(f"**Follow-up report:** `{FOLLOWUP_DIR / 'report' / 'report.html'}`"))
 
-    display(Markdown("**Top successor-transition heads.** `next_token_margin` is the next-index/close logit margin at the current marker token."))
-    display(
-        followup_outputs["successor_transition_head_summary"]
-        .sort_values("next_token_margin", ascending=False)
-        .head(12)
+    def show_followup_table(key, title, sort_by, head=12):
+        if key not in followup_outputs:
+            display(Markdown(f"**{title}.** Missing in this follow-up module version: `{key}`."))
+            return
+        table = followup_outputs[key]
+        if hasattr(table, "empty") and table.empty:
+            display(Markdown(f"**{title}.** No rows were generated."))
+            return
+        sort_cols = [sort_by] if isinstance(sort_by, str) else list(sort_by)
+        present_sort_cols = [col for col in sort_cols if col in table.columns]
+        if present_sort_cols:
+            table = table.sort_values(present_sort_cols, ascending=False)
+        display(Markdown(f"**{title}.**"))
+        display(table.head(head))
+
+    show_followup_table(
+        "successor_transition_head_summary",
+        "Top successor-transition heads. `next_token_margin` is the next-index/close logit margin at the current marker token",
+        "next_token_margin",
+    )
+    show_followup_table(
+        "next_index_retrieval_head_summary",
+        "Top next-index retrieval heads. Measured at `index_token_{k+1}`; tests whether the next retrieval query points to prompt needle `k+1`",
+        ["correct_top1", "correct_prompt_needle_mass"],
+    )
+    show_followup_table(
+        "successor_head_ablation_head_summary",
+        "Top causal successor heads. `margin_drop = clean_margin - masked_margin`; positive values mean masking that single head hurts the next-index/close decision",
+        "margin_drop",
+    )
+    show_followup_table(
+        "answer_trace_attention_head_summary",
+        "Top final-answer trace-attention heads. `all_trace_marker_mass` measures how much `<Ans>` attends to generated trace markers",
+        "all_trace_marker_mass",
+    )
+    show_followup_table(
+        "answer_multihead_mask_summary",
+        "Final-answer multi-head masks. Head groups are masked globally; positive `margin_drop` / `accuracy_drop` means that group supports final count readout",
+        "margin_drop",
+        head=20,
     )
 
-    display(Markdown("**Top next-index retrieval heads.** This is measured at `index_token_{k+1}`, so it tests whether the next retrieval query points to prompt needle `k+1`."))
-    display(
-        followup_outputs["next_index_retrieval_head_summary"]
-        .sort_values(["correct_top1", "correct_prompt_needle_mass"], ascending=False)
-        .head(12)
+    show_followup_table(
+        "trace_length_override_summary",
+        "Trace-length override summary. High `follows_trace` means final answer follows the teacher-forced trace length rather than prompt count",
+        "follows_trace",
+        head=20,
     )
-
-    display(Markdown("**Top causal successor heads.** `margin_drop = clean_margin - masked_margin`; positive values mean masking that single head hurts the next-index/close decision."))
-    display(
-        followup_outputs["successor_head_ablation_head_summary"]
-        .sort_values("margin_drop", ascending=False)
-        .head(12)
-    )
-
-    display(Markdown("**Top final-answer trace-attention heads.** `all_trace_marker_mass` measures how much `<Ans>` attends to generated trace markers."))
-    display(
-        followup_outputs["answer_trace_attention_head_summary"]
-        .sort_values("all_trace_marker_mass", ascending=False)
-        .head(12)
-    )
-
-    display(Markdown("**Final-answer multi-head masks.** Head groups are masked globally; positive `margin_drop` / `accuracy_drop` means that group supports final count readout."))
-    display(
-        followup_outputs["answer_multihead_mask_summary"]
-        .sort_values("margin_drop", ascending=False)
-        .head(20)
-    )
-
-    display(Markdown("**Trace-length override summary.** High `follows_trace` means final answer follows the teacher-forced trace length rather than prompt count."))
-    display(followup_outputs["trace_length_override_summary"].head(20))
 else:
     FOLLOWUP_DIR = None
     display(Markdown("Follow-up mechanism diagnostics skipped."))
