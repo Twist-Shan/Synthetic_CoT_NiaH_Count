@@ -48,6 +48,8 @@ if str(ROOT) not in sys.path:
 if INSTALL_DEPS:
     subprocess.run([sys.executable, "-m", "pip", "install", "-q", "transformers>=4.40", "pandas", "matplotlib", "tqdm"], check=True)
 
+subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-e", ".", "--no-deps"], check=True)
+
 import pandas as pd
 from IPython.display import Markdown, display, Image
 
@@ -96,7 +98,7 @@ GIT_COMMIT_MESSAGE = "Add synthetic counting experiment notebook"
 
 if PUSH_TO_GITHUB:
     subprocess.run(["git", "status", "--short"], check=False)
-    subprocess.run(["git", "add", "notebooks", "synthetic_counting_extensions", "scripts"], check=True)
+    subprocess.run(["git", "add", "notebooks", "src/synthetic_counting_extensions", "scripts"], check=True)
     subprocess.run(["git", "commit", "-m", GIT_COMMIT_MESSAGE], check=True)
     subprocess.run(["git", "push"], check=True)
 else:

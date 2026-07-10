@@ -86,6 +86,8 @@ if INSTALL_DEPS:
         [sys.executable, "-m", "pip", "install", "-q", "transformers>=4.40", "seaborn", "tqdm"],
         check=True,
     )
+
+subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-e", ".", "--no-deps"], check=True)
 if FIX_NUMPY_ABI:
     subprocess.run(
         [
@@ -1159,7 +1161,7 @@ if PUSH_TO_GITHUB:
             "git",
             "add",
             "notebooks/Trace_Count_v3_Colab.ipynb",
-            "notebooks/pipeline_v3_codex_prompt.md",
+            "docs/pipelines/pipeline_v3_codex_prompt.md",
             "scripts/build_v3_notebook.py",
             "README.md",
         ],

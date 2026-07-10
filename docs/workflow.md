@@ -6,7 +6,7 @@ This repo follows a task-first research pipeline:
 generate data -> train loss-mask ablations -> evaluate -> extract/probe hidden states -> plot and summarize
 ```
 
-The canonical task is defined in `synthetic_experiments_pipeline.md`. Every model sees the same tokenized examples; only the loss mask changes.
+The canonical v0 task is defined in `docs/pipelines/synthetic_experiments_pipeline.md`. Every model sees the same tokenized examples; only the loss mask changes.
 
 ## Quick Smoke Run
 

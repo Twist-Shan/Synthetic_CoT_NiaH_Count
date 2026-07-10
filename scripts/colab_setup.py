@@ -96,7 +96,7 @@ def setup_colab(
     pull: bool = True,
     repair_numpy_abi: bool = True,
     install_deps: bool = False,
-    install_editable: bool = False,
+    install_editable: bool = True,
     import_modules: Iterable[str] = ("torch", "transformers", "pandas", "sklearn", "matplotlib", "seaborn"),
 ) -> Path:
     cwd = ensure_repo(repo_url=repo_url, repo_dir=Path(repo_dir), pull=pull)

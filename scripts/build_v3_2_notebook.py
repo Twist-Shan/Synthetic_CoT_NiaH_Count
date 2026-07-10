@@ -88,6 +88,8 @@ if INSTALL_DEPS:
         check=True,
     )
 
+subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-e", ".", "--no-deps"], check=True)
+
 if FIX_NUMPY_ABI:
     subprocess.run(
         [

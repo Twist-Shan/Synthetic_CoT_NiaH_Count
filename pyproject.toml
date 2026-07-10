@@ -22,7 +22,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/trace_counting", "synthetic_niah_v3", "synthetic_niah_v4", "synthetic_niah_v5", "synthetic_counting_v6"]
+packages = [
+    "src/trace_counting",
+    "src/synthetic_niah_v3",
+    "src/synthetic_niah_v4",
+    "src/synthetic_niah_v5",
+    "src/synthetic_counting_v6",
+    "src/synthetic_counting_extensions",
+]
 
 [dependency-groups]
 dev = [
@@ -33,6 +40,7 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = [
+    "artifacts",
     "colab_results",
     "data",
     "runs",

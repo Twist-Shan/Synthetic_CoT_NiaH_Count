@@ -1,18 +1,32 @@
 # Synthetic Trace-Enumeration Counting
 
-This repository implements the `Synthetic Trace-Enumeration Counting Pipeline v0`: a small decoder-only transformer is trained from scratch on symbolic sparse-counting examples, while the experiment varies only the loss mask.
+This repository contains a sequence of synthetic counting experiments, from the original loss-mask study through controlled CoT, attention, steering, mixed-mode, separator-trace, scaling, and conditional-count variants.
 
 The repo is organized for GitHub + Colab:
 
 ```text
-synthetic_experiments_pipeline.md  Experiment spec
-configs/                           Model and experiment YAMLs
-notebooks/                         Colab-friendly result notebook
-scripts/                           Pipeline orchestration
-src/trace_counting/                Data, training, eval, probes, plots
-tests/                             Unit tests for generation, masks, parsing
-docs/                              Workflow notes
+configs/                 Model and experiment YAMLs
+docs/pipelines/          Experiment specifications and design prompts
+notebooks/               Colab notebooks only
+scripts/                 Pipeline, notebook, and report utilities
+src/                     All importable Python packages
+tests/                   Unit and integration tests
+artifacts/               Ignored local scratch outputs, including tmp runs
 ```
+
+Importable code follows a standard `src/` layout. Public module names are unchanged:
+
+| Package | Role |
+| --- | --- |
+| `trace_counting` | Original v0 data, training, evaluation, probes, and plots |
+| `synthetic_niah_v3` | v3 attention and causal analysis |
+| `synthetic_niah_v4` | v4 directions, steering, and activation patching |
+| `synthetic_niah_v5` | v5 mixed thinking-mode model |
+| `synthetic_counting_v6` | v6 separator-trace experiment |
+| `synthetic_counting_extensions` | v2.2, v5.2, and v7-v9 extensions |
+
+Commands such as `python -m synthetic_niah_v4.run_v4` therefore remain valid after
+`pip install -e .`.
 
 ## Install
 
@@ -27,9 +41,9 @@ If you use Colab, open `notebooks/Trace_Count_v0_Colab.ipynb` and run all cells.
 
 For the more NiaH-like v1 experiment, open `notebooks/Trace_Count_v1_Colab.ipynb`. It trains two all-token next-token-prediction models on shorter sparse-counting data: a `think_trace` model with explicit thinking/count trace tokens and an `answer_only` model without thinking tokens. The v1 notebook evaluates ID counts `0-5` and count-OOD `5-10`, then runs linear probes, ridge count-direction extraction, answer-state steering, and attention-to-needle analysis.
 
-For the controlled marker-trace v2 experiment, open `notebooks/Trace_Count_v2_Colab.ipynb`. This notebook follows `notebooks/pipeline_v2_codex_prompt.md`: fixed prompt length, 64 noise-token types, 10 countable marker-token types, count range `1..10`, and two separately trained random-init decoder-only Transformers (`non_thinking` and `thinking`). It intentionally has no ID/OOD split, no variable sequence length, and no steering. The notebook reports training/eval curves by low/mid/high count bin, exact-count accuracy, hidden-state probes, and attention/retrieval diagnostics.
+For the controlled marker-trace v2 experiment, open `notebooks/Trace_Count_v2_Colab.ipynb`. This notebook follows `docs/pipelines/pipeline_v2_codex_prompt.md`: fixed prompt length, 64 noise-token types, 10 countable marker-token types, count range `1..10`, and two separately trained random-init decoder-only Transformers (`non_thinking` and `thinking`). It intentionally has no ID/OOD split, no variable sequence length, and no steering. The notebook reports training/eval curves by low/mid/high count bin, exact-count accuracy, hidden-state probes, and attention/retrieval diagnostics.
 
-For the v3 attention-head deep dive, open `notebooks/Trace_Count_v3_Colab.ipynb` after a v2 run has produced `checkpoints/final/thinking`. v3 is now analysis-only: it reloads the v2 GPT-2-style thinking model, decomposes attention for the final trace index token into prompt-needle vs previous-trace-token mass, and runs lightweight targeted-head ablations. It does not train a new model, does not generate HTML, and follows `notebooks/pipeline_v3_codex_prompt.md`.
+For the v3 attention-head deep dive, open `notebooks/Trace_Count_v3_Colab.ipynb` after a v2 run has produced `checkpoints/final/thinking`. v3 is now analysis-only: it reloads the v2 GPT-2-style thinking model, decomposes attention for the final trace index token into prompt-needle vs previous-trace-token mass, and runs lightweight targeted-head ablations. It does not train a new model, does not generate HTML, and follows `docs/pipelines/pipeline_v3_codex_prompt.md`.
 
 For the v4 steering experiment, open `notebooks/Trace_Count_v4_Colab.ipynb` or run:
 
@@ -67,7 +81,7 @@ For the v6 separator-trace experiment, use `notebooks/Trace_Count_v6_Colab.ipynb
 
 ```bash
 python -m synthetic_counting_v6.run_v6_experiment --preset debug --stage all
-python -m synthetic_counting_v6.run_v6_experiment --config synthetic_counting_v6/configs/main.yaml --stage all --device cuda --skip-completed
+python -m synthetic_counting_v6.run_v6_experiment --preset main --stage all --device cuda --skip-completed
 ```
 
 v6 is directly comparable to v2, except the thinking trace removes numeric index tokens. Instead of `<Think/> <1> <A> <2> <B> ...`, it uses `<Think/> <Sep> <A> <Sep> <B> ...`. The final answer still uses numeric tokens `<1>` through `<10>`. This tests whether the targeted-retrieval/counting behavior survives without explicit prefix-count leakage in the trace.

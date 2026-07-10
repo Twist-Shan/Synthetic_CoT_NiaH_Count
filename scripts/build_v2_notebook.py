@@ -27,7 +27,7 @@ cells = [
         r"""
 # Synthetic NIAH-Style Counting v2
 
-This notebook follows `notebooks/pipeline_v2_codex_prompt.md`.
+This notebook follows `docs/pipelines/pipeline_v2_codex_prompt.md`.
 
 The v2 experiment is intentionally narrower than the earlier ID/OOD notebooks:
 
@@ -1657,7 +1657,7 @@ if PUSH_TO_GITHUB:
             "git",
             "add",
             "notebooks/Trace_Count_v2_Colab.ipynb",
-            "notebooks/pipeline_v2_codex_prompt.md",
+            "docs/pipelines/pipeline_v2_codex_prompt.md",
             "scripts/build_v2_notebook.py",
             "README.md",
         ],

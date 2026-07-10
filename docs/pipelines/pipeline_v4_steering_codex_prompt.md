@@ -218,7 +218,7 @@ The package may either train the models from scratch or load v2-compatible GPT-2
 Create this package structure:
 
 ```text
-synthetic_niah_v4/
+src/synthetic_niah_v4/
   __init__.py
   config.py
   vocab.py

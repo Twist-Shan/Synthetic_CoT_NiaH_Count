@@ -61,7 +61,7 @@ FIX_NUMPY_ABI = False  # set True only if pandas/scipy complains about NumPy dty
 def resolve_repo_root(start: Path) -> Path:
     start = start.resolve()
     for candidate in [start, *start.parents]:
-        if (candidate / "synthetic_counting_extensions").exists() and (candidate / "notebooks").exists():
+        if (candidate / "src" / "synthetic_counting_extensions").exists() and (candidate / "notebooks").exists():
             return candidate
         if (candidate / ".git").exists() and (candidate / "notebooks").exists():
             return candidate
@@ -74,7 +74,7 @@ if IN_COLAB:
     cwd = Path.cwd()
     if (cwd / ".git").exists() or (cwd / "notebooks" / "Trace_Count_v2_Colab.ipynb").exists():
         repo_dir = cwd
-    elif (cwd.parent / ".git").exists() or (cwd.parent / "synthetic_counting_extensions").exists():
+    elif (cwd.parent / ".git").exists() or (cwd.parent / "src" / "synthetic_counting_extensions").exists():
         repo_dir = cwd.parent
     elif (repo_dir / ".git").exists() or (repo_dir / "notebooks" / "Trace_Count_v2_Colab.ipynb").exists():
         pass
@@ -89,10 +89,10 @@ os.chdir(ROOT)
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-followup_module_path = ROOT / "synthetic_counting_extensions" / "v2_2_followup.py"
+followup_module_path = ROOT / "src" / "synthetic_counting_extensions" / "v2_2_followup.py"
 if not followup_module_path.exists():
     print(
-        "Warning: synthetic_counting_extensions/v2_2_followup.py is missing. "
+        "Warning: src/synthetic_counting_extensions/v2_2_followup.py is missing. "
         "The main v2.2 attention diagnostics can still run, but Section 12 needs the updated repo files. "
         "Run git pull in Colab or upload the latest local repo before running Section 12."
     )
@@ -102,6 +102,8 @@ if INSTALL_DEPS:
         [sys.executable, "-m", "pip", "install", "-q", "transformers>=4.40", "seaborn", "tqdm"],
         check=True,
     )
+
+subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-e", ".", "--no-deps"], check=True)
 
 if FIX_NUMPY_ABI:
     subprocess.run(
@@ -1582,17 +1584,17 @@ if RUN_FOLLOWUP_MECHANISM:
         for start in starts:
             start = start.resolve()
             for candidate in [start, *start.parents]:
-                if (candidate / "synthetic_counting_extensions" / "v2_2_followup.py").exists():
+                if (candidate / "src" / "synthetic_counting_extensions" / "v2_2_followup.py").exists():
                     return candidate
                 if TRY_GIT_PULL_FOR_FOLLOWUP and (candidate / ".git").exists():
                     subprocess.run(["git", "pull"], cwd=candidate, check=False)
-                    if (candidate / "synthetic_counting_extensions" / "v2_2_followup.py").exists():
+                    if (candidate / "src" / "synthetic_counting_extensions" / "v2_2_followup.py").exists():
                         return candidate
         searched = []
         for start in starts:
             searched.extend(str(p) for p in [start.resolve(), *start.resolve().parents])
         raise FileNotFoundError(
-            "Could not find synthetic_counting_extensions/v2_2_followup.py. "
+            "Could not find src/synthetic_counting_extensions/v2_2_followup.py. "
             "Please sync the latest repo files in Colab, or set TRY_GIT_PULL_FOR_FOLLOWUP = True "
             "and rerun this cell. "
             f"Searched: {searched[:8]}"

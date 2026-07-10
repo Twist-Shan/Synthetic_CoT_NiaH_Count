@@ -1193,7 +1193,7 @@ Interpretation:
 Implement modular code. Suggested layout:
 
 ```text
-synthetic_counting_v6/
+src/synthetic_counting_v6/
   __init__.py
   config.py
   vocab.py
@@ -1305,7 +1305,7 @@ The main script should support:
 
 ```bash
 python -m synthetic_counting_v6.run_v6_experiment \
-  --config synthetic_counting_v6/configs/main.yaml \
+  --config src/synthetic_counting_v6/configs/main.yaml \
   --run_dir runs/v6_separator_trace_seed1234
 ```
 
@@ -1313,7 +1313,7 @@ Debug run:
 
 ```bash
 python -m synthetic_counting_v6.run_v6_experiment \
-  --config synthetic_counting_v6/configs/debug.yaml \
+  --config src/synthetic_counting_v6/configs/debug.yaml \
   --run_dir runs/debug_v6
 ```
 
