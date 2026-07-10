@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import random
+import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -40,11 +41,13 @@ class SweepConfig:
     warmup_steps: int = 500
     weight_decay: float = 0.1
     log_every: int = 50
+    checkpoint_every: int = 0
     eval_examples_per_count: int = 100
     ar_examples_per_count: int = 40
     n_layer: int = 4
     n_head: int = 4
     n_embd: int = 256
+    n_inner: int | None = None
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
 
     @property
@@ -201,7 +204,7 @@ def build_model_cfg(cfg: SweepConfig, vocab: Vocab) -> dict[str, Any]:
         "n_layer": cfg.n_layer,
         "n_head": cfg.n_head,
         "n_embd": cfg.n_embd,
-        "n_inner": 4 * cfg.n_embd,
+        "n_inner": cfg.n_inner if cfg.n_inner is not None else 4 * cfg.n_embd,
         "n_positions": cfg.n_positions,
         "n_ctx": cfg.n_positions,
         "activation_function": "gelu_new",
@@ -215,17 +218,175 @@ def build_model_cfg(cfg: SweepConfig, vocab: Vocab) -> dict[str, Any]:
     }
 
 
-def train_one(cfg: SweepConfig, vocab: Vocab, mode: str, run_dir: Path) -> pd.DataFrame:
-    ckpt = run_dir / "checkpoints" / mode
-    ckpt.mkdir(parents=True, exist_ok=True)
-    if (ckpt / "model.pt").exists():
-        return pd.read_csv(run_dir / "tables" / f"train_{mode}.csv")
+def _atomic_torch_save(payload: dict[str, Any], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    torch.save(payload, temporary)
+    temporary.replace(path)
+
+
+def _atomic_copy(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    shutil.copy2(source, temporary)
+    temporary.replace(destination)
+
+
+def _atomic_dataframe_csv(frame: pd.DataFrame, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    frame.to_csv(temporary, index=False)
+    temporary.replace(path)
+
+
+def _sync_file(local_path: Path, run_dir: Path, sync_run_dir: Path | None) -> None:
+    if sync_run_dir is None:
+        return
+    destination = sync_run_dir / local_path.relative_to(run_dir)
+    _atomic_copy(local_path, destination)
+
+
+def _torch_load(path: Path, device: str) -> dict[str, Any]:
+    try:
+        return torch.load(path, map_location=device, weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location=device)
+
+
+def _checkpoint_step(path: Path) -> int:
+    try:
+        return int(path.parent.name.removeprefix("step_"))
+    except ValueError:
+        return -1
+
+
+def _latest_checkpoint(
+    local_mode_dir: Path,
+    sync_mode_dir: Path | None,
+) -> tuple[int, Path] | None:
+    candidates = list(local_mode_dir.glob("step_*/checkpoint.pt"))
+    if sync_mode_dir is not None and sync_mode_dir.exists():
+        candidates.extend(sync_mode_dir.glob("step_*/checkpoint.pt"))
+    valid = [(_checkpoint_step(path), path) for path in candidates if _checkpoint_step(path) >= 0]
+    return max(valid, key=lambda item: item[0]) if valid else None
+
+
+def _training_row(
+    cfg: SweepConfig,
+    mode: str,
+    step: int,
+    loss: float,
+    lr: float,
+) -> dict[str, Any]:
+    return {
+        "step": step,
+        "mode": mode,
+        "loss": loss,
+        "lr": lr,
+        "micro_batch_size": cfg.batch_size,
+        "grad_accum_steps": cfg.grad_accum_steps,
+        "effective_batch_size": cfg.effective_batch_size,
+    }
+
+
+def _save_training_checkpoint(
+    *,
+    cfg: SweepConfig,
+    model: torch.nn.Module,
+    optimizer: AdamW,
+    mode: str,
+    step: int,
+    rng: random.Random,
+    rows: list[dict[str, Any]],
+    run_dir: Path,
+    sync_run_dir: Path | None,
+) -> Path:
+    mode_dir = run_dir / "checkpoints" / mode
+    checkpoint_path = mode_dir / f"step_{step:06d}" / "checkpoint.pt"
+    payload = {
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "cfg": asdict(cfg),
+        "mode": mode,
+        "step": step,
+        "python_rng_state": rng.getstate(),
+        "torch_rng_state": torch.get_rng_state(),
+        "cuda_rng_state_all": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+    }
+    _atomic_torch_save(payload, checkpoint_path)
+
+    train_path = run_dir / "tables" / f"train_{mode}.csv"
+    _atomic_dataframe_csv(pd.DataFrame(rows), train_path)
+    latest_path = mode_dir / "latest.json"
+    latest_path.write_text(
+        json.dumps({"step": step, "checkpoint": str(checkpoint_path.relative_to(run_dir))}, indent=2),
+        encoding="utf-8",
+    )
+    for artifact in [checkpoint_path, train_path, latest_path]:
+        _sync_file(artifact, run_dir, sync_run_dir)
+    if sync_run_dir is not None:
+        print(f"[{mode}] checkpoint step {step} synced to {sync_run_dir}", flush=True)
+    return checkpoint_path
+
+
+def train_one(
+    cfg: SweepConfig,
+    vocab: Vocab,
+    mode: str,
+    run_dir: Path,
+    sync_run_dir: Path | None = None,
+) -> pd.DataFrame:
+    mode_dir = run_dir / "checkpoints" / mode
+    mode_dir.mkdir(parents=True, exist_ok=True)
+    train_path = run_dir / "tables" / f"train_{mode}.csv"
+    final_path = mode_dir / "model.pt"
+    sync_mode_dir = sync_run_dir / "checkpoints" / mode if sync_run_dir is not None else None
+
+    if not final_path.exists() and sync_mode_dir is not None:
+        sync_final = sync_mode_dir / "model.pt"
+        if sync_final.exists():
+            _atomic_copy(sync_final, final_path)
+        sync_train = sync_run_dir / "tables" / f"train_{mode}.csv"
+        if sync_train.exists() and not train_path.exists():
+            _atomic_copy(sync_train, train_path)
+    if final_path.exists():
+        return pd.read_csv(train_path) if train_path.exists() else pd.DataFrame()
+
     torch.manual_seed(cfg.seed + (0 if mode == "nonthinking" else 17))
     rng = random.Random(cfg.seed + (100 if mode == "nonthinking" else 200))
     model = make_model(build_model_cfg(cfg, vocab), cfg.device)
     opt = AdamW(model.parameters(), lr=cfg.lr, betas=(0.9, 0.95), weight_decay=cfg.weight_decay)
     rows: list[dict[str, Any]] = []
-    pbar = tqdm(range(1, cfg.train_steps + 1), desc=f"{cfg.experiment} {mode}", leave=True)
+    start_step = 0
+
+    latest = _latest_checkpoint(mode_dir, sync_mode_dir)
+    if latest is not None:
+        start_step, resume_path = latest
+        local_resume_path = mode_dir / f"step_{start_step:06d}" / "checkpoint.pt"
+        if resume_path != local_resume_path:
+            _atomic_copy(resume_path, local_resume_path)
+        payload = _torch_load(local_resume_path, cfg.device)
+        model.load_state_dict(payload["model_state_dict"])
+        opt.load_state_dict(payload["optimizer_state_dict"])
+        rng.setstate(payload["python_rng_state"])
+        torch.set_rng_state(payload["torch_rng_state"])
+        if torch.cuda.is_available() and payload.get("cuda_rng_state_all") is not None:
+            torch.cuda.set_rng_state_all(payload["cuda_rng_state_all"])
+        if not train_path.exists() and sync_run_dir is not None:
+            sync_train = sync_run_dir / "tables" / f"train_{mode}.csv"
+            if sync_train.exists():
+                _atomic_copy(sync_train, train_path)
+        if train_path.exists():
+            rows = pd.read_csv(train_path).query("step <= @start_step").to_dict("records")
+        print(f"[{mode}] resuming from step {start_step}: {resume_path}", flush=True)
+
+    pbar = tqdm(
+        range(start_step + 1, cfg.train_steps + 1),
+        total=cfg.train_steps,
+        initial=start_step,
+        desc=f"{cfg.experiment} {mode}",
+        leave=True,
+    )
     for step in pbar:
         lr = lr_at(step - 1, cfg)
         for group in opt.param_groups:
@@ -247,21 +408,35 @@ def train_one(cfg: SweepConfig, vocab: Vocab, mode: str, run_dir: Path) -> pd.Da
             mean_loss += float(loss.detach().cpu()) / cfg.grad_accum_steps
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()
-        if step == 1 or step % cfg.log_every == 0 or step == cfg.train_steps:
-            row = {
-                "step": step,
-                "mode": mode,
-                "loss": mean_loss,
-                "lr": lr,
-                "micro_batch_size": cfg.batch_size,
-                "grad_accum_steps": cfg.grad_accum_steps,
-                "effective_batch_size": cfg.effective_batch_size,
-            }
-            rows.append(row)
-            pbar.set_postfix(loss=f"{row['loss']:.4f}", lr=f"{lr:.1e}")
-    torch.save({"model_state_dict": model.state_dict(), "cfg": asdict(cfg), "mode": mode}, ckpt / "model.pt")
+
+        should_checkpoint = cfg.checkpoint_every > 0 and (
+            step % cfg.checkpoint_every == 0 or step == cfg.train_steps
+        )
+        should_log = step == 1 or step % cfg.log_every == 0 or step == cfg.train_steps
+        if should_log or should_checkpoint:
+            row = _training_row(cfg, mode, step, mean_loss, lr)
+            if not rows or int(rows[-1]["step"]) != step:
+                rows.append(row)
+            pbar.set_postfix(loss=f"{mean_loss:.4f}", lr=f"{lr:.1e}")
+        if should_checkpoint:
+            _save_training_checkpoint(
+                cfg=cfg,
+                model=model,
+                optimizer=opt,
+                mode=mode,
+                step=step,
+                rng=rng,
+                rows=rows,
+                run_dir=run_dir,
+                sync_run_dir=sync_run_dir,
+            )
+
+    final_payload = {"model_state_dict": model.state_dict(), "cfg": asdict(cfg), "mode": mode}
+    _atomic_torch_save(final_payload, final_path)
     train_df = pd.DataFrame(rows)
-    train_df.to_csv(run_dir / "tables" / f"train_{mode}.csv", index=False)
+    _atomic_dataframe_csv(train_df, train_path)
+    _sync_file(final_path, run_dir, sync_run_dir)
+    _sync_file(train_path, run_dir, sync_run_dir)
     del model
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -392,6 +567,11 @@ def summarize_validation_splits(summary: pd.DataFrame) -> pd.DataFrame:
 def preset_configs(experiment: str, preset: str) -> list[SweepConfig]:
     if preset == "debug":
         debug_max_count = 30 if experiment == "v8" else 10
+        debug_model = (
+            {"n_layer": 3, "n_head": 4, "n_embd": 128, "n_inner": 384}
+            if experiment == "v9"
+            else {"n_layer": 2, "n_head": 2, "n_embd": 64}
+        )
         base = SweepConfig(
             experiment=experiment,
             preset=preset,
@@ -403,25 +583,11 @@ def preset_configs(experiment: str, preset: str) -> list[SweepConfig]:
             grad_accum_steps=1,
             eval_examples_per_count=2,
             ar_examples_per_count=2,
-            n_layer=2,
-            n_head=2,
-            n_embd=64,
+            **debug_model,
         )
         return [base]
     if experiment == "v7":
         return [
-            SweepConfig(
-                experiment=experiment,
-                preset=preset,
-                seq_len=1024,
-                train_count_max=10,
-                eval_count_max=10,
-                train_steps=10000,
-                batch_size=32,
-                grad_accum_steps=4,
-                eval_examples_per_count=200,
-                ar_examples_per_count=50,
-            ),
             SweepConfig(
                 experiment=experiment,
                 preset=preset,
@@ -431,6 +597,7 @@ def preset_configs(experiment: str, preset: str) -> list[SweepConfig]:
                 train_steps=10000,
                 batch_size=16,
                 grad_accum_steps=8,
+                checkpoint_every=2000,
                 eval_examples_per_count=150,
                 ar_examples_per_count=30,
             ),
@@ -450,25 +617,58 @@ def preset_configs(experiment: str, preset: str) -> list[SweepConfig]:
                 ar_examples_per_count=50,
             ),
         ]
+    if experiment == "v9":
+        return [
+            SweepConfig(
+                experiment=experiment,
+                preset=preset,
+                seq_len=256,
+                train_count_min=1,
+                train_count_max=10,
+                eval_count_min=1,
+                eval_count_max=10,
+                train_steps=10000,
+                batch_size=128,
+                grad_accum_steps=1,
+                checkpoint_every=2000,
+                eval_examples_per_count=200,
+                ar_examples_per_count=50,
+                n_layer=3,
+                n_head=4,
+                n_embd=128,
+                n_inner=384,
+            ),
+        ]
     raise ValueError(experiment)
 
 
-def run_one_config(cfg: SweepConfig, out_root: Path, skip_completed: bool = True) -> Path:
+def run_one_config(
+    cfg: SweepConfig,
+    out_root: Path,
+    skip_completed: bool = True,
+    checkpoint_sync_root: Path | None = None,
+) -> Path:
     name = (
         f"{cfg.experiment}_{cfg.preset}_L{cfg.seq_len}_"
         f"train{cfg.train_count_min}-{cfg.train_count_max}_"
         f"eval{cfg.eval_count_min}-{cfg.eval_count_max}_sharednum_seed{cfg.seed}"
     )
     run_dir = out_root / name
+    sync_run_dir = checkpoint_sync_root / name if checkpoint_sync_root is not None else None
     for sub in ["tables", "figures", "checkpoints", "report"]:
         (run_dir / sub).mkdir(parents=True, exist_ok=True)
-    (run_dir / "config.json").write_text(json.dumps(asdict(cfg), indent=2), encoding="utf-8")
+    config_path = run_dir / "config.json"
+    config_path.write_text(json.dumps(asdict(cfg), indent=2), encoding="utf-8")
     vocab = Vocab(cfg)
-    (run_dir / "vocab.json").write_text(json.dumps(vocab.to_json(), indent=2), encoding="utf-8")
+    vocab_path = run_dir / "vocab.json"
+    vocab_path.write_text(json.dumps(vocab.to_json(), indent=2), encoding="utf-8")
+    if sync_run_dir is not None:
+        _sync_file(config_path, run_dir, sync_run_dir)
+        _sync_file(vocab_path, run_dir, sync_run_dir)
     eval_dfs = []
     for mode in ["nonthinking", "thinking"]:
         if not skip_completed or not (run_dir / "checkpoints" / mode / "model.pt").exists():
-            train_one(cfg, vocab, mode, run_dir)
+            train_one(cfg, vocab, mode, run_dir, sync_run_dir=sync_run_dir)
         eval_path = run_dir / "tables" / f"eval_{mode}_examples.csv"
         if skip_completed and eval_path.exists():
             eval_dfs.append(pd.read_csv(eval_path))
@@ -560,10 +760,18 @@ def make_report(
         bad = g[g["accuracy"] < 0.9]
         threshold_rows.append({"mode": mode, "first_count_below_0.9": int(bad["count"].iloc[0]) if not bad.empty else "none"})
     threshold = pd.DataFrame(threshold_rows)
+    descriptions = {
+        "v7": "v7 只增加 prompt 长度，保持 count 1–10。",
+        "v8": "v8 扩展 needle count，并按 count range 分别报告结果。",
+        "v9": (
+            "v9 保持 v2 的 length=256、count=1–10，只把模型缩小为 "
+            "3 layers、4 heads、d_model=128、MLP=384。"
+        ),
+    }
     html = f"""<!doctype html><html><head><meta charset="utf-8"><title>{cfg.experiment} report</title>
 <style>body{{font-family:Segoe UI,Arial,sans-serif;line-height:1.55;max-width:1050px;margin:32px auto;padding:0 20px;color:#172033}}table{{border-collapse:collapse;width:100%;font-size:14px}}td,th{{border:1px solid #ddd;padding:8px}}th{{background:#f4f7fb}}.grid{{display:grid;grid-template-columns:1fr 1fr;gap:18px}}</style></head><body>
 <h1>{cfg.experiment} synthetic counting sweep</h1>
-<p>v7 只增加 prompt 长度，保持 count 1–10；v8 固定长度 256，把训练和验证 count 扩展到 1–30，并分别报告 1–10、11–20、21–30。</p>
+<p>{descriptions[cfg.experiment]}</p>
 <h2>Config</h2><pre>{json.dumps(asdict(cfg), indent=2)}</pre>
 <div class="grid"><div>{_img('accuracy_by_count.png')}</div><div>{_img('accuracy_heatmap.png')}</div><div>{_img('accuracy_by_validation_split.png')}</div></div>
 <h2>CoT advantage by count</h2>{wide.to_html(index=False)}
@@ -574,15 +782,31 @@ def make_report(
     (run_dir / "report" / "report.html").write_text(html, encoding="utf-8")
 
 
-def run_sweep(experiment: str, preset: str, out_root: str | Path, *, skip_completed: bool = True, device: str | None = None) -> pd.DataFrame:
+def run_sweep(
+    experiment: str,
+    preset: str,
+    out_root: str | Path,
+    *,
+    skip_completed: bool = True,
+    device: str | None = None,
+    checkpoint_sync_root: str | Path | None = None,
+) -> pd.DataFrame:
     out_root = Path(out_root)
     out_root.mkdir(parents=True, exist_ok=True)
+    sync_root = Path(checkpoint_sync_root) if checkpoint_sync_root is not None else None
+    if sync_root is not None:
+        sync_root.mkdir(parents=True, exist_ok=True)
     all_rows = []
     all_split_rows = []
     for cfg in preset_configs(experiment, preset):
         if device:
             cfg.device = device
-        run_dir = run_one_config(cfg, out_root, skip_completed=skip_completed)
+        run_dir = run_one_config(
+            cfg,
+            out_root,
+            skip_completed=skip_completed,
+            checkpoint_sync_root=sync_root,
+        )
         summary = pd.read_csv(run_dir / "tables" / "eval_by_count.csv")
         summary.insert(0, "run_dir", str(run_dir))
         summary.insert(1, "setting", run_dir.name)
@@ -602,18 +826,26 @@ def run_sweep(experiment: str, preset: str, out_root: str | Path, *, skip_comple
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="v7/v8 synthetic counting sweeps")
-    p.add_argument("--experiment", choices=["v7", "v8"], required=True)
+    p = argparse.ArgumentParser(description="v7/v8/v9 synthetic counting sweeps")
+    p.add_argument("--experiment", choices=["v7", "v8", "v9"], required=True)
     p.add_argument("--preset", choices=["debug", "main"], default="debug")
     p.add_argument("--out-root", default="runs/synthetic_counting_sweeps")
     p.add_argument("--device", default=None)
+    p.add_argument("--checkpoint-sync-root", default=None)
     p.add_argument("--no-skip-completed", action="store_true")
     return p
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    run_sweep(args.experiment, args.preset, args.out_root, skip_completed=not args.no_skip_completed, device=args.device)
+    run_sweep(
+        args.experiment,
+        args.preset,
+        args.out_root,
+        skip_completed=not args.no_skip_completed,
+        device=args.device,
+        checkpoint_sync_root=args.checkpoint_sync_root,
+    )
 
 
 if __name__ == "__main__":
