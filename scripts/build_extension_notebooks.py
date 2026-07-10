@@ -28,6 +28,7 @@ import sys
 REPO_URL = "https://github.com/Twist-Shan/Synthetic_CoT_NiaH_Count.git"
 IN_COLAB = "google.colab" in sys.modules or Path("/content").exists()
 INSTALL_DEPS = False
+PULL_REPO = True
 
 if IN_COLAB:
     repo_dir = Path("/content/Synthetic_CoT_NiaH_Count")
@@ -37,6 +38,8 @@ if IN_COLAB:
     elif not repo_dir.exists():
         subprocess.run(["git", "clone", REPO_URL, str(repo_dir)], check=True)
     os.chdir(repo_dir)
+    if PULL_REPO and (repo_dir / ".git").exists():
+        subprocess.run(["git", "pull", "--ff-only"], check=False)
 
 ROOT = Path.cwd()
 if str(ROOT) not in sys.path:
@@ -70,10 +73,15 @@ if SAVE_TO_DRIVE and IN_COLAB:
         src = None
     if src is not None and src.exists():
         dest = dest_root / src.name
-        if dest.exists():
-            shutil.rmtree(dest)
-        shutil.copytree(src, dest)
-        display(Markdown(f"**Saved to Drive:** `{dest}`"))
+        src_resolved = src.resolve()
+        dest_root_resolved = dest_root.resolve()
+        if src_resolved == dest_root_resolved or dest_root_resolved in src_resolved.parents:
+            display(Markdown(f"**Already stored in Drive:** `{src}`"))
+        else:
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(src, dest)
+            display(Markdown(f"**Saved to Drive:** `{dest}`"))
     else:
         display(Markdown("No RUN_DIR/OUT_ROOT found to save."))
 else:
@@ -141,21 +149,79 @@ def build_v5_2() -> None:
         md("## 2. Runtime settings"),
         code(
             r"""
-# Point this to a completed v5 run. If it does not exist, run Trace_Count_v5_Colab first.
-RUN_DIR = Path("outputs/v5")
-if not (RUN_DIR / "checkpoints" / "final.pt").exists():
-    candidates = (
-        list(Path("outputs").glob("v5*/**/final.pt"))
-        + list(Path("runs").glob("**/final.pt"))
-        + list(Path("colab_results").glob("*v5*/**/final.pt"))
+# A completed v5 checkpoint is required; v5.2 does not retrain the model.
+# Set this only when you want to force a particular run or result bundle.
+RUN_DIR_OVERRIDE = ""
+AUTO_MOUNT_DRIVE_FOR_V5 = True
+PREFER_DRIVE_V5 = True
+DRIVE_RESULTS_ROOT = Path(
+    "/content/drive/MyDrive/Colab_Notebooks/CoT_Counting/"
+    "Synthetic_CoT_NiaH_Count/colab_results"
+)
+
+from synthetic_counting_extensions.v5_2_switch_diagnostics import resolve_v5_run_dir
+
+
+def find_v5_run() -> Path:
+    if RUN_DIR_OVERRIDE:
+        return resolve_v5_run_dir(RUN_DIR_OVERRIDE)
+
+    local_search_roots = [
+        Path("outputs/v5"),
+        Path("outputs"),
+        Path("runs"),
+        Path("colab_results"),
+    ]
+    drive_search_roots = [DRIVE_RESULTS_ROOT / "v5", DRIVE_RESULTS_ROOT]
+
+    if IN_COLAB and PREFER_DRIVE_V5 and AUTO_MOUNT_DRIVE_FOR_V5:
+        if not Path("/content/drive/MyDrive").exists():
+            from google.colab import drive
+
+            drive.mount("/content/drive")
+        for root in drive_search_roots:
+            try:
+                return resolve_v5_run_dir(root)
+            except FileNotFoundError:
+                pass
+
+    for root in local_search_roots:
+        try:
+            return resolve_v5_run_dir(root)
+        except FileNotFoundError:
+            pass
+
+    if IN_COLAB and not PREFER_DRIVE_V5 and AUTO_MOUNT_DRIVE_FOR_V5:
+        if not Path("/content/drive/MyDrive").exists():
+            from google.colab import drive
+
+            drive.mount("/content/drive")
+        for root in drive_search_roots:
+            try:
+                return resolve_v5_run_dir(root)
+            except FileNotFoundError:
+                pass
+
+    searched = [str(path) for path in local_search_roots]
+    if IN_COLAB:
+        searched.append(str(DRIVE_RESULTS_ROOT))
+    raise FileNotFoundError(
+        "No completed v5 run was found. Run Trace_Count_v5_Colab first, or set "
+        "RUN_DIR_OVERRIDE to a saved v5 result folder. Searched: " + ", ".join(searched)
     )
-    if candidates:
-        RUN_DIR = candidates[-1].parents[1]
+
+
+RUN_DIR = find_v5_run()
 
 EXAMPLES_PER_COUNT = 100
 DEVICE = "cuda" if __import__("torch").cuda.is_available() else "cpu"
 
-print({"RUN_DIR": str(RUN_DIR), "EXAMPLES_PER_COUNT": EXAMPLES_PER_COUNT, "DEVICE": DEVICE})
+print({
+    "RUN_DIR": str(RUN_DIR),
+    "CHECKPOINT": str(RUN_DIR / "checkpoints" / "final.pt"),
+    "EXAMPLES_PER_COUNT": EXAMPLES_PER_COUNT,
+    "DEVICE": DEVICE,
+})
             """
         ),
         md("## 3. Run v5.2 diagnostics"),

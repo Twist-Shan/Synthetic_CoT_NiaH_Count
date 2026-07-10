@@ -17,6 +17,55 @@ from synthetic_niah_v5.train import load_checkpoint
 from synthetic_niah_v5.vocab import MARKER_TOKENS, Vocab, count_token, index_token
 
 
+def _is_v5_run_dir(path: Path) -> bool:
+    return all(
+        candidate.is_file()
+        for candidate in (
+            path / "config.json",
+            path / "vocab.json",
+            path / "checkpoints" / "final.pt",
+        )
+    )
+
+
+def resolve_v5_run_dir(path: str | Path) -> Path:
+    """Resolve a v5 run from either the run itself or a containing result folder."""
+    requested = Path(path).expanduser()
+    direct = requested
+    if requested.is_file():
+        if requested.name == "config.json":
+            direct = requested.parent
+        elif requested.name == "final.pt" and requested.parent.name == "checkpoints":
+            direct = requested.parent.parent
+
+    if _is_v5_run_dir(direct):
+        return direct.resolve()
+
+    candidates: list[Path] = []
+    if direct.is_dir():
+        for config_path in direct.rglob("config.json"):
+            candidate = config_path.parent
+            if _is_v5_run_dir(candidate):
+                candidates.append(candidate.resolve())
+
+    unique = list(dict.fromkeys(candidates))
+    if unique:
+        return max(
+            unique,
+            key=lambda candidate: (
+                (candidate / "checkpoints" / "final.pt").stat().st_mtime,
+                str(candidate),
+            ),
+        )
+
+    required = "config.json, vocab.json, checkpoints/final.pt"
+    raise FileNotFoundError(
+        f"Could not resolve a completed v5 run under '{requested}'. "
+        f"A valid run must contain: {required}. If this is a fresh Colab runtime, "
+        "mount Google Drive or upload/copy the saved v5 result bundle first."
+    )
+
+
 def _softmax_np(logits: torch.Tensor) -> np.ndarray:
     return F.softmax(logits.detach().float().cpu(), dim=-1).numpy()
 
@@ -39,6 +88,7 @@ def _margin(logits: torch.Tensor, target_id: int, competitor_ids: list[int]) -> 
 
 
 def load_v5_state(run_dir: Path, device: str | None = None):
+    run_dir = resolve_v5_run_dir(run_dir)
     cfg = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))
     if device is not None:
         cfg["device"] = device
@@ -114,7 +164,7 @@ def run_switch_and_retrieval_diagnostics(
     seed_offset: int = 77_000,
     device: str | None = None,
 ) -> dict[str, pd.DataFrame]:
-    run_dir = Path(run_dir)
+    run_dir = resolve_v5_run_dir(run_dir)
     cfg, vocab, model = load_v5_state(run_dir, device=device)
     device = cfg["device"]
     train = cfg["train"]
