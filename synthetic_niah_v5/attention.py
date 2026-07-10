@@ -59,7 +59,7 @@ def run_attention(cfg: dict[str, Any], vocab: Vocab, run_dir: Path) -> pd.DataFr
     for ex in examples:
         for rendered in [
             render_thinking(ex, vocab, trace_indices=bool(cfg["trace_indices"])),
-            render_nonthinking(ex, vocab, ablate_no_conflict_mask=bool(cfg["ablate_no_conflict_mask"])),
+            render_nonthinking(ex, vocab),
         ]:
             input_ids = torch.tensor([rendered.input_ids], dtype=torch.long, device=cfg["device"])
             out = model(input_ids=input_ids, output_attentions=True)

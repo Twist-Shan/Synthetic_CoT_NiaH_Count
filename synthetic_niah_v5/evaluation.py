@@ -8,11 +8,11 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
-from .data import BaseExample, balanced_examples, count_bin, nonthinking_query, thinking_query
+from .data import BaseExample, balanced_examples, count_bin, nonthinking_query, thinking_query, trace_tokens_for_example
 from .generation import greedy_generate_one, next_token_logits
 from .model import make_model
 from .train import checkpoint_steps, load_checkpoint
-from .vocab import MARKER_TOKENS, Vocab, token_to_count
+from .vocab import MARKER_TOKENS, Vocab, index_token, token_to_count
 
 
 @dataclass(frozen=True)
@@ -107,35 +107,37 @@ def evaluate_nonthinking(
     model,
     examples: list[BaseExample],
     vocab: Vocab,
+    cfg: dict[str, Any],
     device: str | torch.device,
-    batch_size: int,
 ) -> list[dict[str, Any]]:
-    prefixes = [nonthinking_query(ex, vocab) for ex in examples]
-    logits = next_token_logits(model, prefixes, vocab, device, batch_size=batch_size)
-    count_ids = torch.tensor(vocab.count_ids, dtype=torch.long)
-    restricted = logits.index_select(1, count_ids)
-    preds = restricted.argmax(dim=-1).tolist()
     rows: list[dict[str, Any]] = []
-    for ex, pred_offset in zip(examples, preds):
-        pred = int(pred_offset) + 1
+    max_new = int(cfg["train"]["count_max"]) + 4
+    for ex in examples:
+        gen_ids = greedy_generate_one(
+            model,
+            nonthinking_query(ex, vocab),
+            vocab,
+            device,
+            max_new_tokens=max_new,
+            continue_after_close=2,
+        )
+        gen_tokens = vocab.decode(gen_ids)
+        parsed = parse_thinking_generation(gen_tokens, [])
+        pred = parsed.final_count
         rows.append(
             {
                 "mode": "nonthinking",
                 "count": ex.count,
                 "count_bin": count_bin(ex.count),
-                "pred_count": pred,
+                "pred_count": pred if pred is not None else -1,
                 "final_accuracy": float(pred == ex.count),
-                "final_mae": abs(pred - ex.count),
-                "undercount_rate": float(pred < ex.count),
-                "overcount_rate": float(pred > ex.count),
-                "trace_exact": math.nan,
-                "trace_marker_precision": math.nan,
-                "trace_marker_recall": math.nan,
-                "trace_duplicate_rate": math.nan,
-                "premature_close_rate": math.nan,
-                "missing_close_rate": math.nan,
-                "invalid_count_rate": 0.0,
-                "generated": "",
+                "final_mae": abs(pred - ex.count) if pred is not None else math.nan,
+                "undercount_rate": float(pred < ex.count) if pred is not None else math.nan,
+                "overcount_rate": float(pred > ex.count) if pred is not None else math.nan,
+                "first_token_switch_accuracy": float(bool(gen_tokens) and gen_tokens[0] == "</Think>"),
+                "empty_trace_rate": float(parsed.has_close and not parsed.trace_tokens),
+                "generated": " ".join(gen_tokens),
+                **trace_metric_dict(parsed, []),
             }
         )
     return rows
@@ -156,6 +158,7 @@ def evaluate_thinking(
         gen_tokens = vocab.decode(gen_ids)
         parsed = parse_thinking_generation(gen_tokens, ex.needle_markers)
         pred = parsed.final_count
+        expected_first = trace_tokens_for_example(ex, trace_indices=bool(cfg["trace_indices"]))[0]
         rows.append(
             {
                 "mode": "thinking",
@@ -166,6 +169,8 @@ def evaluate_thinking(
                 "final_mae": abs(pred - ex.count) if pred is not None else math.nan,
                 "undercount_rate": float(pred < ex.count) if pred is not None else math.nan,
                 "overcount_rate": float(pred > ex.count) if pred is not None else math.nan,
+                "first_token_switch_accuracy": float(bool(gen_tokens) and gen_tokens[0] == expected_first),
+                "empty_trace_rate": float(not parsed.trace_tokens),
                 "generated": " ".join(gen_tokens),
                 **trace_metric_dict(parsed, ex.needle_markers),
             }
@@ -174,7 +179,7 @@ def evaluate_thinking(
 
 
 @torch.no_grad()
-def ambiguous_prefix_diagnostic(
+def mode_switch_diagnostic(
     model,
     examples: list[BaseExample],
     vocab: Vocab,
@@ -183,23 +188,41 @@ def ambiguous_prefix_diagnostic(
 ) -> pd.DataFrame:
     import pandas as pd
 
-    logits = next_token_logits(model, [thinking_query(ex, vocab) for ex in examples], vocab, device, batch_size=batch_size)
+    modes = ["thinking", "nonthinking"]
+    prefixes = [
+        thinking_query(ex, vocab) if mode == "thinking" else nonthinking_query(ex, vocab)
+        for ex in examples
+        for mode in modes
+    ]
+    logits = next_token_logits(model, prefixes, vocab, device, batch_size=batch_size)
     probs = F.softmax(logits, dim=-1)
     marker_ids = torch.tensor(vocab.marker_ids, dtype=torch.long)
     rows: list[dict[str, Any]] = []
-    for ex, prob in zip(examples, probs):
+    trace_indices = bool(vocab.include_trace_indices)
+    for (ex, mode), prob in zip(((ex, mode) for ex in examples for mode in modes), probs):
         argmax_id = int(prob.argmax().item())
         gold_first_id = vocab.token_to_id[ex.needle_markers[0]]
+        desired_id = (
+            vocab.token_to_id[index_token(1)]
+            if mode == "thinking" and trace_indices
+            else gold_first_id
+            if mode == "thinking"
+            else vocab.think_close_id
+        )
         rows.append(
             {
+                "mode": mode,
                 "count": ex.count,
                 "count_bin": count_bin(ex.count),
                 "p_close_after_think": float(prob[vocab.think_close_id].item()),
                 "p_any_marker_after_think": float(prob.index_select(0, marker_ids).sum().item()),
                 "p_gold_first_marker_after_think": float(prob[gold_first_id].item()),
+                "p_desired_next_token": float(prob[desired_id].item()),
+                "desired_next_token": vocab.id_to_token[desired_id],
                 "argmax_token_after_think": vocab.id_to_token[argmax_id],
                 "argmax_is_close": float(argmax_id == vocab.think_close_id),
                 "argmax_is_gold_first_marker": float(argmax_id == gold_first_id),
+                "argmax_is_desired": float(argmax_id == desired_id),
             }
         )
     return pd.DataFrame(rows)
@@ -224,6 +247,8 @@ def summarize_eval_rows(rows: pd.DataFrame, step: int) -> pd.DataFrame:
         "premature_close_rate",
         "missing_close_rate",
         "invalid_count_rate",
+        "first_token_switch_accuracy",
+        "empty_trace_rate",
     ]
     if rows.empty:
         return pd.DataFrame(columns=schema)
@@ -236,20 +261,24 @@ def summarize_eval_rows(rows: pd.DataFrame, step: int) -> pd.DataFrame:
     return out[schema]
 
 
-def summarize_ambiguous_rows(rows: pd.DataFrame, step: int) -> pd.DataFrame:
+def summarize_switch_rows(rows: pd.DataFrame, step: int) -> pd.DataFrame:
     import pandas as pd
 
     schema = [
         "step",
+        "mode",
         "count",
         "count_bin",
         "n_examples",
         "p_close_after_think",
         "p_any_marker_after_think",
         "p_gold_first_marker_after_think",
+        "p_desired_next_token",
+        "desired_next_token",
         "argmax_token_after_think",
         "argmax_is_close",
         "argmax_is_gold_first_marker",
+        "argmax_is_desired",
     ]
     if rows.empty:
         return pd.DataFrame(columns=schema)
@@ -257,17 +286,21 @@ def summarize_ambiguous_rows(rows: pd.DataFrame, step: int) -> pd.DataFrame:
         "p_close_after_think",
         "p_any_marker_after_think",
         "p_gold_first_marker_after_think",
+        "p_desired_next_token",
         "argmax_is_close",
         "argmax_is_gold_first_marker",
+        "argmax_is_desired",
     ]
-    out = rows.groupby(["count", "count_bin"], dropna=False)[numeric].mean().reset_index()
+    group_cols = ["mode", "count", "count_bin"]
+    out = rows.groupby(group_cols, dropna=False)[numeric].mean().reset_index()
     argmax = (
-        rows.groupby(["count", "count_bin"], dropna=False)["argmax_token_after_think"]
+        rows.groupby(group_cols, dropna=False)["argmax_token_after_think"]
         .agg(lambda s: s.value_counts().index[0])
         .reset_index()
     )
-    counts = rows.groupby(["count", "count_bin"], dropna=False).size().reset_index(name="n_examples")
-    out = out.merge(argmax, on=["count", "count_bin"], how="left").merge(counts, on=["count", "count_bin"], how="left")
+    desired = rows.groupby(group_cols, dropna=False)["desired_next_token"].first().reset_index()
+    counts = rows.groupby(group_cols, dropna=False).size().reset_index(name="n_examples")
+    out = out.merge(desired, on=group_cols, how="left").merge(argmax, on=group_cols, how="left").merge(counts, on=group_cols, how="left")
     out.insert(0, "step", int(step))
     return out[schema]
 
@@ -281,7 +314,7 @@ def run_evaluation(cfg: dict[str, Any], vocab: Vocab, run_dir: Path) -> tuple[pd
     batch_size = min(256, int(cfg["train"]["batch_size"]))
     eval_parts: list[pd.DataFrame] = []
     example_parts: list[pd.DataFrame] = []
-    ambiguous_parts: list[pd.DataFrame] = []
+    switch_parts: list[pd.DataFrame] = []
     steps = checkpoint_steps(run_dir, int(cfg["train"]["train_steps"]))
     if not steps:
         raise FileNotFoundError("No checkpoints found. Run --stage train first.")
@@ -289,20 +322,20 @@ def run_evaluation(cfg: dict[str, Any], vocab: Vocab, run_dir: Path) -> tuple[pd
         print(f"[eval] step={step}", flush=True)
         model = make_model(cfg["model"], cfg["device"])
         load_checkpoint(model, ckpt_path, cfg["device"])
-        rows = evaluate_nonthinking(model, examples, vocab, cfg["device"], batch_size)
+        rows = evaluate_nonthinking(model, examples, vocab, cfg, cfg["device"])
         rows.extend(evaluate_thinking(model, examples, vocab, cfg, cfg["device"]))
         per_df = pd.DataFrame(rows)
         per_df.insert(0, "step", int(step))
         example_parts.append(per_df)
         eval_parts.append(summarize_eval_rows(per_df, step))
-        ambiguous_parts.append(summarize_ambiguous_rows(ambiguous_prefix_diagnostic(model, examples, vocab, cfg["device"], batch_size), step))
+        switch_parts.append(summarize_switch_rows(mode_switch_diagnostic(model, examples, vocab, cfg["device"], batch_size), step))
         del model
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
     eval_by_step = pd.concat(eval_parts, ignore_index=True)
     eval_examples = pd.concat(example_parts, ignore_index=True)
-    ambiguous = pd.concat(ambiguous_parts, ignore_index=True)
+    mode_switch = pd.concat(switch_parts, ignore_index=True)
     eval_by_step.to_csv(tables / "eval_by_step.csv", index=False)
     eval_examples.to_csv(tables / "eval_examples.csv", index=False)
-    ambiguous.to_csv(tables / "ambiguous_prefix.csv", index=False)
-    return eval_by_step, ambiguous, eval_examples
+    mode_switch.to_csv(tables / "mode_switch.csv", index=False)
+    return eval_by_step, mode_switch, eval_examples

@@ -60,10 +60,10 @@ def run(args: argparse.Namespace) -> Path:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Synthetic NIAH Counting v5 mixed thinking toggle runner")
+    parser = argparse.ArgumentParser(description="Synthetic NIAH Counting v5 explicit soft-switch runner")
     parser.add_argument("--preset", choices=["debug", "main"], default="debug")
     parser.add_argument("--stage", choices=["train", "eval", "cache", "probe", "attention", "plots", "report", "all"], default="all")
-    parser.add_argument("--out-root", "--out_root", dest="out_root", default="outputs/v5")
+    parser.add_argument("--out-root", "--out_root", dest="out_root", default="outputs/v5_explicit_switch")
     parser.add_argument("--run-name", "--run_name", dest="run_name", default="")
     parser.add_argument("--device", choices=["cpu", "cuda", "mps"], default=None)
     parser.add_argument("--seed", type=int, default=None)
@@ -78,7 +78,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--attention-examples-per-count", "--attention_examples_per_count", dest="attention_examples_per_count", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--trace-indices", "--trace_indices", dest="trace_indices", action="store_true")
-    parser.add_argument("--ablate-no-conflict-mask", "--ablate_no_conflict_mask", dest="ablate_no_conflict_mask", action="store_true")
     return parser
 
 

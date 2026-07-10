@@ -101,14 +101,15 @@ def build_config(args: argparse.Namespace) -> dict[str, Any]:
     cfg["preset"] = args.preset
     cfg["device"] = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     cfg["trace_indices"] = bool(args.trace_indices)
-    cfg["ablate_no_conflict_mask"] = bool(args.ablate_no_conflict_mask)
-    cfg["model"]["vocab_size"] = 98 if cfg["trace_indices"] else 88
+    cfg["format_version"] = "explicit_soft_switch_v2"
+    cfg["model"]["vocab_size"] = 100 if cfg["trace_indices"] else 90
     cfg["model"]["bos_token_id"] = 0
     cfg["model"]["eos_token_id"] = 1
     cfg["model"]["pad_token_id"] = 1
     cfg["run_name"] = args.run_name or ""
     cfg["out_root"] = args.out_root
-    max_render_len = int(train["seq_len"]) + 2 * int(train["count_max"]) + 4
+    trace_width = 2 if cfg["trace_indices"] else 1
+    max_render_len = int(train["seq_len"]) + trace_width * int(train["count_max"]) + 6
     if max_render_len > int(model["n_positions"]):
         raise ValueError("Rendered sequence can exceed model.n_positions; lower seq_len/count_max or raise n_positions.")
     return cfg

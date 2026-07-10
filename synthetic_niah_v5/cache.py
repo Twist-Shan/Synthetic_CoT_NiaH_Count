@@ -27,6 +27,7 @@ def final_checkpoint_path(run_dir: Path) -> Path:
 def _records_for_rendered(rendered, hidden_states, example_id: int) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     anchors: list[tuple[str, int, str, int, bool]] = [
+        ("mode_pos", rendered.spans.mode_pos, "final_count", 0, False),
         ("think_open_pos", rendered.spans.think_open_pos, "final_count", 0, False),
         ("think_close_pos", rendered.spans.think_close_pos, "final_count", 0, False),
         ("pre_count_pos", rendered.spans.pre_count_pos, "final_count", 0, False),
@@ -93,7 +94,7 @@ def run_cache(cfg: dict[str, Any], vocab: Vocab, run_dir: Path) -> tuple[pd.Data
     for example_id, ex in enumerate(examples):
         for rendered in [
             render_thinking(ex, vocab, trace_indices=bool(cfg["trace_indices"])),
-            render_nonthinking(ex, vocab, ablate_no_conflict_mask=bool(cfg["ablate_no_conflict_mask"])),
+            render_nonthinking(ex, vocab),
         ]:
             local_rows, local_vectors = _collect_one(model, rendered, cfg["device"])
             start_idx = len(vectors)
@@ -110,7 +111,7 @@ def run_cache(cfg: dict[str, Any], vocab: Vocab, run_dir: Path) -> tuple[pd.Data
     sim_rows: list[dict[str, Any]] = []
     for example_id, ex in enumerate(examples):
         think = render_thinking(ex, vocab, trace_indices=bool(cfg["trace_indices"]))
-        non = render_nonthinking(ex, vocab, ablate_no_conflict_mask=bool(cfg["ablate_no_conflict_mask"]))
+        non = render_nonthinking(ex, vocab)
         t_ids = torch.tensor([think.input_ids[: think.spans.think_close_pos + 1]], dtype=torch.long, device=cfg["device"])
         n_ids = torch.tensor([non.input_ids[: non.spans.think_close_pos + 1]], dtype=torch.long, device=cfg["device"])
         t_out = model(input_ids=t_ids, output_hidden_states=True)

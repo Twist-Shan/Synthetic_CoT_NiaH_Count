@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 import pytest
 
@@ -8,7 +9,10 @@ from synthetic_counting_extensions.v5_2_switch_diagnostics import resolve_v5_run
 def make_run(path: Path) -> Path:
     path.mkdir(parents=True)
     (path / "config.json").write_text("{}", encoding="utf-8")
-    (path / "vocab.json").write_text("{}", encoding="utf-8")
+    (path / "vocab.json").write_text(
+        json.dumps({"id_to_token": ["<BOS>", "<EOS>", "<THINK_ON>", "<THINK_OFF>"]}),
+        encoding="utf-8",
+    )
     checkpoint = path / "checkpoints" / "final.pt"
     checkpoint.parent.mkdir()
     checkpoint.write_bytes(b"checkpoint")
@@ -26,5 +30,5 @@ def test_resolves_nested_downloaded_result_bundle(tmp_path: Path) -> None:
 
 
 def test_invalid_parent_has_actionable_error(tmp_path: Path) -> None:
-    with pytest.raises(FileNotFoundError, match="config.json, vocab.json, checkpoints/final.pt"):
+    with pytest.raises(FileNotFoundError, match="config.json, vocab.json with"):
         resolve_v5_run_dir(tmp_path)

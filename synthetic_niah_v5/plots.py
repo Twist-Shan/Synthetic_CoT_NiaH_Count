@@ -33,7 +33,7 @@ def make_plots(run_dir: Path) -> None:
     sns.set_theme(style="whitegrid", context="notebook")
     train = pd.read_csv(tables / "train_log.csv") if (tables / "train_log.csv").exists() else pd.DataFrame()
     eval_df = pd.read_csv(tables / "eval_by_step.csv") if (tables / "eval_by_step.csv").exists() else pd.DataFrame()
-    amb = pd.read_csv(tables / "ambiguous_prefix.csv") if (tables / "ambiguous_prefix.csv").exists() else pd.DataFrame()
+    switch = pd.read_csv(tables / "mode_switch.csv") if (tables / "mode_switch.csv").exists() else pd.DataFrame()
     sim = pd.read_csv(tables / "mode_hidden_similarity.csv") if (tables / "mode_hidden_similarity.csv").exists() else pd.DataFrame()
     attn = pd.read_csv(tables / "attention_metrics.csv") if (tables / "attention_metrics.csv").exists() else pd.DataFrame()
     examples = pd.read_csv(tables / "eval_examples.csv") if (tables / "eval_examples.csv").exists() else pd.DataFrame()
@@ -41,7 +41,7 @@ def make_plots(run_dir: Path) -> None:
     if not train.empty:
         long = train.melt(
             id_vars=["step"],
-            value_vars=["loss_total", "loss_thinking_trace", "loss_thinking_final_count", "loss_nonthinking_final_count"],
+            value_vars=["loss_total", "loss_thinking_trace", "loss_thinking_final_count", "loss_nonthinking_close", "loss_nonthinking_final_count"],
             var_name="loss_name",
             value_name="loss",
         )
@@ -88,18 +88,15 @@ def make_plots(run_dir: Path) -> None:
         _empty_plot(figures / "final_accuracy_by_count_mode.png", "v5 final accuracy by count")
         _empty_plot(figures / "trace_metrics_by_count.png", "v5 trace metrics")
 
-    if not amb.empty:
-        amb_step = amb.groupby("step", as_index=False)[
-            ["p_close_after_think", "p_any_marker_after_think", "p_gold_first_marker_after_think"]
-        ].mean()
-        long = amb_step.melt(id_vars=["step"], var_name="probability", value_name="value")
+    if not switch.empty:
+        switch_step = switch.groupby(["step", "mode"], as_index=False)["argmax_is_desired"].mean()
         plt.figure(figsize=(8, 4.2))
-        sns.lineplot(data=long, x="step", y="value", hue="probability", marker="o", errorbar=None)
+        sns.lineplot(data=switch_step, x="step", y="argmax_is_desired", hue="mode", marker="o", errorbar=None)
         plt.ylim(-0.03, 1.03)
-        plt.title("v5 ambiguous-prefix probabilities")
-        _save(figures / "ambiguous_prefix_probs_by_step.png")
+        plt.title("v5 explicit mode-switch accuracy")
+        _save(figures / "mode_switch_accuracy_by_step.png")
     else:
-        _empty_plot(figures / "ambiguous_prefix_probs_by_step.png", "v5 ambiguous-prefix probabilities")
+        _empty_plot(figures / "mode_switch_accuracy_by_step.png", "v5 mode-switch accuracy")
 
     for mode, filename in [("thinking", "confusion_matrix_thinking.png"), ("nonthinking", "confusion_matrix_nonthinking.png")]:
         if not examples.empty and mode in set(examples["mode"]):

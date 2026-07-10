@@ -56,7 +56,6 @@ def sample_training_batch(train_cfg: dict[str, Any], vocab: Vocab, rng: random.R
                 variant,
                 vocab,
                 trace_indices=bool(cfg["trace_indices"]),
-                ablate_no_conflict_mask=bool(cfg["ablate_no_conflict_mask"]),
             )
         )
     return rendered
@@ -72,6 +71,8 @@ def _component_mask(rendered: list[RenderedExample], max_ce_len: int, component:
             positions = [item.spans.count_pos]
         elif component == "nonthinking_final_count" and item.variant == "nonthinking":
             positions = [item.spans.count_pos]
+        elif component == "nonthinking_close" and item.variant == "nonthinking":
+            positions = [item.spans.think_close_pos]
         for target_pos in positions:
             ce_pos = target_pos - 1
             if 0 <= ce_pos < max_ce_len:
@@ -154,6 +155,7 @@ def train_model(cfg: dict[str, Any], vocab: Vocab, run_dir: Path) -> pd.DataFram
                 "loss_total": float(loss.detach().cpu()),
                 "loss_thinking_trace": _masked_mean(ce, _component_mask(rendered, max_ce_len, "thinking_trace")),
                 "loss_thinking_final_count": _masked_mean(ce, _component_mask(rendered, max_ce_len, "thinking_final_count")),
+                "loss_nonthinking_close": _masked_mean(ce, _component_mask(rendered, max_ce_len, "nonthinking_close")),
                 "loss_nonthinking_final_count": _masked_mean(ce, _component_mask(rendered, max_ce_len, "nonthinking_final_count")),
                 "lr": lr,
             }

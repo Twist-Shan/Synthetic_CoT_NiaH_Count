@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-SPECIAL_TOKENS = ["<BOS>", "<EOS>", "<Think/>", "</Think>"]
+SPECIAL_TOKENS = ["<BOS>", "<EOS>", "<THINK_ON>", "<THINK_OFF>", "<Think/>", "</Think>"]
 NOISE_TOKENS = [f"<N{i}>" for i in range(64)]
 MARKER_TOKENS = [f"<{chr(ord('A') + i)}>" for i in range(10)]
 COUNT_TOKENS = [f"<C{i}>" for i in range(1, 11)]
@@ -30,7 +30,15 @@ class Vocab:
     @classmethod
     def load(cls, path: str | Path) -> "Vocab":
         obj = json.loads(Path(path).read_text(encoding="utf-8"))
-        return cls(dict(obj["token_to_id"]), list(obj["id_to_token"]), bool(obj.get("include_trace_indices", False)))
+        vocab = cls(dict(obj["token_to_id"]), list(obj["id_to_token"]), bool(obj.get("include_trace_indices", False)))
+        missing = [token for token in ("<THINK_ON>", "<THINK_OFF>") if token not in vocab.token_to_id]
+        if missing:
+            raise ValueError(
+                "This is a legacy v5 vocabulary without explicit thinking-mode tokens. "
+                "Retrain v5 with the current soft-switch format before loading it. "
+                f"Missing tokens: {missing}"
+            )
+        return vocab
 
     def save(self, path: str | Path) -> None:
         Path(path).write_text(
@@ -66,6 +74,14 @@ class Vocab:
     @property
     def think_id(self) -> int:
         return self.token_to_id["<Think/>"]
+
+    @property
+    def think_on_id(self) -> int:
+        return self.token_to_id["<THINK_ON>"]
+
+    @property
+    def think_off_id(self) -> int:
+        return self.token_to_id["<THINK_OFF>"]
 
     @property
     def think_close_id(self) -> int:

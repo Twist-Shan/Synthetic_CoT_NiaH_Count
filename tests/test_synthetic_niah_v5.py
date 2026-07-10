@@ -17,9 +17,10 @@ from synthetic_niah_v5.vocab import Vocab, count_token
 
 def test_v5_tokenizer_round_trip():
     vocab = Vocab.build()
-    tokens = ["<BOS>", "<N0>", "<A>", "<Think/>", "</Think>", "<C3>", "<EOS>"]
+    tokens = ["<BOS>", "<THINK_ON>", "<N0>", "<A>", "<Think/>", "</Think>", "<C3>", "<EOS>"]
     assert vocab.decode(vocab.encode(tokens)) == tokens
-    assert len(vocab.id_to_token) == 88
+    assert len(vocab.id_to_token) == 90
+    assert vocab.think_on_id != vocab.think_off_id
 
 
 def test_v5_base_generator_count_correctness():
@@ -38,6 +39,8 @@ def test_v5_thinking_render_and_mask_marker_only():
     ex = make_example(16, 3, random.Random(1))
     rendered = render_thinking(ex, vocab)
     assert rendered.token_strs[0] == "<BOS>"
+    assert rendered.token_strs[rendered.spans.mode_pos] == "<THINK_ON>"
+    assert rendered.spans.seq_start == 2
     assert rendered.token_strs[rendered.spans.think_open_pos] == "<Think/>"
     assert rendered.token_strs[rendered.spans.trace_token_positions[0] : rendered.spans.trace_token_positions[-1] + 1] == trace_tokens_for_example(ex)
     assert rendered.token_strs[rendered.spans.think_close_pos] == "</Think>"
@@ -48,24 +51,24 @@ def test_v5_thinking_render_and_mask_marker_only():
     assert rendered.labels[rendered.spans.count_pos] == vocab.count_id(ex.count)
 
 
-def test_v5_nonthinking_mask_and_ablation():
+def test_v5_nonthinking_has_explicit_mode_and_supervises_close():
     vocab = Vocab.build()
     ex = make_example(16, 4, random.Random(2))
     rendered = render_nonthinking(ex, vocab)
+    assert rendered.token_strs[rendered.spans.mode_pos] == "<THINK_OFF>"
     assert rendered.token_strs[rendered.spans.think_open_pos] == "<Think/>"
     assert rendered.token_strs[rendered.spans.think_close_pos] == "</Think>"
     assert rendered.labels[rendered.spans.think_open_pos] == IGNORE_INDEX
-    assert rendered.labels[rendered.spans.think_close_pos] == IGNORE_INDEX
+    assert rendered.labels[rendered.spans.think_close_pos] == vocab.think_close_id
     assert rendered.labels[rendered.spans.count_pos] == vocab.count_id(ex.count)
-    ablated = render_nonthinking(ex, vocab, ablate_no_conflict_mask=True)
-    assert ablated.labels[ablated.spans.think_close_pos] == vocab.think_close_id
 
 
 def test_v5_query_construction():
     vocab = Vocab.build()
     ex = make_example(8, 2, random.Random(3))
-    assert vocab.decode(thinking_query(ex, vocab)) == ["<BOS>"] + ex.seq_tokens + ["<Think/>"]
-    assert vocab.decode(nonthinking_query(ex, vocab)) == ["<BOS>"] + ex.seq_tokens + ["<Think/>", "</Think>"]
+    assert vocab.decode(thinking_query(ex, vocab)) == ["<BOS>", "<THINK_ON>"] + ex.seq_tokens + ["<Think/>"]
+    assert vocab.decode(nonthinking_query(ex, vocab)) == ["<BOS>", "<THINK_OFF>"] + ex.seq_tokens + ["<Think/>"]
+    assert thinking_query(ex, vocab) != nonthinking_query(ex, vocab)
 
 
 def test_v5_eval_parser_edge_cases():

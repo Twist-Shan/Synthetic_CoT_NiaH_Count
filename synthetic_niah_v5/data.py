@@ -22,6 +22,7 @@ class BaseExample:
 @dataclass(frozen=True)
 class RenderSpans:
     bos_pos: int
+    mode_pos: int
     seq_start: int
     seq_end_exclusive: int
     think_open_pos: int
@@ -137,8 +138,8 @@ def _build_labels(
 
 def render_thinking(example: BaseExample, vocab: Vocab, trace_indices: bool = False) -> RenderedExample:
     trace = trace_tokens_for_example(example, trace_indices=trace_indices)
-    token_strs = ["<BOS>"] + example.seq_tokens + ["<Think/>"] + trace + ["</Think>", count_token(example.count), "<EOS>"]
-    think_open_pos = 1 + example.seq_len
+    token_strs = ["<BOS>", "<THINK_ON>"] + example.seq_tokens + ["<Think/>"] + trace + ["</Think>", count_token(example.count), "<EOS>"]
+    think_open_pos = 2 + example.seq_len
     trace_start = think_open_pos + 1
     trace_positions = list(range(trace_start, trace_start + len(trace)))
     if trace_indices:
@@ -152,8 +153,9 @@ def render_thinking(example: BaseExample, vocab: Vocab, trace_indices: bool = Fa
     eos_pos = count_pos + 1
     spans = RenderSpans(
         bos_pos=0,
-        seq_start=1,
-        seq_end_exclusive=1 + example.seq_len,
+        mode_pos=1,
+        seq_start=2,
+        seq_end_exclusive=2 + example.seq_len,
         think_open_pos=think_open_pos,
         trace_token_positions=trace_positions,
         trace_index_positions=trace_index_positions,
@@ -179,17 +181,17 @@ def render_thinking(example: BaseExample, vocab: Vocab, trace_indices: bool = Fa
 def render_nonthinking(
     example: BaseExample,
     vocab: Vocab,
-    ablate_no_conflict_mask: bool = False,
 ) -> RenderedExample:
-    token_strs = ["<BOS>"] + example.seq_tokens + ["<Think/>", "</Think>", count_token(example.count), "<EOS>"]
-    think_open_pos = 1 + example.seq_len
+    token_strs = ["<BOS>", "<THINK_OFF>"] + example.seq_tokens + ["<Think/>", "</Think>", count_token(example.count), "<EOS>"]
+    think_open_pos = 2 + example.seq_len
     think_close_pos = think_open_pos + 1
     count_pos = think_close_pos + 1
     eos_pos = count_pos + 1
     spans = RenderSpans(
         bos_pos=0,
-        seq_start=1,
-        seq_end_exclusive=1 + example.seq_len,
+        mode_pos=1,
+        seq_start=2,
+        seq_end_exclusive=2 + example.seq_len,
         think_open_pos=think_open_pos,
         trace_token_positions=[],
         trace_index_positions=[],
@@ -199,9 +201,7 @@ def render_nonthinking(
         count_pos=count_pos,
         eos_pos=eos_pos,
     )
-    supervised = [count_pos, eos_pos]
-    if ablate_no_conflict_mask:
-        supervised = [think_close_pos] + supervised
+    supervised = [think_close_pos, count_pos, eos_pos]
     needle_positions = [spans.seq_start + pos for pos in example.needle_positions]
     return RenderedExample(
         "nonthinking",
@@ -219,22 +219,27 @@ def render_example(
     variant: str,
     vocab: Vocab,
     trace_indices: bool = False,
-    ablate_no_conflict_mask: bool = False,
 ) -> RenderedExample:
     if variant == "thinking":
         return render_thinking(example, vocab, trace_indices=trace_indices)
     if variant in {"nonthinking", "non_thinking"}:
-        return render_nonthinking(example, vocab, ablate_no_conflict_mask=ablate_no_conflict_mask)
+        return render_nonthinking(example, vocab)
     raise ValueError(f"Unknown variant={variant}")
 
 
 def thinking_query(example: BaseExample, vocab: Vocab) -> list[int]:
-    return vocab.encode(["<BOS>"] + example.seq_tokens + ["<Think/>"])
+    return vocab.encode(["<BOS>", "<THINK_ON>"] + example.seq_tokens + ["<Think/>"])
 
 
 def nonthinking_query(example: BaseExample, vocab: Vocab) -> list[int]:
-    return vocab.encode(["<BOS>"] + example.seq_tokens + ["<Think/>", "</Think>"])
+    return vocab.encode(["<BOS>", "<THINK_OFF>"] + example.seq_tokens + ["<Think/>"])
 
 
 def thinking_oracle_prefix(example: BaseExample, vocab: Vocab, trace_indices: bool = False) -> list[int]:
-    return vocab.encode(["<BOS>"] + example.seq_tokens + ["<Think/>"] + trace_tokens_for_example(example, trace_indices) + ["</Think>"])
+    return vocab.encode(
+        ["<BOS>", "<THINK_ON>"]
+        + example.seq_tokens
+        + ["<Think/>"]
+        + trace_tokens_for_example(example, trace_indices)
+        + ["</Think>"]
+    )

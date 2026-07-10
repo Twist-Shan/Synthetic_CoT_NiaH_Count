@@ -61,7 +61,7 @@ python -m synthetic_niah_v5.run_v5 --preset debug --stage all
 python -m synthetic_niah_v5.run_v5 --preset main --stage all --device cuda
 ```
 
-v5 trains one shared v2-style GPT-2 LM with learned absolute positional embeddings. The query controls the mode with either `<Think/>` or `<Think/> </Think>`. In the default conflict-free objective, the non-thinking `</Think>` token is masked out of the loss; pass `--ablate-no-conflict-mask` only when you want to test that shortcut explicitly.
+v5 trains one shared v2-style GPT-2 LM with learned absolute positional embeddings and an explicit soft switch. Its two formats are `<BOS> <THINK_ON> prompt <Think/> trace </Think> <Cn> <EOS>` and `<BOS> <THINK_OFF> prompt <Think/> </Think> <Cn> <EOS>`. The mode token is visible before the prompt, and the non-thinking `</Think>` is supervised, so the model must learn to close the block itself. Legacy v5 checkpoints without the two mode tokens must be retrained.
 
 For the v6 separator-trace experiment, use `notebooks/Trace_Count_v6_Colab.ipynb` or run:
 

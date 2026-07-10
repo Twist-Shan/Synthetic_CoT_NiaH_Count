@@ -18,7 +18,7 @@ from synthetic_niah_v5.vocab import MARKER_TOKENS, Vocab, count_token, index_tok
 
 
 def _is_v5_run_dir(path: Path) -> bool:
-    return all(
+    has_files = all(
         candidate.is_file()
         for candidate in (
             path / "config.json",
@@ -26,6 +26,14 @@ def _is_v5_run_dir(path: Path) -> bool:
             path / "checkpoints" / "final.pt",
         )
     )
+    if not has_files:
+        return False
+    try:
+        vocab_obj = json.loads((path / "vocab.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    tokens = set(vocab_obj.get("id_to_token", []))
+    return {"<THINK_ON>", "<THINK_OFF>"}.issubset(tokens)
 
 
 def resolve_v5_run_dir(path: str | Path) -> Path:
@@ -58,7 +66,7 @@ def resolve_v5_run_dir(path: str | Path) -> Path:
             ),
         )
 
-    required = "config.json, vocab.json, checkpoints/final.pt"
+    required = "config.json, vocab.json with <THINK_ON>/<THINK_OFF>, checkpoints/final.pt"
     raise FileNotFoundError(
         f"Could not resolve a completed v5 run under '{requested}'. "
         f"A valid run must contain: {required}. If this is a fresh Colab runtime, "
@@ -191,7 +199,7 @@ def run_switch_and_retrieval_diagnostics(
     trace_start_ids = [vocab.token_to_id[index_token(1)]] if trace_indices else marker_ids
     for ex_idx, ex in enumerate(examples):
         rendered_think = render_thinking(ex, vocab, trace_indices=trace_indices)
-        rendered_non = render_nonthinking(ex, vocab, ablate_no_conflict_mask=bool(cfg.get("ablate_no_conflict_mask", False)))
+        rendered_non = render_nonthinking(ex, vocab)
         for rendered in [rendered_think, rendered_non]:
             input_ids = torch.tensor([rendered.input_ids], dtype=torch.long, device=device)
             out = model(input_ids=input_ids, output_attentions=True, output_hidden_states=True)
