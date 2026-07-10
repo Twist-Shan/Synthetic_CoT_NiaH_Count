@@ -8,13 +8,18 @@ jobs:
   unit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-      - name: Install lightweight test deps
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements.txt
+      - name: Install project and test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pyyaml
+          pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.2"
+          pip install -e . pytest
       - name: Run tests
-        run: PYTHONPATH=src pytest -q
+        run: pytest -q
