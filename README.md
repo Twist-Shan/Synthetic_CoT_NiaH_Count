@@ -77,6 +77,8 @@ python -m synthetic_niah_v5.run_v5 --preset main --stage all --device cuda
 
 v5 trains one shared v2-style GPT-2 LM with learned absolute positional embeddings and an explicit soft switch. Its two formats are `<BOS> <THINK_ON> prompt <Think/> trace </Think> <Cn> <EOS>` and `<BOS> <THINK_OFF> prompt <Think/> </Think> <Cn> <EOS>`. The mode token is visible before the prompt, and the non-thinking `</Think>` is supervised, so the model must learn to close the block itself. Legacy v5 checkpoints without the two mode tokens must be retrained.
 
+For causal analysis of how this model represents and uses count, run `notebooks/Trace_Count_v5_4_Count_State_Causal_Colab.ipynb`. It restores a completed indexed-trace v5 checkpoint and does not retrain. The notebook separates four claims that ordinary probes conflate: held-out readability, a shared global `+1` direction, class-specific centroid transport, and sufficiency of the complete residual state. It also uses position-matched needle-deletion patching to identify which head groups write an answer-relevant count state in THINK_OFF and after a trace-shaped THINK_ON computation. The full protocol is in `docs/pipelines/pipeline_v5_4_count_state_causal.md`.
+
 For the v6 separator-trace experiment, use `notebooks/Trace_Count_v6_Colab.ipynb` or run:
 
 ```bash
