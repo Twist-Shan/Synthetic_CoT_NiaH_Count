@@ -7,6 +7,7 @@ import json
 import math
 import sys
 import types
+from itertools import combinations
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -244,6 +245,49 @@ def table(rows: list[dict[str, object]], columns: list[tuple[str, str]]) -> str:
     return f"<div class='table-wrap'><table><thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table></div>"
 
 
+def html_section_span(document: str, section_id: str) -> tuple[int, int]:
+    marker = f'<section id="{section_id}">'
+    start = document.index(marker)
+    end = document.index("</section>", start) + len("</section>")
+    return start, end
+
+
+def finalize_report_numbering(report: str) -> str:
+    """Apply the public section order after replacing legacy report sections."""
+    replacements = {
+        "<h2>7. 分层 activation patching：候选 heads 是否局部充分</h2>":
+            "<h2>8. Attention-head patching：候选 heads 是否局部充分</h2>",
+        "<h3>7.1 CoT marker-identity clean-to-corrupt retrieval patch</h3>":
+            "<h3>8.1 CoT marker-identity clean-to-corrupt retrieval patch</h3>",
+        "<h3>7.2 Nested prompt donor→receiver count-head patch</h3>":
+            "<h3>8.2 Nested prompt donor→receiver count-head patch</h3>",
+        "<h2>8. 分层 geometry steering：可读方向是否也是可控方向</h2>":
+            "<h2>9. Hidden-state geometry steering：可读方向是否也是可控方向</h2>",
+        "<h2>9. 分层 residual transplant：完整 count state 能否搬运</h2>":
+            "<h2>10. Hidden-state patching：完整 count state 能否跨 sequence 搬运</h2>",
+        "<h3>9.1 Trace-progress transplant 的覆盖边界</h3>":
+            "<h3>10.1 CoT trace 内部的 hidden-state patching：覆盖边界</h3>",
+        "第 5B.1 节": "第 6.1 节",
+        "第 9 节的完整 centroid transplant": "第 10 节的完整 centroid transplant",
+        "<h2>11. 综合机制结论、证据强度与尚缺环节</h2>":
+            "<h2>12. 综合机制结论、证据强度与尚缺环节</h2>",
+    }
+    for old, new in replacements.items():
+        report = report.replace(old, new)
+
+    if '<section id="interaction">' not in report:
+        interaction_section = """
+        <section id="interaction">
+          <h2>11. Attention head 与 hidden state 的双向因果联系（下一步）</h2>
+          <p>第 7–10 节分别测试 attention heads 与 residual hidden states 的必要性或充分性；但它们尚未回答二者是否属于同一条串联因果链，还是两套并行、可互相补偿的计算路径。下一步将固定同一批 clean/corrupt pairs，测量：head ablation 或 head-output patch 后 count manifold、centroid projection 与 logits 如何改变；以及 residual steering/patching 后 broad、k-to-k 与 trace-readout attention signatures 是否随之改变。</p>
+          <div class="callout warn"><b>当前状态：</b>本节是明确的实验路线图，不把尚未运行的双向干预写成结果。现有证据只支持分别定位候选 attention circuit 与 count-state residual，而不能独立证明前者写入后者，或后者反向控制前者。</div>
+        </section>
+        """
+        synthesis_start = report.index('<section id="synthesis">')
+        report = report[:synthesis_start] + interaction_section + report[synthesis_start:]
+    return report
+
+
 def metric_cards(
     rows: list[dict[str, str]],
     *,
@@ -451,70 +495,222 @@ def save_training_by_bin(eval_bins: pd.DataFrame, path: Path) -> None:
     plt.close(fig)
 
 
-def save_attention(attention: pd.DataFrame, attention_rows: pd.DataFrame, path: Path) -> None:
-    direct = attention[(attention["mode"] == "nonthinking") & (attention["query_kind"] == "final_count_query")]
-    targeted_rows = attention_rows[
-        (attention_rows["mode"] == "thinking")
-        & (attention_rows["query_kind"] == "targeted_retrieval_query")
-    ].copy()
-    targeted_rows["count_bin"] = pd.cut(
-        targeted_rows["count"], [0, 10, 20, 30], labels=COUNT_BINS
-    ).astype(str)
-    fig, axes = plt.subplots(1, 4, figsize=(16.2, 4.1), constrained_layout=True)
-    heatmap(
-        axes[0],
-        head_matrix(direct, "broad_attention_score"),
-        "Non-thinking broad score | all counts",
-        vmin=0,
-        vmax=max(0.2, float(direct.broad_attention_score.max())),
+def _attention_rows_with_bins(attention_rows: pd.DataFrame) -> pd.DataFrame:
+    rows = attention_rows.copy()
+    rows["count_bin"] = pd.cut(rows["count"], [0, 10, 20, 30], labels=COUNT_BINS).astype(str)
+    return rows
+
+
+def save_broad_attention(attention_rows: pd.DataFrame, path: Path) -> None:
+    rows = _attention_rows_with_bins(attention_rows)
+    final_rows = rows[rows["query_kind"] == "final_count_query"]
+    grouped = (
+        final_rows.groupby(["mode", "count_bin", "layer", "head"], as_index=False)
+        .agg(
+            broad_attention_score=("broad_attention_score", "mean"),
+            prompt_needles_mass=("prompt_needles_mass", "mean"),
+            needle_entropy_normalized=("needle_entropy_normalized", "mean"),
+            needle_effective_number=("needle_effective_number", "mean"),
+        )
     )
-    for ax, count_bin in zip(axes[1:], COUNT_BINS):
-        group = (
-            targeted_rows[targeted_rows.count_bin == count_bin]
-            .groupby(["layer", "head"], as_index=False)
-            .correct_prompt_needle_mass.mean()
-        )
-        heatmap(
-            ax,
-            head_matrix(group, "correct_prompt_needle_mass"),
-            f"CoT k-to-k mass | count {count_bin}",
-            vmin=0,
-            vmax=1,
-        )
-    for ax in axes:
-        ax.set_xlabel("head (0-based)")
-        ax.set_ylabel("Layer (1-based)")
-    fig.suptitle("Descriptive attention candidates before causal intervention", fontsize=15, fontweight="bold")
-    fig.savefig(path, dpi=190, bbox_inches="tight")
-    plt.close(fig)
-
-
-def save_single_ablation(single: pd.DataFrame, path: Path) -> None:
-    specs = [
-        ("nonthinking", "drop_final_count_accuracy", "Non-thinking: final-count accuracy drop"),
-        ("thinking", "drop_trace_marker_accuracy", "CoT: trace-marker accuracy drop"),
-        ("thinking", "drop_final_count_accuracy", "CoT: final-count accuracy drop"),
-    ]
-    fig, axes = plt.subplots(3, 3, figsize=(13.7, 11.2), constrained_layout=True)
-    for row, (mode, metric, label) in enumerate(specs):
-        for col, count_bin in enumerate(COUNT_BINS):
-            frame = single[(single["mode"] == mode) & (single["count_bin"] == count_bin)]
-            matrix = head_matrix(frame, metric)
-            finite = matrix[np.isfinite(matrix)]
-            vmax = max(0.05, float(finite.max()) if finite.size else 1)
+    vmax = max(0.1, float(grouped.broad_attention_score.max()))
+    fig, axes = plt.subplots(2, 3, figsize=(14.8, 8.0), constrained_layout=True)
+    for row_idx, mode in enumerate(("nonthinking", "thinking")):
+        for col_idx, count_bin in enumerate(COUNT_BINS):
+            frame = grouped[(grouped["mode"] == mode) & (grouped["count_bin"] == count_bin)]
             heatmap(
-                axes[row, col],
-                matrix,
-                f"{label}\ncount {count_bin}",
+                axes[row_idx, col_idx],
+                head_matrix(frame, "broad_attention_score"),
+                f"{mode} | count {count_bin}",
                 vmin=0,
                 vmax=vmax,
-                cmap="magma",
+                cmap="viridis",
             )
-            axes[row, col].set_xlabel("head (0-based)")
-            axes[row, col].set_ylabel("Layer (1-based)")
-    fig.suptitle("Fresh global single-head ablation, stratified by count difficulty", fontsize=15, fontweight="bold")
+            axes[row_idx, col_idx].set_xlabel("head (0-based)")
+            axes[row_idx, col_idx].set_ylabel("Layer (1-based)")
+    fig.suptitle(
+        "Broad prompt-needle aggregation score at the final-answer query",
+        fontsize=15,
+        fontweight="bold",
+    )
     fig.savefig(path, dpi=190, bbox_inches="tight")
     plt.close(fig)
+
+
+def save_targeted_attention(attention_rows: pd.DataFrame, path: Path) -> None:
+    rows = _attention_rows_with_bins(attention_rows)
+    direct = rows[
+        (rows["mode"] == "nonthinking") & (rows["query_kind"] == "final_count_query")
+    ].copy()
+    direct["single_target_concentration"] = direct["prompt_needles_mass"] * (
+        1.0 - direct["needle_entropy_normalized"]
+    )
+    direct_grouped = (
+        direct.groupby(["count_bin", "layer", "head"], as_index=False)
+        .single_target_concentration.mean()
+    )
+    targeted = rows[
+        (rows["mode"] == "thinking")
+        & (rows["query_kind"] == "targeted_retrieval_query")
+    ]
+    targeted_grouped = (
+        targeted.groupby(["count_bin", "layer", "head"], as_index=False)
+        .agg(
+            correct_prompt_needle_mass=("correct_prompt_needle_mass", "mean"),
+            diagonal_dominance=("diagonal_dominance", "mean"),
+            correct_top1=("correct_top1", "mean"),
+        )
+    )
+    fig, axes = plt.subplots(4, 3, figsize=(14.8, 14.4), constrained_layout=True)
+    row_specs = (
+        (direct_grouped, "single_target_concentration", "Non-thinking final-query\nsingle-target concentration"),
+        (targeted_grouped, "correct_prompt_needle_mass", "CoT k-to-k raw mass"),
+        (targeted_grouped, "diagonal_dominance", "CoT diagonal dominance\nwithin prompt needles"),
+        (targeted_grouped, "correct_top1", "CoT correct top-1\nwithin prompt needles"),
+    )
+    for row_idx, (source, metric, label) in enumerate(row_specs):
+        for col_idx, count_bin in enumerate(COUNT_BINS):
+            frame = source[source["count_bin"] == count_bin]
+            heatmap(
+                axes[row_idx, col_idx],
+                head_matrix(frame, metric),
+                f"{label} | count {count_bin}",
+                vmin=0,
+                vmax=1,
+                cmap="viridis",
+            )
+            axes[row_idx, col_idx].set_xlabel("head (0-based)")
+            axes[row_idx, col_idx].set_ylabel("Layer (1-based)")
+    fig.suptitle(
+        "Targeted-attention diagnostics: natural CoT k-to-k versus a non-thinking concentration control",
+        fontsize=15,
+        fontweight="bold",
+    )
+    fig.savefig(path, dpi=190, bbox_inches="tight")
+    plt.close(fig)
+
+
+def save_single_ablation_panel(
+    single: pd.DataFrame,
+    *,
+    mode: str,
+    metric: str,
+    title: str,
+    path: Path,
+) -> None:
+    """Save one behavioral target as three count-bin heatmaps."""
+    frames = [single[(single["mode"] == mode) & (single["count_bin"] == count_bin)] for count_bin in COUNT_BINS]
+    finite_values = [
+        head_matrix(frame, metric)[np.isfinite(head_matrix(frame, metric))]
+        for frame in frames
+    ]
+    finite_values = [values for values in finite_values if values.size]
+    vmax = max(0.05, max(float(values.max()) for values in finite_values)) if finite_values else 1.0
+    fig, axes = plt.subplots(1, 3, figsize=(13.8, 4.25), constrained_layout=True)
+    for ax, count_bin, frame in zip(axes, COUNT_BINS, frames):
+        heatmap(
+            ax,
+            head_matrix(frame, metric),
+            f"count {count_bin}",
+            vmin=0,
+            vmax=vmax,
+            cmap="magma",
+        )
+        ax.set_xlabel("head index (0-based)")
+        ax.set_ylabel("Layer (1-based)")
+        ax.set_xticks(range(4), labels=["0", "1", "2", "3"])
+        ax.set_yticks(range(4), labels=["1", "2", "3", "4"])
+    fig.suptitle(title, fontsize=15, fontweight="bold")
+    fig.savefig(path, dpi=190, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _spearman_rank_correlation(x: pd.Series, y: pd.Series) -> float:
+    frame = pd.DataFrame({"x": pd.to_numeric(x, errors="coerce"), "y": pd.to_numeric(y, errors="coerce")}).dropna()
+    if len(frame) < 3 or frame.x.nunique() < 2 or frame.y.nunique() < 2:
+        return math.nan
+    return float(frame.x.rank(method="average").corr(frame.y.rank(method="average")))
+
+
+def save_ablation_score_alignment(
+    attention_rows: pd.DataFrame,
+    single: pd.DataFrame,
+    paths: dict[str, Path],
+) -> pd.DataFrame:
+    """Compare each descriptive score with causal necessity in a separate figure."""
+    rows = _attention_rows_with_bins(attention_rows)
+    specifications = (
+        {
+            "key": "nonthinking",
+            "mode": "nonthinking",
+            "query_kind": "final_count_query",
+            "score": "broad_attention_score",
+            "drop": "drop_final_count_accuracy",
+            "label": "Non-thinking broad score vs final-count drop",
+        },
+        {
+            "key": "targeted",
+            "mode": "thinking",
+            "query_kind": "targeted_retrieval_query",
+            "score": "correct_prompt_needle_mass",
+            "drop": "drop_trace_marker_accuracy",
+            "label": "CoT k-to-k mass vs trace-marker drop",
+        },
+        {
+            "key": "readout",
+            "mode": "thinking",
+            "query_kind": "final_count_query",
+            "score": "trace_markers_mass",
+            "drop": "drop_final_count_accuracy",
+            "label": "CoT trace-readout mass vs final-count drop",
+        },
+    )
+    summary_rows: list[dict[str, object]] = []
+    for spec in specifications:
+        fig, axes = plt.subplots(1, 3, figsize=(13.8, 4.35), constrained_layout=True)
+        descriptive = (
+            rows[(rows["mode"] == spec["mode"]) & (rows["query_kind"] == spec["query_kind"])]
+            .groupby(["count_bin", "layer", "head"], as_index=False)[spec["score"]]
+            .mean()
+        )
+        for ax, count_bin in zip(axes, COUNT_BINS):
+            causal = single[(single["mode"] == spec["mode"]) & (single["count_bin"] == count_bin)][
+                ["layer", "head", spec["drop"]]
+            ]
+            frame = descriptive[descriptive["count_bin"] == count_bin].merge(causal, on=["layer", "head"], how="inner")
+            rho = _spearman_rank_correlation(frame[spec["score"]], frame[spec["drop"]])
+            ax.scatter(frame[spec["score"]], frame[spec["drop"]], s=43, color=BLUE, alpha=0.82)
+            label_indices = set(frame.nlargest(4, spec["score"]).index)
+            if frame[spec["drop"]].nunique() > 1:
+                label_indices.update(frame.nlargest(4, spec["drop"]).index)
+            for item in frame.loc[sorted(label_indices)].itertuples(index=False):
+                ax.annotate(
+                    f"L{int(item.layer) + 1}H{int(item.head)}",
+                    (float(getattr(item, spec["score"])), float(getattr(item, spec["drop"]))),
+                    xytext=(3, 3),
+                    textcoords="offset points",
+                    fontsize=7.5,
+                    color="#334155",
+                )
+            ax.axhline(0, color="#64748b", linewidth=1)
+            ax.set_title(f"count {count_bin} | Spearman rho={rho:.2f}")
+            ax.set_xlabel(str(spec["score"]))
+            ax.set_ylabel(str(spec["drop"]))
+            summary_rows.append(
+                {
+                    "mechanism": spec["label"],
+                    "mode": spec["mode"],
+                    "count_bin": count_bin,
+                    "descriptive_score": spec["score"],
+                    "causal_drop": spec["drop"],
+                    "spearman_rho": rho,
+                    "n_heads": len(frame),
+                }
+            )
+        fig.suptitle(str(spec["label"]), fontsize=15, fontweight="bold")
+        fig.savefig(paths[str(spec["key"])], dpi=190, bbox_inches="tight")
+        plt.close(fig)
+    return pd.DataFrame(summary_rows)
 
 
 def random_band(frame: pd.DataFrame, metric: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -522,35 +718,44 @@ def random_band(frame: pd.DataFrame, metric: str) -> tuple[pd.DataFrame, pd.Data
     return grouped.mean().reset_index(), grouped.min().reset_index(), grouped.max().reset_index()
 
 
-def save_cumulative_ablation(cumulative: pd.DataFrame, path: Path) -> None:
-    specs = [
-        ("nonthinking", "final_count_accuracy", "direct_broad_top", "Non-thinking final count"),
-        ("thinking", "trace_marker_accuracy", "targeted_retrieval_top", "CoT trace marker"),
-        ("thinking", "final_count_accuracy", "trace_readout_top", "CoT final count"),
-    ]
-    fig, axes = plt.subplots(3, 3, figsize=(14.2, 10.8), sharex=True, sharey=True, constrained_layout=True)
-    for row, (mode, metric, family, label) in enumerate(specs):
-        for col, count_bin in enumerate(COUNT_BINS):
-            ax = axes[row, col]
-            frame = cumulative[(cumulative["mode"] == mode) & (cumulative["count_bin"] == count_bin)]
-            top = frame[frame.family == family].sort_values("top_n")
+def save_cumulative_ablation_panel(
+    cumulative: pd.DataFrame,
+    *,
+    mode: str,
+    metric: str,
+    family: str,
+    show_bottom: bool,
+    title: str,
+    path: Path,
+) -> None:
+    """Save one cumulative head-ablation target as three count-bin panels."""
+    fig, axes = plt.subplots(1, 3, figsize=(13.8, 4.45), sharey=True, constrained_layout=True)
+    for ax, count_bin in zip(axes, COUNT_BINS):
+        frame = cumulative[(cumulative["mode"] == mode) & (cumulative["count_bin"] == count_bin)]
+        top = frame[frame.family == family].sort_values("top_n")
+        ax.plot(top.top_n, top[metric], color=BLUE, marker="o", ms=3, label="ranked top")
+        if show_bottom:
             bottom = frame[frame.family == "primary_bottom"].sort_values("top_n")
-            ax.plot(top.top_n, top[metric], color=BLUE, marker="o", ms=3, label="ranked top")
-            ax.plot(bottom.top_n, bottom[metric], color=RED, marker="o", ms=3, label="ranked bottom")
-            random = frame[frame.family == "random"]
-            mean, low, high = random_band(random, metric)
-            ax.plot(mean.top_n, mean[metric], color=GRAY, linewidth=2, label="8 random orders: mean")
-            ax.fill_between(mean.top_n, low[metric], high[metric], color=GRAY, alpha=0.18, label="random min-max")
-            ax.set_title(f"{label} | count {count_bin}")
-            ax.set_ylim(-0.04, 1.04)
-            ax.set_xticks([1, 2, 4, 8, 12, 16])
-            ax.set_xlabel("number of globally masked heads")
-    axes[0, 0].set_ylabel("remaining accuracy")
-    axes[1, 0].set_ylabel("remaining accuracy")
-    axes[2, 0].set_ylabel("remaining accuracy")
-    handles, labels = axes[0, 0].get_legend_handles_labels()
+            ax.plot(bottom.top_n, bottom[metric], color=RED, marker="o", ms=3, label="matched ranking bottom")
+        random = frame[frame.family == "random"]
+        mean, low, high = random_band(random, metric)
+        ax.plot(mean.top_n, mean[metric], color=GRAY, linewidth=2, label="8 random orders: mean")
+        ax.fill_between(mean.top_n, low[metric], high[metric], color=GRAY, alpha=0.18, label="random min-max")
+        baseline = frame[frame.family == "baseline"]
+        if not baseline.empty:
+            ax.axhline(float(baseline.iloc[0][metric]), color="#111827", linestyle="--", linewidth=1, alpha=0.7)
+        ax.set_title(f"count {count_bin}")
+        ax.set_xlim(0.5, 16.5)
+        ax.set_ylim(-0.04, 1.04)
+        ax.set_xticks([1, 2, 4, 8, 12, 16], labels=["1", "2", "4", "8", "12", "16"])
+        ax.set_yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
+        ax.tick_params(axis="x", labelbottom=True)
+        ax.tick_params(axis="y", labelleft=True)
+        ax.set_xlabel("number of globally masked heads")
+        ax.set_ylabel("remaining accuracy")
+    handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="lower center", ncol=4, bbox_to_anchor=(0.5, -0.02))
-    fig.suptitle("Cumulative head ablation: top rankings versus bottom and random controls", fontsize=15, fontweight="bold")
+    fig.suptitle(title, fontsize=15, fontweight="bold")
     fig.savefig(path, dpi=190, bbox_inches="tight")
     plt.close(fig)
 
@@ -620,7 +825,7 @@ def save_steering(steering: pd.DataFrame, path: Path) -> None:
     sites = (
         ("nonthinking_final_answer", "Non-thinking natural final"),
         ("thinking_final_answer", "CoT natural final"),
-        ("thinking_fixed_trace_answer", "CoT fixed-15 trace conflict"),
+        ("thinking_fixed_trace_answer", "CoT counterfactual fixed-15 trace"),
     )
     colors = ["#93c5fd", "#2563eb", "#7c3aed", "#dc2626"]
     fig, axes = plt.subplots(3, 3, figsize=(14.2, 10.6), sharex=True, constrained_layout=True)
@@ -659,7 +864,7 @@ def save_transplants(
     sites = (
         ("nonthinking_final_answer", "Non-thinking natural final"),
         ("thinking_final_answer", "CoT natural final"),
-        ("thinking_fixed_trace_answer", "CoT fixed-15 trace conflict"),
+        ("thinking_fixed_trace_answer", "CoT counterfactual fixed-15 trace"),
     )
     fig, axes = plt.subplots(3, 3, figsize=(14.2, 10.4), sharex=True, sharey=True, constrained_layout=True)
     for row, (site, label) in enumerate(sites):
@@ -699,7 +904,7 @@ def save_pca_variance(geometry: pd.DataFrame, path: Path) -> None:
     labels = {
         "nonthinking_final_answer": "Non-thinking final",
         "thinking_final_answer": "CoT natural final",
-        "thinking_fixed_trace_answer": "CoT fixed-trace final",
+        "thinking_fixed_trace_answer": "CoT counterfactual fixed-15 final",
         "thinking_trace_index": "CoT trace index",
         "thinking_trace_marker": "CoT trace marker",
     }
@@ -739,7 +944,7 @@ def save_pca_static(coordinates: pd.DataFrame, path: Path) -> None:
     sites = [
         ("nonthinking_final_answer", "Non-thinking final"),
         ("thinking_final_answer", "CoT natural final"),
-        ("thinking_fixed_trace_answer", "CoT fixed-trace final"),
+        ("thinking_fixed_trace_answer", "CoT counterfactual fixed-15 final"),
     ]
     fig, axes = plt.subplots(3, 4, figsize=(15.2, 10.6), constrained_layout=True)
     norm = plt.Normalize(1, 30)
@@ -764,6 +969,111 @@ def save_pca_static(coordinates: pd.DataFrame, path: Path) -> None:
     plt.close(fig)
 
 
+def trace_token_centroid_pca(run_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Fit one PCA basis to the interleaved mean states I1,M1,...,I30,M30."""
+    arrays = np.load(run_dir / "analysis" / "state_causal" / "centroids.npz")
+    coordinate_rows: list[dict[str, object]] = []
+    geometry_rows: list[dict[str, object]] = []
+    for layer in range(1, 5):
+        labels = sorted(
+            set(
+                int(key.rsplit("__C", 1)[1])
+                for key in arrays.files
+                if key.startswith(f"thinking_trace_index__L{layer}__C")
+            )
+            & set(
+                int(key.rsplit("__C", 1)[1])
+                for key in arrays.files
+                if key.startswith(f"thinking_trace_marker__L{layer}__C")
+            )
+        )
+        values: list[np.ndarray] = []
+        metadata: list[tuple[int, int, str]] = []
+        for k in labels:
+            values.append(arrays[f"thinking_trace_index__L{layer}__C{k}"])
+            metadata.append((2 * k - 1, k, "index"))
+            values.append(arrays[f"thinking_trace_marker__L{layer}__C{k}"])
+            metadata.append((2 * k, k, "marker"))
+        matrix = np.stack(values)
+        centered = matrix - matrix.mean(axis=0, keepdims=True)
+        _, singular, vh = np.linalg.svd(centered, full_matrices=False)
+        projected = centered @ vh[:6].T
+        eigenvalues = singular**2
+        ratios = eigenvalues / max(float(eigenvalues.sum()), 1e-12)
+        effective = float(eigenvalues.sum() ** 2 / max(float((eigenvalues**2).sum()), 1e-12))
+        geometry_rows.append(
+            {
+                "layer": layer - 1,
+                **{
+                    f"pc{index + 1}_variance": float(ratios[index]) if index < len(ratios) else 0.0
+                    for index in range(6)
+                },
+                "pc6_cumulative": float(ratios[:6].sum()),
+                "effective_dimension": effective,
+            }
+        )
+        for (token_order, progress_k, token_type), coordinate in zip(metadata, projected):
+            coordinate_rows.append(
+                {
+                    "layer": layer - 1,
+                    "token_order": token_order,
+                    "progress_k": progress_k,
+                    "token_type": token_type,
+                    **{
+                        f"pc{index + 1}": float(coordinate[index]) if index < coordinate.shape[0] else 0.0
+                        for index in range(6)
+                    },
+                }
+            )
+    return pd.DataFrame(coordinate_rows), pd.DataFrame(geometry_rows)
+
+
+def centroid_absolute_spread(run_dir: Path) -> pd.DataFrame:
+    """Measure absolute centroid spread in the original 256-dimensional residual space."""
+    arrays = np.load(run_dir / "analysis" / "state_causal" / "centroids.npz")
+    rows: list[dict[str, object]] = []
+    sites = (
+        "nonthinking_final_answer",
+        "thinking_final_answer",
+        "thinking_fixed_trace_answer",
+        "thinking_trace_index",
+        "thinking_trace_marker",
+    )
+    for site in sites:
+        for layer in range(1, 5):
+            prefix = f"{site}__L{layer}__C"
+            labeled_keys = sorted(
+                (
+                    (int(key.rsplit("__C", 1)[1]), key)
+                    for key in arrays.files
+                    if key.startswith(prefix)
+                ),
+                key=lambda item: item[0],
+            )
+            if not labeled_keys:
+                continue
+            matrix = np.stack([arrays[key] for _, key in labeled_keys]).astype(np.float64)
+            centered = matrix - matrix.mean(axis=0, keepdims=True)
+            adjacent = np.diff(matrix, axis=0)
+            rows.append(
+                {
+                    "site": site,
+                    "layer": layer - 1,
+                    "rms_centroid_radius": float(np.sqrt(np.mean(np.sum(centered**2, axis=1)))),
+                    "mean_adjacent_distance": float(np.mean(np.linalg.norm(adjacent, axis=1))) if len(adjacent) else 0.0,
+                    "total_between_centroid_variance": float(np.mean(np.sum(centered**2, axis=1))),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def pca_axis_options() -> str:
+    return "".join(
+        f'<option value="{a},{b},{c}">PC{a + 1} / PC{b + 1} / PC{c + 1}</option>'
+        for a, b, c in combinations(range(6), 3)
+    )
+
+
 def interactive_pca(coordinates: pd.DataFrame, geometry: pd.DataFrame) -> str:
     payload: dict[str, dict[str, object]] = {}
     for (site, layer), frame in coordinates.groupby(["site", "layer"]):
@@ -779,24 +1089,24 @@ def interactive_pca(coordinates: pd.DataFrame, geometry: pd.DataFrame) -> str:
     site_options = [
         ("nonthinking_final_answer", "Non-thinking final-answer query"),
         ("thinking_final_answer", "CoT natural final-answer query"),
-        ("thinking_fixed_trace_answer", "CoT fixed-15-trace final query"),
-        ("thinking_trace_index", "CoT trace index state"),
-        ("thinking_trace_marker", "CoT trace marker/progress state"),
+        ("thinking_fixed_trace_answer", "CoT fixed-15 counterfactual <Ans> query"),
+        ("thinking_trace_index", "CoT trace index-token state <k> (grouped by k)"),
+        ("thinking_trace_marker", "CoT trace marker state M_k (grouped by k)"),
     ]
     options = "".join(f'<option value="{key}">{html.escape(label)}</option>' for key, label in site_options)
     template = """
     <figure class="interactive-figure">
-      <h3>Interactive 3D count-centroid manifold</h3>
+      <h3>Interactive 3D count/progress-centroid manifold</h3>
       <div class="controls">
         <label>Model / semantic site <select id="v10-pca-site">__OPTIONS__</select></label>
         <label>Layer <select id="v10-pca-layer"><option value="0">Layer 1</option><option value="1">Layer 2</option><option value="2">Layer 3</option><option value="3">Layer 4</option></select></label>
         <label>Count range <select id="v10-pca-bin"><option value="all">1-30</option><option value="1-10">1-10</option><option value="11-20">11-20</option><option value="21-30">21-30</option></select></label>
-        <label>Displayed axes <select id="v10-pca-axes"><option value="0,1,2">PC1 / PC2 / PC3</option><option value="1,2,3">PC2 / PC3 / PC4</option><option value="3,4,5">PC4 / PC5 / PC6</option></select></label>
+        <label>Displayed axes <select id="v10-pca-axes">__AXIS_OPTIONS__</select></label>
         <button id="v10-pca-reset" type="button">Reset view</button>
       </div>
       <div id="v10-pca-stats" class="stats"></div>
       <canvas id="v10-pca-canvas" aria-label="Rotatable three-dimensional PCA view"></canvas>
-      <figcaption><b>操作：</b>拖拽旋转，切换模型/site、Layer、count 区间和三条 PC 轴。每个编号点是在该 exact count 下先对全部 held-out 256 维 residual 求均值后的 centroid；线只连接当前选中区间内相邻 count。颜色从 count 1 连续渐变到 30。每个 site×Layer 的 PCA 独立拟合，因此切换面板时 PC 方向和尺度会变化，不能把不同下拉选项的屏幕坐标当作同一全局基底。</figcaption>
+      <figcaption><b>操作：</b>拖拽旋转，切换 semantic site、Layer、标签区间和三条 PC 轴。前三个 final-query site 的点编号是 prompt 的真实 count <i>n</i>；后两个 trace site 的点编号是 trace progress <i>k</i>。fixed-15 site 始终在同一条 15-step 反事实 trace 后的 <code>&lt;Ans&gt;</code> 位置读 hidden state，并按真实 prompt count <i>n</i> 分组；它不是“count=15”这一类。trace index 与 trace marker 则分别在 <code>&lt;k&gt;</code>、<code>M_k</code> token 位置读 residual，并按 <i>k</i> 分组。每个 site×Layer 的 PCA 独立拟合，因此切换下拉项时 PC 方向和尺度会变化，不能把不同选项的屏幕坐标当作同一全局基底。</figcaption>
     </figure>
     <script>
     (() => {
@@ -829,7 +1139,70 @@ def interactive_pca(coordinates: pd.DataFrame, geometry: pd.DataFrame) -> str:
     })();
     </script>
     """
-    return template.replace("__DATA__", data_json).replace("__OPTIONS__", options)
+    return (
+        template.replace("__DATA__", data_json)
+        .replace("__OPTIONS__", options)
+        .replace("__AXIS_OPTIONS__", pca_axis_options())
+    )
+
+
+def interactive_trace_pca(coordinates: pd.DataFrame, geometry: pd.DataFrame) -> str:
+    payload: dict[str, dict[str, object]] = {}
+    for layer, frame in coordinates.groupby("layer"):
+        geo = geometry[geometry.layer == layer].iloc[0]
+        payload[str(int(layer))] = {
+            "points": frame.sort_values("token_order")[
+                ["token_order", "progress_k", "token_type", "pc1", "pc2", "pc3", "pc4", "pc5", "pc6"]
+            ].round(6).values.tolist(),
+            "variance": [float(geo[f"pc{i}_variance"]) for i in range(1, 7)],
+            "effectiveDimension": float(geo.effective_dimension),
+        }
+    data_json = json.dumps(payload, separators=(",", ":"))
+    template = """
+    <figure class="interactive-figure">
+      <h3>Interactive 3D CoT trace-token trajectory</h3>
+      <div class="controls">
+        <label>Layer <select id="v10-trace-pca-layer"><option value="0">Layer 1</option><option value="1">Layer 2</option><option value="2">Layer 3</option><option value="3">Layer 4</option></select></label>
+        <label>Trace progress <select id="v10-trace-pca-bin"><option value="all">k=1-30</option><option value="1-10">k=1-10</option><option value="11-20">k=11-20</option><option value="21-30">k=21-30</option></select></label>
+        <label>Displayed axes <select id="v10-trace-pca-axes">__AXIS_OPTIONS__</select></label>
+        <button id="v10-trace-pca-reset" type="button">Reset view</button>
+      </div>
+      <div id="v10-trace-pca-stats" class="stats"></div>
+      <canvas id="v10-trace-pca-canvas" aria-label="Rotatable three-dimensional CoT trace-state trajectory"></canvas>
+      <figcaption><b>每个点是什么：</b>对所有包含第 k 步的 held-out examples，分别在 trace 数字 <code>&lt;k&gt;</code> 与紧随其后的 marker <code>M_k</code> 位置提取某一 Layer 后的 256 维 residual，再先按 token type×k 求均值。每个 Layer 把 60 个均值状态 <code>&lt;1&gt;,M1,...,&lt;30&gt;,M30</code> 放进<b>同一个</b> PCA 基底，灰线按真实 token 顺序连接。圆点表示 index，方块表示 marker；颜色编码进度 k。该图展示的是均值轨迹，不显示同一步内部的样本方差，也不把不同 Layer 的 PC 轴视为同一方向。</figcaption>
+    </figure>
+    <script>
+    (() => {
+      const data = __DATA__;
+      const layer = document.getElementById('v10-trace-pca-layer');
+      const bin = document.getElementById('v10-trace-pca-bin');
+      const axes = document.getElementById('v10-trace-pca-axes');
+      const reset = document.getElementById('v10-trace-pca-reset');
+      const stats = document.getElementById('v10-trace-pca-stats');
+      const canvas = document.getElementById('v10-trace-pca-canvas');
+      const ctx = canvas.getContext('2d');
+      let yaw=-0.65,pitch=0.42,dragging=false,lastX=0,lastY=0;
+      function selected(){
+        const ids=axes.value.split(',').map(Number), range=bin.value;
+        return data[layer.value].points
+          .filter(p=>range==='all'||(range==='1-10'&&p[1]<=10)||(range==='11-20'&&p[1]>=11&&p[1]<=20)||(range==='21-30'&&p[1]>=21))
+          .map(p=>({order:p[0],k:p[1],type:p[2],v:[p[ids[0]+3],p[ids[1]+3],p[ids[2]+3]]}));
+      }
+      function camera(v){const cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp=Math.sin(pitch);const x=cy*v[0]+sy*v[2],z=-sy*v[0]+cy*v[2];return[x,cp*v[1]-sp*z,sp*v[1]+cp*z];}
+      function color(k){const t=(k-1)/29,h=225-220*t;return `hsl(${h},78%,52%)`;}
+      function draw(){
+        const rect=canvas.getBoundingClientRect(),dpr=window.devicePixelRatio||1;canvas.width=Math.max(1,Math.round(rect.width*dpr));canvas.height=Math.max(1,Math.round(rect.height*dpr));ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,rect.width,rect.height);
+        const raw=selected(),rot=raw.map(p=>({...p,v:camera(p.v)}));const extent=Math.max(1,...rot.flatMap(p=>[Math.abs(p.v[0]),Math.abs(p.v[1])]));const scale=.39*Math.min(rect.width,rect.height)/extent,cx=rect.width/2,cy=rect.height/2;const pts=rot.map(p=>({...p,x:cx+scale*p.v[0],y:cy-scale*p.v[1],z:p.v[2]}));
+        ctx.strokeStyle='#cbd5e1';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(30,cy);ctx.lineTo(rect.width-30,cy);ctx.moveTo(cx,25);ctx.lineTo(cx,rect.height-25);ctx.stroke();
+        if(pts.length){ctx.strokeStyle='#64748b';ctx.lineWidth=1.5;ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.stroke();}
+        [...pts].sort((a,b)=>a.z-b.z).forEach(p=>{ctx.fillStyle=color(p.k);ctx.strokeStyle=p.type==='index'?'#1d4ed8':'#15803d';ctx.lineWidth=2;if(p.type==='index'){ctx.beginPath();ctx.arc(p.x,p.y,6,0,2*Math.PI);ctx.fill();ctx.stroke();}else{ctx.fillRect(p.x-6,p.y-6,12,12);ctx.strokeRect(p.x-6,p.y-6,12,12);}ctx.fillStyle='#111827';ctx.font='11px sans-serif';ctx.fillText((p.type==='index'?'I':'M')+p.k,p.x+7,p.y-7);});
+        const item=data[layer.value],v=item.variance,ids=axes.value.split(',').map(Number),cum6=v.reduce((a,b)=>a+b,0);stats.textContent=`Displayed: ${ids.map(i=>'PC'+(i+1)).join('/')} | variance ${ids.map(i=>(100*v[i]).toFixed(1)+'%').join(', ')} | PC1-6 cumulative ${(100*cum6).toFixed(1)}% | effective dimension ${item.effectiveDimension.toFixed(2)}`;
+      }
+      [layer,bin,axes].forEach(el=>el.addEventListener('change',draw));reset.addEventListener('click',()=>{yaw=-.65;pitch=.42;draw();});canvas.addEventListener('pointerdown',e=>{dragging=true;lastX=e.clientX;lastY=e.clientY;canvas.setPointerCapture(e.pointerId);});canvas.addEventListener('pointermove',e=>{if(!dragging)return;yaw+=(e.clientX-lastX)*.01;pitch=Math.max(-1.35,Math.min(1.35,pitch+(e.clientY-lastY)*.01));lastX=e.clientX;lastY=e.clientY;draw();});canvas.addEventListener('pointerup',()=>dragging=false);new ResizeObserver(draw).observe(canvas);draw();
+    })();
+    </script>
+    """
+    return template.replace("__DATA__", data_json).replace("__AXIS_OPTIONS__", pca_axis_options())
 
 
 def mechanism_explorer() -> str:
@@ -1008,7 +1381,6 @@ def build_report(run_dir: Path) -> Path:
     eval_counts = pd.read_csv(run_dir / "tables" / "eval_dynamics_by_count.csv")
     eval_losses = pd.read_csv(run_dir / "tables" / "eval_dynamics_losses.csv")
     attention_dir = run_dir / "analysis" / "attention_causal" / "tables"
-    attention = pd.read_csv(attention_dir / "attention_head_summary.csv")
     attention_rows = pd.read_csv(attention_dir / "attention_rows.csv")
     single = pd.read_csv(tables / "single_head_ablation_by_bin.csv")
     cumulative = pd.read_csv(tables / "cumulative_head_ablation_by_bin.csv")
@@ -1020,14 +1392,29 @@ def build_report(run_dir: Path) -> Path:
     raw_reg = pd.read_csv(tables / "final_state_transplant_regression_by_bin.csv")
     coordinates = pd.read_csv(tables / "centroid_mean_pca_coordinates.csv")
     geometry = pd.read_csv(tables / "centroid_mean_geometry.csv")
+    absolute_spread = centroid_absolute_spread(run_dir)
+    absolute_spread.to_csv(tables / "centroid_absolute_spread.csv", index=False)
+    trace_coordinates, trace_geometry = trace_token_centroid_pca(run_dir)
+    trace_coordinates.to_csv(tables / "trace_token_mean_pca_coordinates.csv", index=False)
+    trace_geometry.to_csv(tables / "trace_token_mean_geometry.csv", index=False)
     trace_progress = pd.read_csv(tables / "trace_progress_transplant_by_bin.csv")
 
     generated = {
         "training_overall": figures / "training_overall_accuracy_and_loss.png",
         "training_bins": figures / "training_accuracy_by_count_bin.png",
-        "attention": figures / "attention_by_count_bin.png",
-        "single": figures / "single_head_ablation_by_count_bin.png",
-        "cumulative": figures / "cumulative_ablation_by_count_bin.png",
+        "broad_attention": figures / "broad_attention_by_model_and_count_bin.png",
+        "targeted_attention": figures / "targeted_attention_by_count_bin.png",
+        "attention": figures / "broad_attention_by_model_and_count_bin.png",
+        "single_nonthinking": figures / "single_head_nonthinking_final_by_count_bin.png",
+        "single_targeted": figures / "single_head_cot_targeted_trace_by_count_bin.png",
+        "single_cot_final": figures / "single_head_cot_final_by_count_bin.png",
+        "alignment_nonthinking": figures / "alignment_nonthinking_broad_vs_final_drop.png",
+        "alignment_targeted": figures / "alignment_cot_targeted_vs_trace_drop.png",
+        "alignment_readout": figures / "alignment_cot_readout_vs_final_drop.png",
+        "cumulative_nonthinking": figures / "cumulative_nonthinking_broad_to_final.png",
+        "cumulative_targeted_trace": figures / "cumulative_cot_targeted_to_trace.png",
+        "cumulative_targeted_final": figures / "cumulative_cot_targeted_to_final.png",
+        "cumulative_readout_final": figures / "cumulative_cot_readout_to_final.png",
         "retrieval": figures / "retrieval_patching_by_count_bin.png",
         "nested": figures / "nested_head_patching_by_count_bin.png",
         "steering": figures / "geometry_steering_by_count_bin.png",
@@ -1037,9 +1424,75 @@ def build_report(run_dir: Path) -> Path:
     }
     save_training_overall(eval_counts, eval_losses, generated["training_overall"])
     save_training_by_bin(eval_bins, generated["training_bins"])
-    save_attention(attention, attention_rows, generated["attention"])
-    save_single_ablation(single, generated["single"])
-    save_cumulative_ablation(cumulative, generated["cumulative"])
+    save_broad_attention(attention_rows, generated["broad_attention"])
+    save_targeted_attention(attention_rows, generated["targeted_attention"])
+    save_single_ablation_panel(
+        single,
+        mode="nonthinking",
+        metric="drop_final_count_accuracy",
+        title="Non-thinking single-head ablation: final-count accuracy drop",
+        path=generated["single_nonthinking"],
+    )
+    save_single_ablation_panel(
+        single,
+        mode="thinking",
+        metric="drop_trace_marker_accuracy",
+        title="CoT single-head ablation: trace-marker accuracy drop",
+        path=generated["single_targeted"],
+    )
+    save_single_ablation_panel(
+        single,
+        mode="thinking",
+        metric="drop_final_count_accuracy",
+        title="CoT single-head ablation: final-count accuracy drop",
+        path=generated["single_cot_final"],
+    )
+    alignment = save_ablation_score_alignment(
+        attention_rows,
+        single,
+        {
+            "nonthinking": generated["alignment_nonthinking"],
+            "targeted": generated["alignment_targeted"],
+            "readout": generated["alignment_readout"],
+        },
+    )
+    alignment.to_csv(tables / "attention_score_ablation_alignment.csv", index=False)
+    save_cumulative_ablation_panel(
+        cumulative,
+        mode="nonthinking",
+        metric="final_count_accuracy",
+        family="direct_broad_top",
+        show_bottom=True,
+        title="Non-thinking broad-head ablation: final-count accuracy",
+        path=generated["cumulative_nonthinking"],
+    )
+    save_cumulative_ablation_panel(
+        cumulative,
+        mode="thinking",
+        metric="trace_marker_accuracy",
+        family="targeted_retrieval_top",
+        show_bottom=True,
+        title="CoT targeted-head ablation: trace-marker accuracy",
+        path=generated["cumulative_targeted_trace"],
+    )
+    save_cumulative_ablation_panel(
+        cumulative,
+        mode="thinking",
+        metric="final_count_accuracy",
+        family="targeted_retrieval_top",
+        show_bottom=True,
+        title="CoT targeted-head ablation: final-count accuracy",
+        path=generated["cumulative_targeted_final"],
+    )
+    save_cumulative_ablation_panel(
+        cumulative,
+        mode="thinking",
+        metric="final_count_accuracy",
+        family="trace_readout_top",
+        show_bottom=False,
+        title="CoT trace-readout-head ablation: final-count accuracy",
+        path=generated["cumulative_readout_final"],
+    )
     save_retrieval_patch(retrieval, generated["retrieval"])
     save_nested_patch(nested, generated["nested"])
     save_steering(steering, generated["steering"])
@@ -1093,10 +1546,103 @@ def build_report(run_dir: Path) -> Path:
         ]
         return fmt(rows.loss.iloc[0], 4) if len(rows) else "n/a"
 
+    attention_binned = _attention_rows_with_bins(attention_rows)
+    final_attention = (
+        attention_binned[attention_binned.query_kind == "final_count_query"]
+        .groupby(["mode", "count_bin", "layer", "head"], as_index=False)
+        .agg(
+            broad_attention_score=("broad_attention_score", "mean"),
+            prompt_needles_mass=("prompt_needles_mass", "mean"),
+            needle_entropy_normalized=("needle_entropy_normalized", "mean"),
+            needle_effective_number=("needle_effective_number", "mean"),
+        )
+    )
+    final_attention["single_target_concentration"] = final_attention.prompt_needles_mass * (
+        1.0 - final_attention.needle_entropy_normalized
+    )
+    broad_head_rows: list[dict[str, object]] = []
+    nonthinking_concentration_rows: list[dict[str, object]] = []
+    for mode in ("nonthinking", "thinking"):
+        for count_bin in COUNT_BINS:
+            frame = final_attention[
+                (final_attention["mode"] == mode) & (final_attention["count_bin"] == count_bin)
+            ]
+            best = frame.sort_values("broad_attention_score", ascending=False).iloc[0]
+            broad_head_rows.append(
+                {
+                    "mode": mode,
+                    "bin": count_bin,
+                    "head": code(f"L{int(best.layer)+1}H{int(best['head'])}"),
+                    "score": fmt(best.broad_attention_score),
+                    "mass": fmt(best.prompt_needles_mass),
+                    "entropy": fmt(best.needle_entropy_normalized),
+                    "effective": fmt(best.needle_effective_number, 1),
+                }
+            )
+            if mode == "nonthinking":
+                concentrated = frame.sort_values("single_target_concentration", ascending=False).iloc[0]
+                nonthinking_concentration_rows.append(
+                    {
+                        "bin": count_bin,
+                        "head": code(f"L{int(concentrated.layer)+1}H{int(concentrated['head'])}"),
+                        "score": fmt(concentrated.single_target_concentration),
+                        "mass": fmt(concentrated.prompt_needles_mass),
+                        "entropy": fmt(concentrated.needle_entropy_normalized),
+                        "effective": fmt(concentrated.needle_effective_number, 1),
+                    }
+                )
+
+    targeted_attention = (
+        attention_binned[
+            (attention_binned["mode"] == "thinking")
+            & (attention_binned["query_kind"] == "targeted_retrieval_query")
+        ]
+        .groupby(["count_bin", "layer", "head"], as_index=False)
+        .agg(
+            correct_prompt_needle_mass=("correct_prompt_needle_mass", "mean"),
+            diagonal_dominance=("diagonal_dominance", "mean"),
+            correct_top1=("correct_top1", "mean"),
+            prompt_needles_mass=("prompt_needles_mass", "mean"),
+        )
+    )
+    targeted_head_rows: list[dict[str, object]] = []
+    for count_bin in COUNT_BINS:
+        frame = targeted_attention[targeted_attention.count_bin == count_bin]
+        best = frame.sort_values("correct_prompt_needle_mass", ascending=False).iloc[0]
+        targeted_head_rows.append(
+            {
+                "bin": count_bin,
+                "head": code(f"L{int(best.layer)+1}H{int(best['head'])}"),
+                "raw": fmt(best.correct_prompt_needle_mass),
+                "diag": fmt(best.diagonal_dominance),
+                "top1": pct(best.correct_top1),
+                "needle_mass": fmt(best.prompt_needles_mass),
+            }
+        )
+
+    def remaining_accuracy(
+        *,
+        mode: str,
+        family: str,
+        count_bin: str,
+        top_n: int,
+        metric: str,
+    ) -> str:
+        frame = cumulative[
+            (cumulative["mode"] == mode)
+            & (cumulative["family"] == family)
+            & (cumulative["replicate"] == 0)
+            & (cumulative["count_bin"] == count_bin)
+            & (cumulative["top_n"] == top_n)
+        ]
+        return "n/a" if frame.empty else pct(frame.iloc[0][metric])
+
     ablation_rows = []
+    cumulative_ablation_rows = []
     for count_bin in COUNT_BINS:
         direct = single[(single["mode"] == "nonthinking") & (single["count_bin"] == count_bin)].sort_values("drop_final_count_accuracy", ascending=False).iloc[0]
         trace = single[(single["mode"] == "thinking") & (single["count_bin"] == count_bin)].sort_values("drop_trace_marker_accuracy", ascending=False).iloc[0]
+        cot_final = single[(single["mode"] == "thinking") & (single["count_bin"] == count_bin)].sort_values("drop_final_count_accuracy", ascending=False).iloc[0]
         ablation_rows.append(
             {
                 "bin": count_bin,
@@ -1104,8 +1650,63 @@ def build_report(run_dir: Path) -> Path:
                 "direct_drop": pct(direct.drop_final_count_accuracy),
                 "trace_head": code(f"L{int(trace.layer)+1}H{int(trace['head'])}"),
                 "trace_drop": pct(trace.drop_trace_marker_accuracy),
+                "cot_final_head": code(f"L{int(cot_final.layer)+1}H{int(cot_final['head'])}"),
+                "cot_final_drop": pct(cot_final.drop_final_count_accuracy),
             }
         )
+        cumulative_ablation_rows.append(
+            {
+                "bin": count_bin,
+                "direct_top1": remaining_accuracy(
+                    mode="nonthinking", family="direct_broad_top", count_bin=count_bin, top_n=1,
+                    metric="final_count_accuracy",
+                ),
+                "direct_top2": remaining_accuracy(
+                    mode="nonthinking", family="direct_broad_top", count_bin=count_bin, top_n=2,
+                    metric="final_count_accuracy",
+                ),
+                "target_trace_top1": remaining_accuracy(
+                    mode="thinking", family="targeted_retrieval_top", count_bin=count_bin, top_n=1,
+                    metric="trace_marker_accuracy",
+                ),
+                "target_trace_top4": remaining_accuracy(
+                    mode="thinking", family="targeted_retrieval_top", count_bin=count_bin, top_n=4,
+                    metric="trace_marker_accuracy",
+                ),
+                "target_trace_top8": remaining_accuracy(
+                    mode="thinking", family="targeted_retrieval_top", count_bin=count_bin, top_n=8,
+                    metric="trace_marker_accuracy",
+                ),
+                "target_final_top8": remaining_accuracy(
+                    mode="thinking", family="targeted_retrieval_top", count_bin=count_bin, top_n=8,
+                    metric="final_count_accuracy",
+                ),
+                "readout_final_top4": remaining_accuracy(
+                    mode="thinking", family="trace_readout_top", count_bin=count_bin, top_n=4,
+                    metric="final_count_accuracy",
+                ),
+                "readout_final_top8": remaining_accuracy(
+                    mode="thinking", family="trace_readout_top", count_bin=count_bin, top_n=8,
+                    metric="final_count_accuracy",
+                ),
+            }
+        )
+
+    alignment_rows = [
+        {
+            "mechanism": row.mechanism,
+            "bin": row.count_bin,
+            "rho": fmt(row.spearman_rho),
+            "n": int(row.n_heads),
+        }
+        for row in alignment.itertuples(index=False)
+    ]
+    ablation_lookup = {row["bin"]: row for row in ablation_rows}
+    cumulative_ablation_lookup = {row["bin"]: row for row in cumulative_ablation_rows}
+    alignment_lookup = {
+        (row.mode, row.count_bin, row.descriptive_score): fmt(row.spearman_rho)
+        for row in alignment.itertuples(index=False)
+    }
 
     patch_rows = []
     for count_bin in COUNT_BINS:
@@ -1145,7 +1746,7 @@ def build_report(run_dir: Path) -> Path:
         for site, label in (
             ("nonthinking_final_answer", "non-thinking natural"),
             ("thinking_final_answer", "CoT natural"),
-            ("thinking_fixed_trace_answer", "CoT fixed-15 trace"),
+            ("thinking_fixed_trace_answer", "CoT counterfactual fixed-15 trace"),
         ):
             row = steering_gain[(steering_gain.site == site) & (steering_gain.count_bin == count_bin)].sort_values("r2", ascending=False).iloc[0]
             steering_rows.append(
@@ -1162,7 +1763,7 @@ def build_report(run_dir: Path) -> Path:
     for site, label in (
         ("nonthinking_final_answer", "non-thinking final"),
         ("thinking_final_answer", "CoT natural final"),
-        ("thinking_fixed_trace_answer", "CoT fixed-15 final"),
+        ("thinking_fixed_trace_answer", "CoT counterfactual fixed-15 final"),
     ):
         for layer in range(4):
             row = select_row(geometry, site=site, layer=layer)
@@ -1177,6 +1778,90 @@ def build_report(run_dir: Path) -> Path:
                     "turn": f"{fmt(row.mean_turning_angle_degrees, 1)}°",
                 }
             )
+
+    depth_geometry_rows = []
+    for site, label in (
+        ("nonthinking_final_answer", "non-thinking final"),
+        ("thinking_final_answer", "CoT natural final"),
+        ("thinking_fixed_trace_answer", "CoT counterfactual fixed-15 final"),
+    ):
+        for layer in (0, 3):
+            geo = select_row(geometry, site=site, layer=layer)
+            spread = select_row(absolute_spread, site=site, layer=layer)
+            depth_geometry_rows.append(
+                {
+                    "site": label,
+                    "layer": f"Layer {layer+1}",
+                    "pc1": pct(geo.pc1_variance),
+                    "pc6": pct(geo.pc6_cumulative),
+                    "dim": fmt(geo.effective_dimension),
+                    "radius": fmt(spread.rms_centroid_radius, 2),
+                    "adjacent": fmt(spread.mean_adjacent_distance, 2),
+                    "turn": f"{fmt(geo.mean_turning_angle_degrees, 1)}°",
+                }
+            )
+
+    trace_pca_rows = []
+    for layer in range(4):
+        row = select_row(trace_geometry, layer=layer)
+        trace_pca_rows.append(
+            {
+                "layer": f"Layer {layer+1}",
+                "pc1": pct(row.pc1_variance),
+                "pc3": pct(sum(float(row[f"pc{i}_variance"]) for i in range(1, 4))),
+                "pc6": pct(row.pc6_cumulative),
+                "dim": fmt(row.effective_dimension),
+            }
+        )
+
+    prompt_length = int(config["seq_len"])
+    fixed_trace_steps = 15
+    fixed_ans_position = prompt_length + 3 + 2 * fixed_trace_steps
+    natural_ans_position = f"{prompt_length + 3} + 2n"
+    geometry_sites = [
+        {
+            "site": "Non-thinking natural",
+            "sequence": code("<BOS> prompt(n needles) <Ans> <n> <EOS>"),
+            "ans": code(prompt_length + 1),
+            "role": "自然 direct-count readout；prompt 与正确答案 n 随样本变化。",
+        },
+        {
+            "site": "CoT natural",
+            "sequence": code("<BOS> prompt(n) <Think> <1>M1 ... <n>Mn </Think> <Ans> <n> <EOS>"),
+            "ans": code(natural_ans_position),
+            "role": "自然 CoT readout；trace 内容、trace 长度与 <code>&lt;Ans&gt;</code> 绝对位置都随 n 变化。",
+        },
+        {
+            "site": "CoT counterfactual fixed-15",
+            "sequence": code("<BOS> prompt(n) <Think> <1>T1 ... <15>T15 </Think> <Ans> <n> <EOS>"),
+            "ans": code(fixed_ans_position),
+            "role": "反事实控制；prompt/答案仍为 n，但 15 步模板 trace 与 <code>&lt;Ans&gt;</code> 位置对所有 n 完全固定。",
+        },
+    ]
+
+    fixed_geo_l1 = select_row(geometry, site="thinking_fixed_trace_answer", layer=0)
+    fixed_geo_l4 = select_row(geometry, site="thinking_fixed_trace_answer", layer=3)
+    direct_geo_l1 = select_row(geometry, site="nonthinking_final_answer", layer=0)
+    direct_geo_l4 = select_row(geometry, site="nonthinking_final_answer", layer=3)
+    natural_geo_l1 = select_row(geometry, site="thinking_final_answer", layer=0)
+    natural_geo_l4 = select_row(geometry, site="thinking_final_answer", layer=3)
+    direct_spread_l1 = select_row(absolute_spread, site="nonthinking_final_answer", layer=0)
+    direct_spread_l4 = select_row(absolute_spread, site="nonthinking_final_answer", layer=3)
+    natural_spread_l1 = select_row(absolute_spread, site="thinking_final_answer", layer=0)
+    natural_spread_l4 = select_row(absolute_spread, site="thinking_final_answer", layer=3)
+    fixed_transport_l4 = {
+        count_bin: select_row(
+            centroid_reg,
+            site="thinking_fixed_trace_answer",
+            count_bin=count_bin,
+            layer=3,
+        )
+        for count_bin in COUNT_BINS
+    }
+    fixed_transport_l4_display = {
+        count_bin: ("≈0.000" if abs(float(row.slope)) < 5e-4 else fmt(row.slope))
+        for count_bin, row in fixed_transport_l4.items()
+    }
 
     output = run_dir / "syn_v10_report.html"
     css = """
@@ -1494,6 +2179,223 @@ def build_report(run_dir: Path) -> Path:
       <div class="callout warn"><b>解释边界。</b>TF final-count 的快速饱和可以部分来自局部 readout 或位置/trace-length 线索，不能单独证明模型已经完成可靠 targeted retrieval。反过来，trace exact 较慢也受到“全序列零容错”定义影响，不能直接等价为每个 trace token 都很差。必须同时阅读 token-level loss、AR final-count 和后续因果实验。</div>
     </section>
     """
+    attention_section = f"""
+    <section id="attention">
+      <h2>5. 描述性 attention：broad aggregation 与 targeted retrieval</h2>
+      <p>本节只问 attention 权重“放在哪里”，用于提出候选 heads；它不把 attention weight 直接解释成因果贡献。所有热图都从逐 example、逐 query、逐 Layer×head 的 attention row 重新按 gold count 分成 1–10、11–20、21–30。横轴始终是 head 0–3，纵轴始终是 Layer 1–4。</p>
+
+      <h3>5.1 两个模型在最终答案 query 上的 broad prompt aggregation</h3>
+      <div class="protocol"><b>共同 query。</b>对两个模型都读取 <code>&lt;Ans&gt;</code> 位置的 attention row。<b>共同 token 集合。</b>只把 prompt 中真实 needle 的位置记作集合 N。<b>Broad score。</b><code>prompt_needles_mass × needle_entropy_normalized</code>：第一项要求 head 确实把较多权重放到 needles，第二项要求这些权重在多个 needles 间分散。得分接近 0 可能因为忽略 needles，也可能因为只盯住少数 needles；因此表中同时报告 mass、归一化 entropy 与 effective number。</div>
+      {figure(
+          generated['broad_attention'],
+          'Figure 2A. Non-thinking 与 CoT 的 broad prompt-needle score',
+          '<b>布局：</b>上排 non-thinking，下排 thinking；三列依次为 gold count 1–10、11–20、21–30。<b>单元格：</b>该 Layer×head 在最终 <code>&lt;Ans&gt;</code> query 上的平均 broad score，范围 0–1；所有 panel 使用同一色标。高分表示 attention mass 同时较多地落在 prompt needles 上，并在该区间的多个 needles 间较均匀。它不包含 trace marker，也不证明这些 heads 对输出必要。'
+      )}
+      {table(
+          broad_head_rows,
+          [
+              ('mode','模型'),('bin','count 区间'),('head','该区间最高 broad-score head'),
+              ('score','broad score'),('mass','prompt-needle mass'),
+              ('entropy','needle entropy / log n'),('effective','effective # needles'),
+          ],
+      )}
+      <div class="callout good"><b>描述性差异。</b>Non-thinking 的最佳 broad head 在三个区间都稳定为 <code>L1H3</code>；随着 count 增大，它的 needle entropy 接近 1，effective number 接近该区间的真实 needle 数，符合“一个最终 query 并行覆盖整个 needle 集合”的候选图景。CoT 的最高 broad score 会从低 count 的中层转到高 count 的后层，但最佳 head 的 effective number 只有约 2–3：它虽然把不少 mass 放到 prompt needles，却没有均匀覆盖全部 needles。因此 CoT 最终答案处没有出现与 non-thinking 同样清楚的 prompt-wide broad aggregator；这与“先生成 trace，再从 trace/readout 状态得到 count”相容。</div>
+
+      <h3>5.2 Targeted k-to-k retrieval：为什么 non-thinking 不能直接套同一指标</h3>
+      <div class="protocol"><b>严格 k-to-k 的前提。</b>CoT trace 中存在第 k 个数字 query <code>&lt;k&gt;</code>，所以能把它与 prompt 中按位置排序的第 k 个 needle 唯一配对，并计算 raw k-to-k mass、needle 子集内 diagonal dominance 与 correct top-1。<b>Non-thinking 的结构差异。</b>它没有 trace、没有 k，也没有三十个逐步 query；只有一个最终 <code>&lt;Ans&gt;</code> query。因此 non-thinking 的天然 k-to-k score 是<b>不适用</b>，不能把某个任意 needle 宣称为“正确第 k 个目标”。作为最接近的负对照，Figure 2B 第一排计算 <code>prompt_needles_mass × (1 − needle_entropy_normalized)</code>，只问最终 query 是否集中到少数 needles；这个 concentration score 不是 k-to-k。</div>
+      {figure(
+          generated['targeted_attention'],
+          'Figure 2B. CoT k-to-k retrieval、diagonal dominance 与 non-thinking concentration control',
+          '<b>三列</b>依次为 count 1–10、11–20、21–30。<b>第一排</b>是 non-thinking 最终 query 的 single-target concentration control；它越高，表示 needle mass 越集中，但没有 k 对齐。<b>第二排</b>是 CoT <code>&lt;k&gt;</code> query 给 matching 第 k 个 prompt needle 的 raw attention mass。<b>第三排</b>是 diagonal dominance：matching mass 除以投向全部 prompt needles 的总 mass。<b>第四排</b>是 correct top-1：只在 prompt-needle 子集内判断最大权重是否落在第 k 个 needle。四排均按有效 query 等权平均，count=n 的样本贡献 n 个 k queries；每个 count 区间单独汇总。'
+      )}
+      <h3>5.3 最强候选 head 的分区结果</h3>
+      {table(
+          nonthinking_concentration_rows,
+          [
+              ('bin','count 区间'),('head','non-thinking 最集中 head'),
+              ('score','concentration score'),('mass','prompt-needle mass'),
+              ('entropy','needle entropy / log n'),('effective','effective # needles'),
+          ],
+      )}
+      {table(
+          targeted_head_rows,
+          [
+              ('bin','count 区间'),('head','CoT 最高 raw k-to-k head'),
+              ('raw','raw k-to-k mass'),('diag','diagonal dominance'),
+              ('top1','correct top-1'),('needle_mass','该 head 的总 prompt-needle mass'),
+          ],
+      )}
+      <div class="callout good"><b>CoT 的主要现象。</b><code>L4H2</code> 在三个 count 区间都是最强 raw k-to-k head。随着候选 needle 从 1–10 增到 21–30，raw mass、diagonal dominance 与 correct top-1 同时下降：这不是“总 needle mass 被其他上下文吸走”一种原因可以完全解释，而是 matching needle 在 needle 子集内部的优势也变弱。相反，non-thinking 的 concentration score 很小，且没有 k-specific query；当前描述性证据更支持 broad set aggregation，而不是隐式逐 k 检索。</div>
+      <div class="callout warn"><b>证据边界。</b>CoT 的 high diagonal dominance 只说明“在已经投给 needles 的权重中，matching needle 占多少”；raw mass 才说明它获得全部上下文 attention 的多少。Non-thinking 缺少 k-to-k 并不证明其内部绝无串行步骤，只说明当前可观察 token interface 不提供与 CoT 相同的逐 k 对齐。第 7、8 节的 ablation 与 patching 才测试这些候选 heads 是否必要或局部充分。</div>
+    </section>
+    """
+
+    geometry_section = f"""
+    <section id="geometry">
+      <h2>6. Hidden-state 描述性现象：count manifold 与 CoT trace 动态</h2>
+      <p>Attention 描述 query 从哪些 token 读取；本节改看读取之后写入 residual stream 的 256 维状态。这里所有 PCA 都先按语义标签求 hidden-state 均值，再对这些均值做 PCA，因此展示的是 count/progress 类中心之间的几何，而不是单个样本云。它仍是描述性证据：连续轨迹表示 count 或 progress 可读，不等于模型必然沿该轨迹执行加法。</p>
+
+      <h3>6.1 最终答案读取位置的 exact-count centroid manifold</h3>
+      <p><b>本实验在问：</b>最终答案位置的 hidden state 为什么能区分 count？它可能真的从 prompt needles 得到了 cardinality，也可能只利用了自然 CoT 中“trace 有多长”或 <code>&lt;Ans&gt;</code> 的绝对位置。为拆开这两种来源，本节同时比较自然输入与一个明确的反事实固定-trace control。</p>
+      <div class="protocol"><b>首先明确提取位置。</b>三种条件都在 <code>&lt;Ans&gt;</code> token 处读取 residual，而不是在答案数字 <code>&lt;n&gt;</code> 处读取。由于 decoder 是因果的，<code>&lt;Ans&gt;</code> 的 state 只看得到它左侧的 prompt/trace；正确答案数字是它要预测的<b>下一个 token</b>，此时尚未进入上下文。对每个样本、每个 Layer，保存该 Layer 输出后、进入下一 Layer 前的 256 维 residual <code>h_ans(layer)</code>。</div>
+      {table(
+          geometry_sites,
+          [('site','语义位置 / 条件'),('sequence','实际送入模型的序列'),('ans','<Ans> 的 0-based 位置'),('role','哪些量会变化，以及为什么比较')],
+      )}
+      <div class="callout warn"><b>“固定 15 步 trace”不是 gold trace，也不是正常 CoT。</b>它由固定模板构造：无论 prompt 中真实有 n 个 needles，都写入 <code>&lt;1&gt; T1 ... &lt;15&gt; T15</code>；其中 <code>Tk</code> 按固定 marker 词表模板循环，与该 prompt 中第 k 个 needle 的真实 marker 无关。最终监督答案仍是 prompt 的真实 count <code>&lt;n&gt;</code>。因此当 n≠15 时，trace 暗示的长度与答案标签有意冲突。这是一个 teacher-forced、分布外的诊断输入，不是模型的自然生成结果。</div>
+      <div class="protocol"><b>计算流程。</b><ol>
+        <li>生成一个长度 {prompt_length}、真实 needle count 为 n∈[1,30] 的 held-out prompt。</li>
+        <li>分别渲染上表三种前缀；反事实条件对所有 n 都使用 {fixed_trace_steps} 步、30 个 trace tokens，并把 <code>&lt;Ans&gt;</code> 固定在位置 {fixed_ans_position}。</li>
+        <li>做一次 teacher-forced forward，在每个 Layer 后提取 <code>&lt;Ans&gt;</code> residual。答案 token 位于其右侧，不能泄漏给该 state。</li>
+        <li>对同一 exact count 的样本先在 256 维空间求均值，得到每个 site×Layer 的 30×256 centroid 矩阵。这样图中的每个点是一类 count 的均值，不是一个单独样本。</li>
+        <li>每个 site×Layer 独立减去 30 个 centroids 的总均值，再做 SVD/PCA。图只描述 exact-count 类中心之间的几何；不同 panel 的 PC 轴不是同一坐标系。</li>
+      </ol></div>
+      <div class="callout good"><b>这个 control 如何判读。</b>如果自然 CoT 有清楚的 count 轨迹、但固定-trace 条件不再按 n 分离，说明自然几何可能主要来自 trace 长度或绝对位置。若固定-trace 条件仍按真实 prompt count 排列，则在 trace token、trace 长度和 <code>&lt;Ans&gt;</code> 位置都相同的情况下，state 中仍存在 prompt-derived count 信息。</div>
+      {figure(
+          generated['pca_static'],
+          'Figure 3A. Exact-count mean residual 的 PC1–PC2 渐变轨迹',
+          '每个点是一个 exact count 的 256 维 residual 均值；颜色从 count 1 连续渐变到 30，灰线连接相邻 count。三行分别为 non-thinking natural final、CoT natural final、CoT counterfactual fixed-15 final，四列为 Layer 1–4。横轴与纵轴是该 panel 独立拟合的 PC1/PC2，单位为投影坐标；只能在同一 panel 内判断相邻 count 是否有序、轨迹是否弯曲，不能跨 panel 把屏幕方向当成同一神经方向。'
+      )}
+      <h4>PC1–PC6 explained variance 到底在做什么</h4>
+      <div class="protocol"><ol>
+        <li><b>输入不是单样本 hidden states。</b>对每个 site×Layer，先把相同语义标签的 256 维 residual 求均值。final-answer site 按真实 count <code>n=1,...,30</code> 分组；trace site 按进度 <code>k=1,...,30</code> 分组。于是 final site 得到一个 <code>30×256</code> 的类中心矩阵。</li>
+        <li><b>只分析类中心之间的方差。</b>从每个类中心减去 30 个类中心的总均值，对中心化矩阵做 SVD/PCA。若第 r 个主成分的特征值为 <code>lambda_r</code>，则 <code>EVR_r = lambda_r / sum_s(lambda_s)</code>；PC1–PC6 cumulative 是前六个 EVR 的和。</li>
+        <li><b>问题是什么。</b>PC1 很高表示不同 count 的均值主要沿一条轴排列；PC1–PC6 很高表示六维子空间足以保留绝大多数 count-class geometry。它不测同一 count 内样本的离散程度，也不意味着每个 256 维 residual 真的只有六维。</li>
+        <li><b>每个 panel 独立拟合。</b>不同 site 或不同 Layer 的 PC1 不是同一神经方向，因此可以比较 explained-variance ratio，却不能把两个 panel 的横轴直接视为同一向量。</li>
+      </ol></div>
+      {figure(
+          generated['pca_variance'],
+          'Figure 3B. PC1–PC6 explained variance 与累计覆盖',
+          '<b>横轴：</b>单独的 PC1–PC6；<b>纵轴：</b>Layer 1–4。前五个 panel 分别对应 non-thinking final、CoT natural final、CoT fixed-15 final、CoT trace index 与 CoT trace marker；单元格为该 PC 对类中心总方差的解释比例。最右 panel 的每个单元格是同一 site×Layer 下 PC1 到 PC6 的累计解释率。final-answer sites 的语义标签是 gold count，trace sites 的标签是 progress k。颜色越亮表示方差越集中在该轴或前六轴，但不衡量 256 维空间里的绝对半径。'
+      )}
+      {table(
+          pca_rows,
+          [('site','site'),('layer','Layer'),('pc1','PC1 variance'),('pc3','PC1–3 cumulative'),('pc6','PC1–6 cumulative'),('dim','effective dimension'),('turn','mean adjacent turn')],
+      )}
+      <h4>结果：Layer 1 近似低维，深层把 count geometry 分散到更多方向</h4>
+      {table(
+          depth_geometry_rows,
+          [('site','site'),('layer','Layer'),('pc1','PC1 variance'),('pc6','PC1–6 cumulative'),('dim','effective dimension'),('radius','256D RMS centroid radius'),('adjacent','mean adjacent-count distance'),('turn','mean adjacent turn')],
+      )}
+      <div class="protocol"><b>为什么还要报告原空间半径。</b>Explained variance 是比例量：即使点云整体放大或缩小，只要形状不变，EVR 也不变。为避免把二维图上的“挤在一起”误写成 256 维坍缩，表中另外计算 <code>R_rms = sqrt(mean_c ||mu_c - mu_bar||^2)</code>，即类中心在原始 256 维 residual 空间相对总均值的均方根半径；<code>mean adjacent-count distance</code> 是相邻 count 类中心 <code>mu_(c+1)</code> 与 <code>mu_c</code> 的欧氏距离均值。二者都使用 PCA 前的原始坐标。</div>
+      <div class="callout good"><b>三个关键数值模式。</b><ol>
+        <li><b>Non-thinking final：</b>PC1 从 Layer 1 的 <b>{pct(direct_geo_l1.pc1_variance)}</b> 降到 Layer 4 的 <b>{pct(direct_geo_l4.pc1_variance)}</b>，PC1–PC6 从 <b>{pct(direct_geo_l1.pc6_cumulative)}</b> 降到 <b>{pct(direct_geo_l4.pc6_cumulative)}</b>，有效维数从 <b>{fmt(direct_geo_l1.effective_dimension)}</b> 升到 <b>{fmt(direct_geo_l4.effective_dimension)}</b>。原空间半径只从 <b>{fmt(direct_spread_l1.rms_centroid_radius, 2)}</b> 降到 <b>{fmt(direct_spread_l4.rms_centroid_radius, 2)}</b>，而相邻 count 距离反而从 <b>{fmt(direct_spread_l1.mean_adjacent_distance, 2)}</b> 增至 <b>{fmt(direct_spread_l4.mean_adjacent_distance, 2)}</b>。所以深层不是简单把所有 count 压成一点，而是把一条平滑轴折叠成更弯曲、更高维的决策几何。</li>
+        <li><b>CoT natural final：</b>PC1 从 <b>{pct(natural_geo_l1.pc1_variance)}</b> 降到 <b>{pct(natural_geo_l4.pc1_variance)}</b>，PC1–PC6 仅剩 <b>{pct(natural_geo_l4.pc6_cumulative)}</b>；但原空间半径从 <b>{fmt(natural_spread_l1.rms_centroid_radius, 2)}</b> 增至 <b>{fmt(natural_spread_l4.rms_centroid_radius, 2)}</b>。这里“深层点在 PC1/PC2 图里紧缩”完全是低维投影遗漏了大量高阶方向，并非 256 维表示真的变小。</li>
+        <li><b>CoT fixed-15 control：</b>PC1 在 Layer 1 解释 <b>{pct(fixed_geo_l1.pc1_variance)}</b>，到 Layer 4 仍解释 <b>{pct(fixed_geo_l4.pc1_variance)}</b>；Layer 4 的 PC1–PC6 覆盖 <b>{pct(fixed_geo_l4.pc6_cumulative)}</b>，有效维数仅 <b>{fmt(fixed_geo_l4.effective_dimension)}</b>。固定 trace 内容、长度和 <code>&lt;Ans&gt;</code> 位置后，prompt-derived count 仍呈现近低维结构，说明自然 CoT 深层的高维化很大部分来自 count 与 trace/位置/readout 因素的混合。</li>
+      </ol></div>
+      <div class="callout warn"><b>为什么 Layer 1 最清楚，而越深越像“紧缩”。</b>最保守的解释是：Layer 1 离 token embedding 与 learned absolute-position embedding 最近，跨样本平均后，marker 数量或 trace progress 形成一个占主导的平滑全局特征，所以一个或少数 PC 就能解释大部分类中心差异。后续 Layers 为完成具体预测，会把 count 与 marker identity、prompt 内容、trace token role、绝对位置以及最终 logit readout 混合，并通过非线性 MLP、attention 与 residual update 弯曲这条轨迹；方差因此分散到 PC3 以后，PC1/PC2 投影中的点看起来靠拢。fixed-15 control 保留低维，而自然 CoT final 高维化，支持“nuisance/readout 因素混合”这一解释；但这仍是由几何模式作出的推断，不是某个 Layer 运算的直接因果证明。</div>
+      <div class="callout limit"><b>但“可读”不等于“模型因果上使用”。</b>固定-trace 条件本身是训练分布外冲突输入；PCA 分离也只说明 n 可由 residual 解码。第 10 节的 Layer-4 count-centroid transplant 更严格：其 transport slope 在 1–10、11–20、21–30 分别为 <b>{fixed_transport_l4_display['1-10']}</b>、<b>{fixed_transport_l4_display['11-20']}</b>、<b>{fixed_transport_l4_display['21-30']}</b>，低/中 count 明显没有一比一搬运输出。因此当前证据支持“prompt count 信息仍存在”，但不支持“这条低维轴就是统一执行加减法的主因果变量”。</div>
+      {interactive_pca(coordinates, geometry)}
+      <div class="callout"><b>五个下拉项如何区分。</b><ul>
+        <li><b>Non-thinking / CoT natural final-answer query：</b>都在自然序列的 <code>&lt;Ans&gt;</code> token 读取 residual，并按真实 count <i>n</i> 求 centroid。</li>
+        <li><b>CoT fixed-15 counterfactual &lt;Ans&gt; query：</b>把所有样本左侧 trace 都固定成同一条 15-step 模板，使 trace 内容、trace 长度和 <code>&lt;Ans&gt;</code> 绝对位置不再随 <i>n</i> 改变；最终标签仍是 prompt 的真实 count。它用来排除“仅靠 trace 长度或答案位置编码 count”的解释，绝不表示模型要预测 15。</li>
+        <li><b>CoT trace index-token state &lt;k&gt;：</b>在 trace 数字 <code>&lt;k&gt;</code> 位置读取 residual；点标签是 progress <i>k</i>。</li>
+        <li><b>CoT trace marker state M<sub>k</sub>：</b>在紧跟数字后的 marker <code>M_k</code> 位置读取 residual；点标签同样是 progress <i>k</i>，不是 marker identity。</li>
+      </ul><b>与下一张“CoT trace 内部 hidden state”图的关系：</b>原始 hidden states 与 token anchors 是同一批。当前下拉图把 <code>&lt;k&gt;</code> 和 <code>M_k</code> 当成两个 semantic sites，分别拟合各自 PCA，适合看“单一 token role 内是否编码 progress”；第 6.2 节则把两类共 60 个 centroids 放进同一个 Layer-specific PCA 基底，适合直接看 <code>&lt;k&gt; → M_k → &lt;k+1&gt;</code> 的状态移动。两图不是两个不同实验，而是同一数据的两种几何视角。</div>
+      <div class="callout"><b>轴选择。</b>互动图包含 PC1–PC6 中任选三轴的全部 <b>20</b> 种组合。切换 count/progress range 只筛选同一个全 1–30 PCA 基底中的点，不会重新拟合；切换 site 或 Layer 则会改变 PCA 基底，所以不同面板的屏幕方向不能直接比较。</div>
+
+      <h3>6.2 CoT trace 内部：从 &lt;k&gt; 到 M<sub>k</sub>、再到 &lt;k+1&gt; 的均值状态如何移动</h3>
+      <div class="protocol"><b>提取什么。</b>对所有包含第 k 步的 held-out CoT examples，在数字 <code>&lt;k&gt;</code> 与紧随其后的 marker <code>M_k</code> 位置分别提取 Layer 1–4 后的 residual。<b>如何平均。</b>先按 <code>(token type, k)</code> 求均值，因此每层有 60 个 256 维 centroids。<b>如何 PCA。</b>与把 index 和 marker 分开拟合不同，本图把 <code>&lt;1&gt;,M1,...,&lt;30&gt;,M30</code> 的 60 个均值放在同一个 Layer-specific PCA 基底中，才能直接观察 token type 交替与 progress 更新。图中不含 <code>&lt;Think&gt;</code> 和 <code>&lt;/Think&gt;</code>。</div>
+      {table(
+          trace_pca_rows,
+          [('layer','Layer'),('pc1','PC1 variance'),('pc3','PC1–3 cumulative'),('pc6','PC1–6 cumulative'),('dim','effective dimension')],
+      )}
+      {interactive_trace_pca(trace_coordinates, trace_geometry)}
+      <div class="callout warn"><b>如何解释轨迹。</b>若同一 k 的 index 与 marker 形成短的成对位移，而相邻 k 对之间沿较平滑方向推进，说明 residual 同时分离“当前 token role”与“progress k”。若轨迹强烈弯曲或不同阶段折返，则不支持一根全局固定的 +1 direction。无论哪种形状，都还需要后续 residual patch/steering 才能从“可见几何”升级为“因果 count state”。</div>
+    </section>
+    """
+
+    ablation_section = f"""
+    <section id="ablation">
+      <h2>7. Attention-head ablation：broad aggregation 与 targeted retrieval 是否因果必要</h2>
+      <p>第 5 节只根据 attention 权重提出候选机制。本节进行必要性检验：保持输入、参数、MLP 和其他 heads 不变，只移除指定 attention head 的贡献，再观察模型已经学会的行为是否下降。分析分成四个问题：non-thinking broad heads 是否支撑最终计数；CoT targeted heads 是否支撑逐步 marker retrieval；CoT trace-readout heads 是否支撑最终答案；描述性高分与因果必要性是否真的一致。</p>
+
+      <h3>7.1 实验协议：删掉什么、在哪些 token 上测、accuracy 如何计算</h3>
+      <div class="protocol"><ol>
+        <li><b>评估样本。</b>重新生成每个 exact count {manifest['ablation_examples_per_exact_count']} 个 held-out prompts，共 {30 * manifest['ablation_examples_per_exact_count']} 个。每个区间 1–10、11–20、21–30 各含 {10 * manifest['ablation_examples_per_exact_count']} 个样本，因此三栏的样本量与类别数完全相同。</li>
+        <li><b>全局 head mask。</b>对 Layer <code>l</code> 的 head <code>h</code>，把 GPT-2 forward 中对应 <code>head_mask[l,h]</code> 设为 0。该 head 在整条 sequence 的<b>所有 query positions</b>都被关闭，而不是只在 <code>&lt;Ans&gt;</code> 或某一个 <code>&lt;k&gt;</code> 关闭；其他 heads、MLP、embedding 和模型参数不变。因而实验能判断“这个 head 是否整体必要”，但不能单独定位它在哪个 query 上发挥作用。</li>
+        <li><b>单头消融。</b>16 个 Layer×head 分别单独 mask。报告 <code>accuracy drop = baseline accuracy − masked accuracy</code>；drop=1 表示从 100% 降到 0%，drop=0 表示离散 accuracy 没变。</li>
+        <li><b>累计消融。</b>先按第 5 节定义的分数给 heads 排名，再依次 mask top-1、top-2、…、top-16。Non-thinking 使用 <code>broad_attention_score</code>；CoT 分别使用 <code>k-to-k raw mass</code>、<code>trace_markers_mass</code> 与 successor score。曲线同时与倒序/bottom heads和 {manifest['ablation_random_orders']} 个固定随机顺序比较；只有“高分 top 曲线比 bottom/random 更早下降”才说明该排名捕捉了特异机制。</li>
+        <li><b>Teacher-forced final-count accuracy。</b>完整 gold prefix 已在输入中；在 <code>&lt;Ans&gt;</code> 位置读取 logits，若 argmax 数字 token 等于 gold count 则正确。CoT 中 gold trace 仍存在于左侧，所以该指标检验“给定正确 trace 后的最终 readout”，不是自由生成整条 trace 的端到端准确率。</li>
+        <li><b>Teacher-forced trace-marker accuracy。</b>对 CoT 的每个数字 <code>&lt;k&gt;</code> query，检查其 next-token argmax 是否为 gold marker <code>M_k</code>，再对所有有效 k queries 求平均。后一步仍看到数据中的 gold 早期 trace token；某一步预测错不会被写回上下文并污染后续步骤。</li>
+        <li><b>Teacher-forced trace-index accuracy。</b>在 <code>&lt;Think&gt;</code> 或前一个 marker <code>M_(k-1)</code> 的 query 上，检查 next-token argmax 是否为数字 <code>&lt;k&gt;</code>。它测 successor/index 生成，与 marker identity retrieval 是不同子任务。</li>
+      </ol></div>
+      <div class="callout warn"><b>必要性不等于充分性。</b>Mask 后性能下降说明该组件在当前网络中被使用；不下降可能表示它无关，也可能表示其他 heads 冗余补偿。反过来，单头 attention mass 很高也不保证删除它会伤性能。第 8 节的 clean-to-corrupt patching 才检验候选 activation 是否能局部搬运所需信息。</div>
+
+      <p><b>阅读顺序。</b>下面每个小节都严格按照“实验 → 结果 → 分析”组织。实验段只说明干预和指标；结果段先给图表与观测数值；分析段才讨论这些结果支持或排除什么机制。</p>
+
+      <h3>7.2 消融结果总览：单头必要性与 top-n 剂量曲线</h3>
+      <h4>实验</h4>
+      <p>先对 16 枚 Layer×head 做逐头 global mask，再分别按 non-thinking <code>broad_attention_score</code>、CoT <code>k-to-k raw mass</code> 与 CoT <code>trace_markers_mass</code> 从高到低累计 mask top-n。单头实验回答“哪一枚 head 单独不可替代”；累计实验回答“同类候选 heads 是否存在冗余，以及删到多少枚时行为开始崩溃”。</p>
+      <h4>结果</h4>
+      {figure(
+          generated['single'],
+          'Figure 4A. 单头 global ablation：每枚 head 被删除后的性能下降',
+          '<b>横轴</b>为 head 0–3，<b>纵轴</b>为 Layer 1–4。每个单元格是 baseline accuracy 减去单头 mask 后 accuracy；数值越大，说明该 head 单独删除造成的损伤越大。三列为 count 1–10、11–20、21–30。第一行测 non-thinking final-count，第二行测 CoT trace-marker，第三行测 CoT teacher-forced final-count。mask 覆盖整条 sequence，因此本图定位的是“整枚 head 的必要性”，还不能确定它究竟在哪个 token query 上起作用。'
+      )}
+      {table(
+          ablation_rows,
+          [('bin','count 区间'),('direct_head','最强 non-thinking final 单头'),('direct_drop','final drop'),('trace_head','最强 CoT trace 单头'),('trace_drop','trace-marker drop'),('cot_final_head','最强 CoT final 单头'),('cot_final_drop','final drop')],
+      )}
+      {figure(
+          generated['cumulative'],
+          'Figure 4B. 按机制分数累计 mask：从单头冗余到成组失效',
+          '<b>横轴</b>为同时 global mask 的 head 数 top-n，<b>纵轴</b>为干预后剩余的绝对 accuracy；虚线 1 是未干预 baseline。四行依次为 non-thinking broad→final count、CoT targeted→trace marker、CoT targeted→final count、CoT trace-readout→final count；三列为 count 区间。蓝线按相应机制分数从高到低删除，红线为可用时的 bottom 排序，灰线与阴影为固定随机顺序的均值和 min–max。高分曲线若比 bottom/random 更早下降，才说明描述性排序捕捉到了特异机制。'
+      )}
+      {table(
+          cumulative_ablation_rows,
+          [('bin','count 区间'),('direct_top1','NT broad top-1 后 final'),('direct_top2','NT broad top-2 后 final'),('target_trace_top1','CoT target top-1 后 trace'),('target_trace_top4','top-4 后 trace'),('target_trace_top8','top-8 后 trace'),('target_final_top8','target top-8 后 final'),('readout_final_top4','readout top-4 后 final'),('readout_final_top8','readout top-8 后 final')],
+      )}
+      <h4>分析</h4>
+      <p>两张图要结合阅读：单头 drop 高说明该 head 在当前网络中较难被替代；单头 drop 低但累计 top-n 很快下降，则说明同类 heads 彼此补偿。后续 7.3–7.5 分别把这两类证据用于 non-thinking broad aggregation、CoT targeted retrieval 和 CoT trace readout。</p>
+
+      <h3>7.3 Non-thinking：early broad heads 对直接 final count 具有强必要性</h3>
+      <h4>实验</h4>
+      <p>Non-thinking 没有逐 k trace。我们按第 5 节定义的 <code>broad_attention_score</code> 排序 heads，先逐头 mask，再从 top-1 开始累计 mask；在每个 count 区间都以 non-thinking final-count accuracy 为结果变量，并与 bottom/random 删除顺序比较。</p>
+      <h4>结果</h4>
+      <div class="callout good">描述性排名稳定的 <code>L1H3</code> 同时是中高 count 最强的单头因果组件：11–20 的最大 final-accuracy drop 为 <b>{ablation_lookup['11-20']['direct_drop']}</b>，21–30 为 <b>{ablation_lookup['21-30']['direct_drop']}</b>。1–10 的最强单头为 <code>{ablation_lookup['1-10']['direct_head']}</code>，drop 为 <b>{ablation_lookup['1-10']['direct_drop']}</b>。按 broad score 累计 mask top-1 后，三个区间剩余 accuracy 为 <b>{cumulative_ablation_lookup['1-10']['direct_top1']}</b> / <b>{cumulative_ablation_lookup['11-20']['direct_top1']}</b> / <b>{cumulative_ablation_lookup['21-30']['direct_top1']}</b>；累计到 top-2 后为 <b>{cumulative_ablation_lookup['1-10']['direct_top2']}</b> / <b>{cumulative_ablation_lookup['11-20']['direct_top2']}</b> / <b>{cumulative_ablation_lookup['21-30']['direct_top2']}</b>。</div>
+      <h4>分析</h4>
+      <p>结果支持 Layer 1 broad routing 是 direct counting 的必要入口：同一批早期 heads 既在描述性 attention 中广泛覆盖 prompt needles，又在删除后造成大幅 final-count 损伤。低 count 的最强单头与中高 count 略有差异，说明容易样本有更多可替代路径；但 top-2 累计删除后三段都接近崩溃，说明 broad circuit 整体不是可有可无的伴随现象。</p>
+
+      <h3>7.4 CoT targeted retrieval：单头可替代，但成组删除破坏 marker trace</h3>
+      <h4>实验</h4>
+      <p>在 CoT 的数字 <code>&lt;k&gt;</code> query 上，以第 k 个 prompt needle 的 raw attention mass 排名 targeted heads。逐头或累计 mask 后，首先测 teacher-forced trace-marker accuracy；同时测最终 teacher-forced final-count accuracy，用于区分“局部 marker retrieval 已损坏”与“给定 gold trace 后的最终 readout 已损坏”。</p>
+      <h4>结果</h4>
+      <div class="callout good">第 5 节 raw k-to-k mass 最高的是 <code>L4H2</code>，其次包括 <code>L3H1</code> 和 <code>L3H0</code>；但三个区间中，单头 mask 后 trace-marker drop 最大的都是 <code>{ablation_lookup['1-10']['trace_head']}</code> 一类早期 heads，最大 drop 分别为 <b>{ablation_lookup['1-10']['trace_drop']}</b> / <b>{ablation_lookup['11-20']['trace_drop']}</b> / <b>{ablation_lookup['21-30']['trace_drop']}</b>。只删 targeted top-1 时，三个区间的 trace-marker accuracy 仍为 <b>{cumulative_ablation_lookup['1-10']['target_trace_top1']}</b> / <b>{cumulative_ablation_lookup['11-20']['target_trace_top1']}</b> / <b>{cumulative_ablation_lookup['21-30']['target_trace_top1']}</b>；删 top-4 后降到 <b>{cumulative_ablation_lookup['1-10']['target_trace_top4']}</b> / <b>{cumulative_ablation_lookup['11-20']['target_trace_top4']}</b> / <b>{cumulative_ablation_lookup['21-30']['target_trace_top4']}</b>，删 top-8 后进一步降到 <b>{cumulative_ablation_lookup['1-10']['target_trace_top8']}</b> / <b>{cumulative_ablation_lookup['11-20']['target_trace_top8']}</b> / <b>{cumulative_ablation_lookup['21-30']['target_trace_top8']}</b>。同一 top-8 干预下，final-count accuracy 仍为 <b>{cumulative_ablation_lookup['1-10']['target_final_top8']}</b> / <b>{cumulative_ablation_lookup['11-20']['target_final_top8']}</b> / <b>{cumulative_ablation_lookup['21-30']['target_final_top8']}</b>。</div>
+      <h4>分析</h4>
+      <p>“最尖锐地指向 matching needle”与“单独删除时最不可替代”不是同一性质。top-1 几乎无损、top-4 开始下降、top-8 接近崩溃，说明 targeted retrieval 由多枚可互补的 routing heads 共同实现，而不是一枚唯一的“第 k 个 needle head”。final count 仍稳定也不能解释为 trace 无用：teacher-forced 输入已经给出 gold marker tokens，最终 <code>&lt;Ans&gt;</code> 可以绕过被损坏的生成步骤直接读取正确 trace。检验自由生成中的级联失败仍需要 autoregressive ablation。</p>
+
+      <h3>7.5 CoT trace readout：与 targeted retrieval 是不同候选组</h3>
+      <h4>实验</h4>
+      <p>Targeted ranking 读取数字 <code>&lt;k&gt;</code> query；本实验改在最终 <code>&lt;Ans&gt;</code> query 上，以投向全部 trace marker positions 的 <code>trace_markers_mass</code> 排名 heads，再累计 mask top-n，并测 teacher-forced final-count accuracy。这样能检验“从已给定 trace 读出 count”的候选组，而不是再次检验 prompt retrieval。</p>
+      <h4>结果</h4>
+      <div class="callout">描述性 readout ranking 以前列 <code>L2H3</code>、<code>L2H2</code>、<code>L4H1</code>、<code>L4H0</code> 为主，与 k-to-k targeted ranking 不同。删 readout top-4 后，三个区间的 final-count accuracy 为 <b>{cumulative_ablation_lookup['1-10']['readout_final_top4']}</b> / <b>{cumulative_ablation_lookup['11-20']['readout_final_top4']}</b> / <b>{cumulative_ablation_lookup['21-30']['readout_final_top4']}</b>；删 top-8 后为 <b>{cumulative_ablation_lookup['1-10']['readout_final_top8']}</b> / <b>{cumulative_ablation_lookup['11-20']['readout_final_top8']}</b> / <b>{cumulative_ablation_lookup['21-30']['readout_final_top8']}</b>。累计曲线并不严格单调。</div>
+      <h4>分析</h4>
+      <p>Targeted retrieval 与 final trace readout 是两个不同阶段的候选 circuit。低 count 在 readout 删除下更早受损，中高 count 仍保留明显冗余；非单调曲线则说明 global mask 同时改变了多个相互补偿或竞争的通路，所以不能把“再增加一枚被 mask head”带来的边际差当作该 head 的独立贡献。第 8 节需要把 patch 限定在 <code>&lt;Ans&gt;</code> query，才能进一步确认 readout activation 是否足以搬运 count 信息。</p>
+
+      <h3>7.6 描述性 attention score 与因果 drop 是否一致</h3>
+      <h4>实验</h4>
+      <p>对每个机制和 count 区间，把 16 枚 heads 的描述性 attention score 与对应单头 global-ablation accuracy drop 对齐，并计算 Spearman 秩相关。该检验不要求两者线性，只问“描述分数排名更高的 head，是否通常也造成更大因果损伤”。</p>
+      <h4>结果</h4>
+      {figure(
+          generated['ablation_alignment'],
+          'Figure 4C. Attention score 与单头 ablation drop 的逐 head 对齐',
+          '<b>每个点</b>是一枚 Layer×head；只标注描述分数最高 4 个与因果 drop 最高 4 个 head 的并集，标签使用 1-based Layer 与 0-based head。<b>三行</b>依次比较 non-thinking broad score→final-count drop、CoT raw k-to-k mass→trace-marker drop、CoT trace-readout mass→final-count drop；<b>三列</b>为 count 1–10、11–20、21–30。横轴是描述性 score，纵轴是 mask 后 accuracy drop；标题给出全部 16 枚 heads 的 Spearman ρ。'
+      )}
+      {table(alignment_rows,[('mechanism','比较'),('bin','count 区间'),('rho','Spearman ρ'),('n','heads')])}
+      <div class="callout">Non-thinking broad score 与 final-count drop 的 Spearman ρ 在三个区间分别为 <b>{alignment_lookup[('nonthinking','1-10','broad_attention_score')]}</b> / <b>{alignment_lookup[('nonthinking','11-20','broad_attention_score')]}</b> / <b>{alignment_lookup[('nonthinking','21-30','broad_attention_score')]}</b>。CoT k-to-k mass 与 trace-marker drop 分别为 <b>{alignment_lookup[('thinking','1-10','correct_prompt_needle_mass')]}</b> / <b>{alignment_lookup[('thinking','11-20','correct_prompt_needle_mass')]}</b> / <b>{alignment_lookup[('thinking','21-30','correct_prompt_needle_mass')]}</b>。CoT readout mass 与 final-count drop 分别为 <b>{alignment_lookup[('thinking','1-10','trace_markers_mass')]}</b> / <b>{alignment_lookup[('thinking','11-20','trace_markers_mass')]}</b> / <b>{alignment_lookup[('thinking','21-30','trace_markers_mass')]}</b>；最后一个区间因单头 drop 缺少方差而无法定义秩相关。</div>
+      <h4>分析</h4>
+      <p>Non-thinking broad score 与必要性呈中等正相关，说明描述性 broad attention 对 direct-count circuit 有实际筛选价值。CoT k-to-k 的相关为负，进一步说明 raw matching mass 不能等同于单头不可替代性：尖锐 retrieval heads 可能被其他 routing heads 替代，而早期支持性 heads 的删除反而更伤性能。readout score 的相关接近 0，也说明 final readout 不能只靠单头 attention mass 概括。可靠结论必须同时报告描述排序、单头必要性和累计 top-n 剂量曲线。
+      </p>
+
+      <h3>7.7 本节结论与下一步</h3>
+      <div class="mechanisms">
+        <div class="mechanism"><h3>Non-thinking</h3><p><b>当前支持：</b>Layer 1 broad heads 既有描述性 prompt-wide attention，也有强单头/累计必要性；它们很可能是直接 set aggregation 的关键入口。</p><p><b>仍缺：</b>global mask 不能证明这些 heads 把“count 数值”写到了哪里。第 8 节需要在 <code>&lt;Ans&gt;</code> 局部 patch broad-head output，并测 hidden-state/count logits 是否随 donor count 搬运。</p></div>
+        <div class="mechanism"><h3>CoT</h3><p><b>当前支持：</b>k-to-k heads 作为一个组对 marker trace 必要，但单头可替代；targeted retrieval 与 final trace readout 是不同阶段、不同排名的多头 circuit。</p><p><b>仍缺：</b>teacher forcing 隔断了局部 trace 错误向最终答案的级联。第 8 节应分别在 <code>&lt;k&gt;</code> 和 <code>&lt;Ans&gt;</code> 做局部 activation patch，并使用 marker-identity margin、next-index margin 与 final-count margin 区分检索、successor 和 readout。</p></div>
+      </div>
+    </section>
+    """
+
     report = f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Trace Count v10 分层因果机制报告</title><style>{css}</style></head><body><main>
     <header><h1>Trace Count v10：Count-30 分层学习动态与因果机制</h1><p class="subtitle">比较两个独立 Transformer 的直接计数与显式 CoT 检索路径，并把所有 head ablation、head-output patching、geometry steering 与 residual transplant 按 count 1–10、11–20、21–30 重新分析。</p><p class="meta">Run: {html.escape(run_dir.name)} · seed {config['seed']} · self-contained HTML · figures embedded as data URIs</p></header>
     <nav class="toc"><b>目录</b><ol><li><a href="#object">研究对象与机制假设</a></li><li><a href="#setting">数据、模型与 sequence</a></li><li><a href="#definitions">术语、指标与公式</a></li><li><a href="#dynamics">学习动态</a></li><li><a href="#attention">Attention 候选机制</a></li><li><a href="#ablation">分层 head ablation</a></li><li><a href="#patching">分层 activation patching</a></li><li><a href="#steering">分层 geometry steering</a></li><li><a href="#transplant">分层 residual transplant</a></li><li><a href="#geometry">PCA variance 与互动 3D manifold</a></li><li><a href="#synthesis">综合结论与边界</a></li></ol></nav>
@@ -1510,18 +2412,49 @@ def build_report(run_dir: Path) -> Path:
 
     <section id="ablation"><h2>6. 分层 global head ablation：哪些 heads 对哪个难度区间必要</h2><div class="protocol"><b>样本。</b>本次重新生成每个 exact count {manifest['ablation_examples_per_exact_count']} 个 prompts，共 {30*manifest['ablation_examples_per_exact_count']} 个；两个模型使用各自格式做 teacher-forced forward。<b>干预。</b>用 GPT-2 <code>head_mask</code> 将指定 head 在整条 sequence、所有 query positions 的输出设为 0。单头逐个测 16 次；累计实验按候选排名依次 mask top-1…top-16，并与排名倒序和 {manifest['ablation_random_orders']} 条固定随机顺序比较。<b>指标。</b>remaining accuracy 是 mask 后的绝对 accuracy；drop 是无干预 baseline 减去 mask 后 accuracy。</div>{figure(generated['single'],'Figure 3. 单头必要性按 count 区间分解',single_ablation_caption)}{table(ablation_rows,[('bin','count 区间'),('direct_head','最强 non-thinking 单头'),('direct_drop','final accuracy drop'),('trace_head','最强 CoT trace 单头'),('trace_drop','trace-marker accuracy drop')])}{figure(generated['cumulative'],'Figure 4. Top-n 累计 mask 的剂量曲线与强对照',cumulative_ablation_caption)}</section>
 
-    <section id="patching"><h2>7. 分层 activation patching：候选 heads 是否局部充分</h2><h3>7.1 CoT marker-identity clean-to-corrupt retrieval patch</h3><div class="protocol"><b>配对输入。</b>clean 与 corrupt prompt 位置、noise、count 和 trace index 完全相同，只把目标第 k 个 prompt marker identity 换成另一 marker；读取同一个 <code>&lt;k&gt;</code> query 对 clean marker 的 logit margin。<b>patch。</b>先缓存 clean run 在每层 attention <code>c_proj</code> 前按 head 切分的 output slice，再把选中 top-n slices 替换到 corrupt run 同一 query；其余 activation 保持 corrupt。interior 取约中间 k，final 取 k=n。<b>样本来源。</b>原始逐 query 干预记录每个 exact count 2 个 prompts，本报告按 gold count 无损重聚合。</div>{figure(generated['retrieval'],'Figure 5. Targeted retrieval patch 的 normalized recovery','<b>横轴</b>是被 patch 的 head 数；<b>纵轴</b>是 clean-marker logit margin 的 normalized recovery。上行为 interior k，下行为 final k=n；三列为 count 区间。蓝=targeted ranking top；红=bottom；灰=三个随机 head 顺序的均值与范围。')}
-    <h3>7.2 Nested prompt donor→receiver count-head patch</h3><div class="protocol"><b>配对输入。</b>receiver count=n 与 donor count=m 共享同一 256-token noise 序列；needle 集合是 nested 的，即较小 count 的 needles 是较大 count 的子集。m−n 穷举配置中的 ±1、±2、±3、±5、±10（只保留 1–30 内合法 pair）。<b>query。</b>在各自 final <code>&lt;Ans&gt;</code> position patch head-output slices；CoT donor/receiver trace 长度不同，所以语义 query 对齐但绝对位置可不同。<b>结果量。</b>对每个 bin 独立拟合 expected-count shift 对 donor offset 的 slope；primary=non-thinking broad 或 CoT trace-readout 排名。bottom/random 是必要对照。</div>{figure(generated['nested'],'Figure 6. Head-output 是否能够运输 count state','<b>横轴</b>是 patch 的 donor head slices 数；<b>纵轴</b>是 expected-count shift 对 donor offset 的回归 slope。1 表示一比一随 donor 移动，0 表示没有 count transport。上行为 non-thinking，下行为 CoT；三列为 receiver count 区间。')}{table(patch_rows,[('bin','receiver/gold count 区间'),('retrieval','targeted top-4 final-k recovery'),('direct','non-thinking primary top-4 slope'),('cot','CoT trace-readout top-4 slope')])}</section>
+    <section id="patching"><h2>8. Attention-head patching：候选 heads 是否局部充分</h2><h3>8.1 CoT marker-identity clean-to-corrupt retrieval patch</h3><div class="protocol"><b>配对输入。</b>clean 与 corrupt prompt 位置、noise、count 和 trace index 完全相同，只把目标第 k 个 prompt marker identity 换成另一 marker；读取同一个 <code>&lt;k&gt;</code> query 对 clean marker 的 logit margin。<b>patch。</b>先缓存 clean run 在每层 attention <code>c_proj</code> 前按 head 切分的 output slice，再把选中 top-n slices 替换到 corrupt run 同一 query；其余 activation 保持 corrupt。interior 取约中间 k，final 取 k=n。<b>样本来源。</b>原始逐 query 干预记录每个 exact count 2 个 prompts，本报告按 gold count 无损重聚合。</div>{figure(generated['retrieval'],'Figure 5. Targeted retrieval patch 的 normalized recovery','<b>横轴</b>是被 patch 的 head 数；<b>纵轴</b>是 clean-marker logit margin 的 normalized recovery。上行为 interior k，下行为 final k=n；三列为 count 区间。蓝=targeted ranking top；红=bottom；灰=三个随机 head 顺序的均值与范围。')}
+    <h3>8.2 Nested prompt donor→receiver count-head patch</h3><div class="protocol"><b>配对输入。</b>receiver count=n 与 donor count=m 共享同一 256-token noise 序列；needle 集合是 nested 的，即较小 count 的 needles 是较大 count 的子集。m−n 穷举配置中的 ±1、±2、±3、±5、±10（只保留 1–30 内合法 pair）。<b>query。</b>在各自 final <code>&lt;Ans&gt;</code> position patch head-output slices；CoT donor/receiver trace 长度不同，所以语义 query 对齐但绝对位置可不同。<b>结果量。</b>对每个 bin 独立拟合 expected-count shift 对 donor offset 的 slope；primary=non-thinking broad 或 CoT trace-readout 排名。bottom/random 是必要对照。</div>{figure(generated['nested'],'Figure 6. Head-output 是否能够运输 count state','<b>横轴</b>是 patch 的 donor head slices 数；<b>纵轴</b>是 expected-count shift 对 donor offset 的回归 slope。1 表示一比一随 donor 移动，0 表示没有 count transport。上行为 non-thinking，下行为 CoT；三列为 receiver count 区间。')}{table(patch_rows,[('bin','receiver/gold count 区间'),('retrieval','targeted top-4 final-k recovery'),('direct','non-thinking primary top-4 slope'),('cot','CoT trace-readout top-4 slope')])}</section>
 
-    <section id="steering"><h2>8. 分层 geometry steering：可读方向是否也是可控方向</h2><div class="protocol"><b>方向训练。</b>在独立 direction-train split 中，对每个 site×Layer×exact count 求 residual centroid，再计算 29 个相邻差向量；将其归一化平均得到 adjacent-mean direction，并用平均相邻距离定标一步。<b>site。</b>non-thinking natural final；CoT natural final；CoT fixed-15 trace（trace 内容和长度固定为 15，但 prompt count 仍是 1–30，用于去除自然 CoT close position=constant+2n 的泄漏）。<b>干预。</b>在 held-out query 的某 Layer 后加 <code>alpha·step_size·direction</code>，alpha∈{config['steering_alphas']}；所有行按 gold prompt count 分成三栏。<b>注意。</b>这是真实重新前向得到的逐样本 intervention 表的分层重聚合，不是用 probe 预测代替模型输出。</div>{figure(generated['steering'],'Figure 7. Adjacent-count direction 的 dose response','<b>横轴</b>是 alpha；<b>纵轴</b>是干预后 expected count 减 baseline expected count。彩色线表示在 Layer 1–4 后加方向；虚线 y=alpha 是理想均匀计数轴。每行一个 semantic site，每列一个 count 区间。曲线非线性、饱和或反向说明同一全局向量不能在整个 manifold 上充当统一 +1 算子。')}{table(steering_rows,[('bin','count 区间'),('site','site'),('layer','该区间最佳线性 Layer'),('gain','shift/alpha gain'),('r2','线性 R²')])}<div class="callout warn"><b>解释边界：</b>高 probe/PCA 可读性不保证 adjacent-mean steering 有效。Centroid 轨迹若弯曲，相邻差向量会随 count 改变；把它们平均成一个方向可能离开自然 manifold。第 9 节的完整 centroid transplant 是更强、也更局部的因果测试。</div></section>
+    <section id="steering"><h2>9. Hidden-state geometry steering：可读方向是否也是可控方向</h2><div class="protocol"><b>方向训练。</b>在独立 direction-train split 中，对每个 site×Layer×exact count 求 residual centroid，再计算 29 个相邻差向量；将其归一化平均得到 adjacent-mean direction，并用平均相邻距离定标一步。<b>site。</b>non-thinking natural final；CoT natural final；CoT counterfactual fixed-15 final。最后一个 site 使用与第 6.1 节相同的反事实输入：15 步模板 trace 对所有 prompt 固定，真实答案仍是 prompt count；它不是 gold trace。<b>干预。</b>在 held-out query 的某 Layer 后加 <code>alpha·step_size·direction</code>，alpha∈{config['steering_alphas']}；所有行按真实 prompt count 分成三栏。<b>注意。</b>这是真实重新前向得到的逐样本 intervention 表的分层重聚合，不是用 probe 预测代替模型输出。</div>{figure(generated['steering'],'Figure 7. Adjacent-count direction 的 dose response','<b>横轴</b>是 alpha；<b>纵轴</b>是干预后 expected count 减 baseline expected count。彩色线表示在 Layer 1–4 后加方向；虚线 y=alpha 是理想均匀计数轴。每行一个 semantic site，每列一个 count 区间。曲线非线性、饱和或反向说明同一全局向量不能在整个 manifold 上充当统一 +1 算子。')}{table(steering_rows,[('bin','count 区间'),('site','site'),('layer','该区间最佳线性 Layer'),('gain','shift/alpha gain'),('r2','线性 R²')])}<div class="callout warn"><b>解释边界：</b>高 probe/PCA 可读性不保证 adjacent-mean steering 有效。Centroid 轨迹若弯曲，相邻差向量会随 count 改变；把它们平均成一个方向可能离开自然 manifold。第 10 节的完整 centroid transplant 是更强、也更局部的因果测试。</div></section>
 
-    <section id="transplant"><h2>9. 分层 residual transplant：完整 count state 能否搬运</h2><div class="protocol"><b>完整 residual。</b>对 receiver count=n，在 final query 的某 Layer 后，用 donor count=m 的 256 维 residual 完整替换，再运行剩余 Layers。橙色虚线使用单个独立 donor prompt。<b>Count centroid。</b>蓝色实线使用 direction-train split 中 count=m 的 residual 均值，平均掉 donor prompt identity，是更干净的 count-state intervention。<b>指标。</b>按 receiver count 分栏，对所有合法 m−n offsets 独立拟合 transport slope。CoT fixed-trace 条件测试 prompt-derived count state 是否仍能控制一个明确写着 15-step trace 的 answer。</div>{figure(generated['transplant'],'Figure 8. 完整 residual/centroid 的 count transport slope','<b>横轴</b>是替换发生在 Layer 1–4 哪一层之后；<b>纵轴</b>是 expected-count shift / donor offset 的 slope。蓝=独立训练 centroid；橙=单 donor residual。每行一个 site，每列一个 receiver count 区间。slope=1 表示该位置的完整 residual 足以把输出一比一改成 donor count state。')}<div class="callout good"><b>为什么它比 steering 强：</b>steering 只沿一个人为抽取的全局方向加向量；centroid transplant 放入该 exact count 在该 Layer 的完整自然状态。若 transplant 成功而 steering 失败，结论是“count state 具有因果充分性，但不是一根全局笔直的 +1 axis”。</div>
-    <h3>9.1 Trace-progress transplant 的覆盖边界</h3><p>原始 v10 protocol 为控制成本，只在 count 26–30 上运行 trace-marker progress m→n transplant，因此这些逐样本行全部属于 <code>21-30</code>。它不能被诚实地画成三个区间。该实验仍支持 Layer 4 marker-position residual 能决定下一 index/close，但本报告不把 high-count-only 结果外推到 1–20。</p><p class="small">可用分层行数：{len(trace_progress)}；实际 count-bin：{', '.join(sorted(trace_progress.count_bin.unique()))}。</p></section>
+    <section id="transplant"><h2>10. Hidden-state patching：完整 count state 能否跨 sequence 搬运</h2><div class="protocol"><b>完整 residual。</b>对 receiver count=n，在 final query 的某 Layer 后，用 donor count=m 的 256 维 residual 完整替换，再运行剩余 Layers。橙色虚线使用单个独立 donor prompt。<b>Count centroid。</b>蓝色实线使用 direction-train split 中 count=m 的 residual 均值，平均掉 donor prompt identity，是更干净的 count-state intervention。<b>指标。</b>按 receiver count 分栏，对所有合法 m−n offsets 独立拟合 transport slope。CoT counterfactual fixed-15 条件继续使用固定模板 trace 与真实 prompt-count 答案的冲突输入，测试第 6.1 节中“可读的 prompt-derived count”能否真正控制 logits；它不衡量自然 CoT 的生成准确率。</div>{figure(generated['transplant'],'Figure 8. 完整 residual/centroid 的 count transport slope','<b>横轴</b>是替换发生在 Layer 1–4 哪一层之后；<b>纵轴</b>是 expected-count shift / donor offset 的 slope。蓝=独立训练 centroid；橙=单 donor residual。每行一个 site，每列一个 receiver count 区间。slope=1 表示该位置的完整 residual 足以把输出一比一改成 donor count state。')}<div class="callout good"><b>为什么它比 steering 强：</b>steering 只沿一个人为抽取的全局方向加向量；centroid transplant 放入该 exact count 在该 Layer 的完整自然状态。若 transplant 成功而 steering 失败，结论是“count state 具有因果充分性，但不是一根全局笔直的 +1 axis”。</div>
+    <h3>10.1 CoT trace 内部的 hidden-state patching：覆盖边界</h3><p>原始 v10 protocol 为控制成本，只在 count 26–30 上运行 trace-marker progress m→n transplant，因此这些逐样本行全部属于 <code>21-30</code>。它不能被诚实地画成三个区间。该实验仍支持 Layer 4 marker-position residual 能决定下一 index/close，但本报告不把 high-count-only 结果外推到 1–20。</p><p class="small">可用分层行数：{len(trace_progress)}；实际 count-bin：{', '.join(sorted(trace_progress.count_bin.unique()))}。</p></section>
 
-    <section id="geometry"><h2>10. Count-state geometry：PCA variance、静态均值轨迹与互动 3D</h2><div class="protocol"><b>严格 mean-first PCA。</b>对每个 semantic site、每个 Layer，先在 held-out 数据中对同一个 exact count 的所有 256 维 residual 求均值，得到 30×256 的 centroid 矩阵；再减去 30 个 centroids 的总均值并做 SVD/PCA。这里的 explained variance 只描述<b>count 类均值之间</b>的几何，不混入同 count 样本内方差。每个 site×Layer 独立 fit，所以 PC 轴不能跨 panel 直接对齐。<b>有效维数</b>为 participation ratio <code>(Σλ)²/Σλ²</code>；<b>平均转角</b>是相邻 centroid 差向量之间夹角的均值。</div>{figure(generated['pca_static'],'Figure 9. Exact-count mean residual 的 PC1–PC2 渐变轨迹','每个点是一个 exact count 的 256 维均值；颜色从 1 连续渐变到 30；灰线连接相邻 count。三行分别为 non-thinking natural final、CoT natural final、CoT fixed-15-trace final，四列为 Layer 1–4。横纵轴是该 panel 独立拟合的 PC1/PC2。')}{figure(generated['pca_variance'],'Figure 10. PC1–PC6 explained variance 与累计覆盖','前五个 panel：<b>横轴</b>为 PC1–PC6，<b>纵轴</b>为 Layer 1–4，单元格是该 PC 对 30 个 count centroids 的方差解释率。最后 panel 显示 PC1–PC6 累计解释率随 Layer 的变化。高累计率表示六维足以展示 centroid 间大部分结构，不表示单样本 hidden state 只有六维。')}{table(pca_rows,[('site','site'),('layer','Layer'),('pc1','PC1 variance'),('pc3','PC1–3 cumulative'),('pc6','PC1–6 cumulative'),('dim','effective dimension'),('turn','mean adjacent turn')])}{interactive_pca(coordinates, geometry)}<div class="callout warn"><b>如何读互动图：</b>切换 count range 只筛选已经在全 1–30 centroids 上拟合好的坐标，不会为每个区间重新旋转 PCA；因此三个区间在同一 site×Layer 中可直接比较。切换 site 或 Layer 后 PCA 会重新定义，屏幕方向不再是同一基底。</div></section>
+    <section id="geometry"><h2>10. Count-state geometry：PCA variance、静态均值轨迹与互动 3D</h2><div class="protocol"><b>严格 mean-first PCA。</b>对每个 semantic site、每个 Layer，先在 held-out 数据中对同一个 exact count 的所有 256 维 residual 求均值，得到 30×256 的 centroid 矩阵；再减去 30 个 centroids 的总均值并做 SVD/PCA。这里的 explained variance 只描述<b>count 类均值之间</b>的几何，不混入同 count 样本内方差。每个 site×Layer 独立 fit，所以 PC 轴不能跨 panel 直接对齐。<b>反事实 site。</b><code>CoT counterfactual fixed-15 final</code> 指第 5B.1 节定义的固定模板 trace 控制，不是 gold trace。<b>有效维数</b>为 participation ratio <code>(Σλ)²/Σλ²</code>；<b>平均转角</b>是相邻 centroid 差向量之间夹角的均值。</div>{figure(generated['pca_static'],'Figure 9. Exact-count mean residual 的 PC1–PC2 渐变轨迹','每个点是一个 exact count 的 256 维均值；颜色从 1 连续渐变到 30；灰线连接相邻 count。三行分别为 non-thinking natural final、CoT natural final、CoT counterfactual fixed-15 final，四列为 Layer 1–4。横纵轴是该 panel 独立拟合的 PC1/PC2。')}{figure(generated['pca_variance'],'Figure 10. PC1–PC6 explained variance 与累计覆盖','前五个 panel：<b>横轴</b>为 PC1–PC6，<b>纵轴</b>为 Layer 1–4，单元格是该 PC 对 30 个 count centroids 的方差解释率。最后 panel 显示 PC1–PC6 累计解释率随 Layer 的变化。高累计率表示六维足以展示 centroid 间大部分结构，不表示单样本 hidden state 只有六维。')}{table(pca_rows,[('site','site'),('layer','Layer'),('pc1','PC1 variance'),('pc3','PC1–3 cumulative'),('pc6','PC1–6 cumulative'),('dim','effective dimension'),('turn','mean adjacent turn')])}{interactive_pca(coordinates, geometry)}<div class="callout warn"><b>如何读互动图：</b>切换 count range 只筛选已经在全 1–30 centroids 上拟合好的坐标，不会为每个区间重新旋转 PCA；因此三个区间在同一 site×Layer 中可直接比较。切换 site 或 Layer 后 PCA 会重新定义，屏幕方向不再是同一基底。</div></section>
 
-    <section id="synthesis"><h2>11. 综合机制结论、证据强度与尚缺环节</h2><div class="mechanisms"><div class="mechanism"><h3>Non-thinking</h3><ol><li>描述性 broad heads 位于早期 Layer；分层 mask 检验它们对哪些 count 区间必要。</li><li>Nested donor patch 若在三个区间都有正 slope，说明候选 head slices 不只相关，而能运输部分 count state。</li><li>完整 centroid transplant 在后层趋近 slope=1，说明 answer-query residual 是足以决定 count 的因果状态。</li><li>Adjacent-mean steering 的区间不稳定性说明该状态不是一根跨 1–30 恒定的标量 +1 方向。</li></ol></div><div class="mechanism"><h3>CoT</h3><ol><li><code>&lt;k&gt;</code> query 的 k-to-k mass 随 count 增大而下降，但 targeted clean patch 相对 bottom/random 的恢复检验其因果功能。</li><li>Targeted retrieval 与 final trace readout 是不同排名；删除 retrieval heads 主要伤 marker trace，不自动等于删除最终 count state。</li><li>Natural final centroid 可因果搬运 count；fixed-15-trace control 检查它究竟跟 prompt count 还是 trace count。</li><li>现有 trace-progress causality 只覆盖 26–30，尚需低 count 对称实验才能声称统一 successor circuit。</li></ol></div></div><div class="callout good"><b>本次改版的实质：</b>不再用全 1–30 的一个均值掩盖难度差异。Head necessity、retrieval recovery、count transport、steering gain 和 residual sufficiency 都在同样的 1–10 / 11–20 / 21–30 定义下报告；每一列都回到逐样本干预行计算。</div><div class="callout limit"><b>仍不能声称：</b>单 seed synthetic model 可外推到真实 LLM；attention weight 等于信息流；global mask 定位了具体 query；PCA 中连续轨迹等于模型执行逐步加法；centroid transplant 揭示了模型在线构造该 centroid 的全部算法。最稳健的结论应限定为：两个模型形成了可区分的 routing signatures，且若干 head/residual 组件在受控干预下对 trace 或 count 输出具有区间依赖的必要性/充分性。</div><p class="meta">Provenance: <code>analysis/report_stratified/manifest.json</code>. Fresh forward pass: global head ablation. Lossless count-bin reaggregation from existing per-example intervention rows: retrieval patching, nested count patching, geometry steering, final-state transplant and centroid transplant.</p></section>
+    <section id="synthesis"><h2>11. 综合机制结论、证据强度与尚缺环节</h2><div class="mechanisms"><div class="mechanism"><h3>Non-thinking</h3><ol><li>描述性 broad heads 位于早期 Layer；分层 mask 检验它们对哪些 count 区间必要。</li><li>Nested donor patch 若在三个区间都有正 slope，说明候选 head slices 不只相关，而能运输部分 count state。</li><li>完整 centroid transplant 在后层趋近 slope=1，说明 answer-query residual 是足以决定 count 的因果状态。</li><li>Adjacent-mean steering 的区间不稳定性说明该状态不是一根跨 1–30 恒定的标量 +1 方向。</li></ol></div><div class="mechanism"><h3>CoT</h3><ol><li><code>&lt;k&gt;</code> query 的 k-to-k mass 随 count 增大而下降，但 targeted clean patch 相对 bottom/random 的恢复检验其因果功能。</li><li>Targeted retrieval 与 final trace readout 是不同排名；删除 retrieval heads 主要伤 marker trace，不自动等于删除最终 count state。</li><li>自然 final state 同时含 prompt、trace 内容、trace 长度和位置线索。反事实 fixed-15 control 则把 trace 内容、长度和 <code>&lt;Ans&gt;</code> 位置固定，只让 prompt count/答案 n 改变；它显示 prompt-derived count 仍可读，但分层 transplant 表明该低维几何并非在所有 count 区间都具有一比一因果控制力。</li><li>现有 trace-progress causality 只覆盖 26–30，尚需低 count 对称实验才能声称统一 successor circuit。</li></ol></div></div><div class="callout good"><b>本次改版的实质：</b>不再用全 1–30 的一个均值掩盖难度差异。Head necessity、retrieval recovery、count transport、steering gain 和 residual sufficiency 都在同样的 1–10 / 11–20 / 21–30 定义下报告；每一列都回到逐样本干预行计算。</div><div class="callout limit"><b>仍不能声称：</b>单 seed synthetic model 可外推到真实 LLM；attention weight 等于信息流；global mask 定位了具体 query；PCA 中连续轨迹等于模型执行逐步加法；反事实 fixed-15 输入代表自然 CoT；centroid transplant 揭示了模型在线构造该 centroid 的全部算法。最稳健的结论应限定为：两个模型形成了可区分的 routing signatures，且若干 head/residual 组件在受控干预下对 trace 或 count 输出具有区间依赖的必要性/充分性。</div><p class="meta">Provenance: <code>analysis/report_stratified/manifest.json</code>. Fresh forward pass: global head ablation. Lossless count-bin reaggregation from existing per-example intervention rows: retrieval patching, nested count patching, geometry steering, final-state transplant and centroid transplant.</p></section>
     </main></body></html>"""
+
+    attention_start, attention_end = html_section_span(report, "attention")
+    report = report[:attention_start] + attention_section + report[attention_end:]
+    geometry_start, geometry_end = html_section_span(report, "geometry")
+    report = report[:geometry_start] + report[geometry_end:]
+    _, attention_end = html_section_span(report, "attention")
+    report = report[:attention_end] + geometry_section + report[attention_end:]
+    ablation_start, ablation_end = html_section_span(report, "ablation")
+    report = report[:ablation_start] + ablation_section + report[ablation_end:]
+
+    nav_start = report.index('<nav class="toc">')
+    nav_end = report.index("</nav>", nav_start) + len("</nav>")
+    new_nav = """
+    <nav class="toc"><b>目录</b><ol>
+      <li><a href="#object">研究对象与机制假设</a></li>
+      <li><a href="#setting">数据、模型与 sequence</a></li>
+      <li><a href="#definitions">术语、指标与公式</a></li>
+      <li><a href="#dynamics">学习动态</a></li>
+      <li><a href="#attention">5. 描述性 attention</a></li>
+      <li><a href="#geometry">6. 描述性 hidden state</a></li>
+      <li><a href="#ablation">7. Attention-head ablation</a></li>
+      <li><a href="#patching">8. Attention-head patching</a></li>
+      <li><a href="#steering">9. Hidden-state geometry steering</a></li>
+      <li><a href="#transplant">10. Hidden-state patching</a></li>
+      <li><a href="#interaction">11. Head 与 hidden state 的因果联系</a></li>
+      <li><a href="#synthesis">12. 综合结论与边界</a></li>
+    </ol></nav>
+    """
+    report = report[:nav_start] + new_nav + report[nav_end:]
+
+    report = finalize_report_numbering(report)
     output.write_text(report, encoding="utf-8")
     return output
 
