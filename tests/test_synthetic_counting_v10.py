@@ -23,6 +23,11 @@ from synthetic_counting_v10.state_causal import (
     _fit_pca,
     fit_count_directions,
 )
+from synthetic_counting_v10.report_followups import (
+    _forward_with_position_local_head_ablation,
+    _layer_matched_order,
+    _local_query_positions,
+)
 
 
 def tiny_setup():
@@ -102,3 +107,34 @@ def test_v10_main_matches_requested_v2_architecture_and_count_range():
     assert cfg.early_stop_patience == 0
     assert cfg.max_render_len == 322
     assert cfg.n_positions >= cfg.max_render_len
+
+
+def test_layer_matched_controls_preserve_the_ranked_layer_sequence():
+    ranking = [(2, 1), (3, 0), (2, 3), (0, 2), (3, 2), (0, 1)]
+    low = _layer_matched_order(ranking, reverse_within_layer=True)
+    random_order = _layer_matched_order(ranking, seed=19)
+    assert [layer for layer, _ in low] == [layer for layer, _ in ranking]
+    assert [layer for layer, _ in random_order] == [layer for layer, _ in ranking]
+    assert sorted(low) == sorted(ranking)
+    assert sorted(random_order) == sorted(ranking)
+
+
+def test_position_local_ablation_runs_at_trace_and_answer_queries_without_leaking_hooks():
+    cfg, vocab, model = tiny_setup()
+    example = make_example(cfg, vocab, random.Random(7), count=4)
+    item = render(example, vocab, "thinking")
+    ids = torch.tensor([item.input_ids], dtype=torch.long)
+    mask = torch.ones_like(ids)
+    baseline = model(input_ids=ids, attention_mask=mask).logits
+    local = _forward_with_position_local_head_ablation(
+        model,
+        ids,
+        mask,
+        [(0, 0)],
+        [_local_query_positions(item, "trace_index_tokens")],
+    ).logits
+    restored = model(input_ids=ids, attention_mask=mask).logits
+    assert local.shape == baseline.shape
+    assert not torch.allclose(local, baseline)
+    assert torch.allclose(restored, baseline)
+    assert _local_query_positions(item, "ans_token") == [item.spans.ans_pos]

@@ -729,7 +729,7 @@ def save_cumulative_ablation_panel(
     path: Path,
 ) -> None:
     """Save one cumulative head-ablation target as three count-bin panels."""
-    fig, axes = plt.subplots(1, 3, figsize=(13.8, 4.45), sharey=True, constrained_layout=True)
+    fig, axes = plt.subplots(1, 3, figsize=(13.8, 4.45), sharey=True)
     for ax, count_bin in zip(axes, COUNT_BINS):
         frame = cumulative[(cumulative["mode"] == mode) & (cumulative["count_bin"] == count_bin)]
         top = frame[frame.family == family].sort_values("top_n")
@@ -754,8 +754,102 @@ def save_cumulative_ablation_panel(
         ax.set_xlabel("number of globally masked heads")
         ax.set_ylabel("remaining accuracy")
     handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="lower center", ncol=4, bbox_to_anchor=(0.5, -0.02))
-    fig.suptitle(title, fontsize=15, fontweight="bold")
+    fig.subplots_adjust(left=0.06, right=0.99, bottom=0.14, top=0.75, wspace=0.28)
+    fig.legend(handles, labels, loc="upper center", ncol=4, bbox_to_anchor=(0.5, 0.88), frameon=False)
+    fig.suptitle(title, fontsize=15, fontweight="bold", y=0.98)
+    fig.savefig(path, dpi=190, bbox_inches="tight")
+    plt.close(fig)
+
+
+def save_position_local_ablation_panel(
+    local: pd.DataFrame,
+    *,
+    mechanism: str,
+    metric: str,
+    title: str,
+    path: Path,
+) -> None:
+    """Plot semantic-query-local ablation with layer-matched controls."""
+    fig, axes = plt.subplots(1, 3, figsize=(14.2, 4.65), sharey=True)
+    for ax, count_bin in zip(axes, COUNT_BINS):
+        frame = local[
+            (local["mechanism"] == mechanism)
+            & (local["count_bin"] == count_bin)
+        ]
+        styles = (
+            ("ranked_top", BLUE, "-", "ranked top"),
+            (
+                "global_reverse",
+                RED,
+                "--",
+                "reverse ranking (layer-confounded)",
+            ),
+            (
+                "layer_matched_low",
+                "#f59e0b",
+                "-.",
+                "same-layer low-score control",
+            ),
+        )
+        for family, color, linestyle, label in styles:
+            group = frame[frame.family == family].sort_values("top_n")
+            ax.plot(
+                group.top_n,
+                group[metric],
+                color=color,
+                linestyle=linestyle,
+                linewidth=2,
+                marker="o",
+                ms=3,
+                label=label,
+            )
+        random = frame[frame.family == "layer_matched_random"]
+        if not random.empty:
+            mean, low, high = random_band(random, metric)
+            ax.plot(
+                mean.top_n,
+                mean[metric],
+                color=GRAY,
+                linewidth=2,
+                label="same-layer random: mean",
+            )
+            ax.fill_between(
+                mean.top_n,
+                low[metric],
+                high[metric],
+                color=GRAY,
+                alpha=0.18,
+                label="same-layer random: min-max",
+            )
+        baseline = frame[frame.family == "baseline"]
+        if not baseline.empty:
+            ax.axhline(
+                float(baseline.iloc[0][metric]),
+                color="#111827",
+                linestyle=":",
+                linewidth=1.3,
+                label="no-ablation baseline",
+            )
+        ax.set_title(f"count {count_bin}")
+        ax.set_xlim(0.5, 16.5)
+        ax.set_ylim(-0.04, 1.04)
+        ax.set_xticks([1, 2, 4, 8, 12, 16])
+        ax.set_yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
+        ax.tick_params(axis="x", labelbottom=True)
+        ax.tick_params(axis="y", labelleft=True)
+        ax.set_xlabel("number of heads masked at the named query only")
+        ax.set_ylabel("remaining teacher-forced accuracy")
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.subplots_adjust(left=0.065, right=0.995, bottom=0.15, top=0.70, wspace=0.24)
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        ncol=3,
+        bbox_to_anchor=(0.5, 0.88),
+        frameon=False,
+    )
+    fig.suptitle(title, fontsize=15, fontweight="bold", y=0.99)
     fig.savefig(path, dpi=190, bbox_inches="tight")
     plt.close(fig)
 
@@ -1384,6 +1478,7 @@ def build_report(run_dir: Path) -> Path:
     attention_rows = pd.read_csv(attention_dir / "attention_rows.csv")
     single = pd.read_csv(tables / "single_head_ablation_by_bin.csv")
     cumulative = pd.read_csv(tables / "cumulative_head_ablation_by_bin.csv")
+    position_local = pd.read_csv(tables / "position_local_ablation_by_bin.csv")
     retrieval = pd.read_csv(tables / "retrieval_control_patching_by_bin.csv")
     nested = pd.read_csv(tables / "nested_head_patching_regression_by_bin.csv")
     steering = pd.read_csv(tables / "geometry_steering_by_bin.csv")
@@ -1415,6 +1510,9 @@ def build_report(run_dir: Path) -> Path:
         "cumulative_targeted_trace": figures / "cumulative_cot_targeted_to_trace.png",
         "cumulative_targeted_final": figures / "cumulative_cot_targeted_to_final.png",
         "cumulative_readout_final": figures / "cumulative_cot_readout_to_final.png",
+        "local_nonthinking": figures / "position_local_nonthinking_broad_to_final.png",
+        "local_targeted": figures / "position_local_cot_targeted_to_trace.png",
+        "local_readout": figures / "position_local_cot_readout_to_final.png",
         "retrieval": figures / "retrieval_patching_by_count_bin.png",
         "nested": figures / "nested_head_patching_by_count_bin.png",
         "steering": figures / "geometry_steering_by_count_bin.png",
@@ -1492,6 +1590,27 @@ def build_report(run_dir: Path) -> Path:
         show_bottom=False,
         title="CoT trace-readout-head ablation: final-count accuracy",
         path=generated["cumulative_readout_final"],
+    )
+    save_position_local_ablation_panel(
+        position_local,
+        mechanism="direct_broad",
+        metric="final_count_accuracy",
+        title="Position-local ablation: non-thinking broad heads at <Ans> only",
+        path=generated["local_nonthinking"],
+    )
+    save_position_local_ablation_panel(
+        position_local,
+        mechanism="targeted_retrieval",
+        metric="trace_marker_accuracy",
+        title="Position-local ablation: CoT targeted heads at trace-number queries only",
+        path=generated["local_targeted"],
+    )
+    save_position_local_ablation_panel(
+        position_local,
+        mechanism="trace_readout",
+        metric="final_count_accuracy",
+        title="Position-local ablation: CoT trace-readout heads at <Ans> only",
+        path=generated["local_readout"],
     )
     save_retrieval_patch(retrieval, generated["retrieval"])
     save_nested_patch(nested, generated["nested"])
@@ -1637,6 +1756,24 @@ def build_report(run_dir: Path) -> Path:
         ]
         return "n/a" if frame.empty else pct(frame.iloc[0][metric])
 
+    def local_remaining_accuracy(
+        *,
+        mechanism: str,
+        family: str,
+        count_bin: str,
+        top_n: int,
+        metric: str,
+    ) -> str:
+        frame = position_local[
+            (position_local["mechanism"] == mechanism)
+            & (position_local["family"] == family)
+            & (position_local["count_bin"] == count_bin)
+            & (position_local["top_n"] == top_n)
+        ]
+        if frame.empty:
+            return "n/a"
+        return pct(frame[metric].mean())
+
     ablation_rows = []
     cumulative_ablation_rows = []
     for count_bin in COUNT_BINS:
@@ -1692,6 +1829,51 @@ def build_report(run_dir: Path) -> Path:
             }
         )
 
+    position_local_rows: list[dict[str, str | int]] = []
+    local_specs = (
+        ("direct_broad", "final_count_accuracy", "Non-thinking broad @ <Ans>"),
+        ("targeted_retrieval", "trace_marker_accuracy", "CoT targeted @ <k>"),
+        ("trace_readout", "final_count_accuracy", "CoT readout @ <Ans>"),
+    )
+    for mechanism, metric, label in local_specs:
+        for count_bin in COUNT_BINS:
+            for top_n in (1, 4, 8):
+                position_local_rows.append(
+                    {
+                        "mechanism": label,
+                        "bin": count_bin,
+                        "top_n": top_n,
+                        "ranked_top": local_remaining_accuracy(
+                            mechanism=mechanism,
+                            family="ranked_top",
+                            count_bin=count_bin,
+                            top_n=top_n,
+                            metric=metric,
+                        ),
+                        "reverse": local_remaining_accuracy(
+                            mechanism=mechanism,
+                            family="global_reverse",
+                            count_bin=count_bin,
+                            top_n=top_n,
+                            metric=metric,
+                        ),
+                        "same_layer_low": local_remaining_accuracy(
+                            mechanism=mechanism,
+                            family="layer_matched_low",
+                            count_bin=count_bin,
+                            top_n=top_n,
+                            metric=metric,
+                        ),
+                        "same_layer_random": local_remaining_accuracy(
+                            mechanism=mechanism,
+                            family="layer_matched_random",
+                            count_bin=count_bin,
+                            top_n=top_n,
+                            metric=metric,
+                        ),
+                    }
+                )
+
     alignment_rows = [
         {
             "mechanism": row.mechanism,
@@ -1703,6 +1885,18 @@ def build_report(run_dir: Path) -> Path:
     ]
     ablation_lookup = {row["bin"]: row for row in ablation_rows}
     cumulative_ablation_lookup = {row["bin"]: row for row in cumulative_ablation_rows}
+    position_local_direct_rows = [
+        row for row in position_local_rows
+        if row["mechanism"] == "Non-thinking broad @ <Ans>"
+    ]
+    position_local_targeted_rows = [
+        row for row in position_local_rows
+        if row["mechanism"] == "CoT targeted @ <k>"
+    ]
+    position_local_readout_rows = [
+        row for row in position_local_rows
+        if row["mechanism"] == "CoT readout @ <Ans>"
+    ]
     alignment_lookup = {
         (row.mode, row.count_bin, row.descriptive_score): fmt(row.spearman_rho)
         for row in alignment.itertuples(index=False)
@@ -2324,35 +2518,25 @@ def build_report(run_dir: Path) -> Path:
 
       <p><b>阅读顺序。</b>下面每个小节都严格按照“实验 → 结果 → 分析”组织。实验段只说明干预和指标；结果段先给图表与观测数值；分析段才讨论这些结果支持或排除什么机制。</p>
 
-      <h3>7.2 消融结果总览：单头必要性与 top-n 剂量曲线</h3>
-      <h4>实验</h4>
-      <p>先对 16 枚 Layer×head 做逐头 global mask，再分别按 non-thinking <code>broad_attention_score</code>、CoT <code>k-to-k raw mass</code> 与 CoT <code>trace_markers_mass</code> 从高到低累计 mask top-n。单头实验回答“哪一枚 head 单独不可替代”；累计实验回答“同类候选 heads 是否存在冗余，以及删到多少枚时行为开始崩溃”。</p>
-      <h4>结果</h4>
-      {figure(
-          generated['single'],
-          'Figure 4A. 单头 global ablation：每枚 head 被删除后的性能下降',
-          '<b>横轴</b>为 head 0–3，<b>纵轴</b>为 Layer 1–4。每个单元格是 baseline accuracy 减去单头 mask 后 accuracy；数值越大，说明该 head 单独删除造成的损伤越大。三列为 count 1–10、11–20、21–30。第一行测 non-thinking final-count，第二行测 CoT trace-marker，第三行测 CoT teacher-forced final-count。mask 覆盖整条 sequence，因此本图定位的是“整枚 head 的必要性”，还不能确定它究竟在哪个 token query 上起作用。'
-      )}
-      {table(
-          ablation_rows,
-          [('bin','count 区间'),('direct_head','最强 non-thinking final 单头'),('direct_drop','final drop'),('trace_head','最强 CoT trace 单头'),('trace_drop','trace-marker drop'),('cot_final_head','最强 CoT final 单头'),('cot_final_drop','final drop')],
-      )}
-      {figure(
-          generated['cumulative'],
-          'Figure 4B. 按机制分数累计 mask：从单头冗余到成组失效',
-          '<b>横轴</b>为同时 global mask 的 head 数 top-n，<b>纵轴</b>为干预后剩余的绝对 accuracy；虚线 1 是未干预 baseline。四行依次为 non-thinking broad→final count、CoT targeted→trace marker、CoT targeted→final count、CoT trace-readout→final count；三列为 count 区间。蓝线按相应机制分数从高到低删除，红线为可用时的 bottom 排序，灰线与阴影为固定随机顺序的均值和 min–max。高分曲线若比 bottom/random 更早下降，才说明描述性排序捕捉到了特异机制。'
-      )}
-      {table(
-          cumulative_ablation_rows,
-          [('bin','count 区间'),('direct_top1','NT broad top-1 后 final'),('direct_top2','NT broad top-2 后 final'),('target_trace_top1','CoT target top-1 后 trace'),('target_trace_top4','top-4 后 trace'),('target_trace_top8','top-8 后 trace'),('target_final_top8','target top-8 后 final'),('readout_final_top4','readout top-4 后 final'),('readout_final_top8','readout top-8 后 final')],
-      )}
-      <h4>分析</h4>
-      <p>两张图要结合阅读：单头 drop 高说明该 head 在当前网络中较难被替代；单头 drop 低但累计 top-n 很快下降，则说明同类 heads 彼此补偿。后续 7.3–7.5 分别把这两类证据用于 non-thinking broad aggregation、CoT targeted retrieval 和 CoT trace readout。</p>
+      <h3>7.2 结果组织方式：每种机制独立报告</h3>
+      <p>为避免把不同 query、不同行为指标和不同机制排名混在同一张大图里，后续三节分别报告 non-thinking broad aggregation、CoT targeted retrieval 和 CoT trace readout。每节先给单头热图，再给对应的累计 top-n 剂量曲线；所有 panel 都显式标出 head/Layer 或 mask 数/accuracy 坐标。</p>
 
       <h3>7.3 Non-thinking：early broad heads 对直接 final count 具有强必要性</h3>
       <h4>实验</h4>
       <p>Non-thinking 没有逐 k trace。我们按第 5 节定义的 <code>broad_attention_score</code> 排序 heads，先逐头 mask，再从 top-1 开始累计 mask；在每个 count 区间都以 non-thinking final-count accuracy 为结果变量，并与 bottom/random 删除顺序比较。</p>
       <h4>结果</h4>
+      {figure(
+          generated['single_nonthinking'],
+          'Figure 4A. Non-thinking 单头 broad-circuit 必要性',
+          '<b>横轴</b>是 head index 0–3；<b>纵轴</b>是 Layer 1–4；三栏分别是 count 1–10、11–20、21–30。颜色和格内数字都是 final-count accuracy drop = baseline accuracy − 单头 global mask 后 accuracy。'
+      )}
+      {figure(
+          generated['cumulative_nonthinking'],
+          'Figure 4B. Non-thinking broad heads 的累计消融剂量曲线',
+          '<b>横轴</b>是累计 global mask 的 head 数，刻度为 1、2、4、8、12、16；<b>纵轴</b>是干预后剩余的绝对 final-count accuracy，范围 0–1。三栏对应三个 count 区间。蓝线按 broad score 从高到低删除，红线按反向排名删除，灰线和阴影是 8 个随机顺序的均值及 min–max；水平虚线是无干预 baseline。'
+      )}
+      {table(ablation_rows,[('bin','count 区间'),('direct_head','最强单头'),('direct_drop','final-count drop')])}
+      {table(cumulative_ablation_rows,[('bin','count 区间'),('direct_top1','broad top-1 后 final accuracy'),('direct_top2','broad top-2 后 final accuracy')])}
       <div class="callout good">描述性排名稳定的 <code>L1H3</code> 同时是中高 count 最强的单头因果组件：11–20 的最大 final-accuracy drop 为 <b>{ablation_lookup['11-20']['direct_drop']}</b>，21–30 为 <b>{ablation_lookup['21-30']['direct_drop']}</b>。1–10 的最强单头为 <code>{ablation_lookup['1-10']['direct_head']}</code>，drop 为 <b>{ablation_lookup['1-10']['direct_drop']}</b>。按 broad score 累计 mask top-1 后，三个区间剩余 accuracy 为 <b>{cumulative_ablation_lookup['1-10']['direct_top1']}</b> / <b>{cumulative_ablation_lookup['11-20']['direct_top1']}</b> / <b>{cumulative_ablation_lookup['21-30']['direct_top1']}</b>；累计到 top-2 后为 <b>{cumulative_ablation_lookup['1-10']['direct_top2']}</b> / <b>{cumulative_ablation_lookup['11-20']['direct_top2']}</b> / <b>{cumulative_ablation_lookup['21-30']['direct_top2']}</b>。</div>
       <h4>分析</h4>
       <p>结果支持 Layer 1 broad routing 是 direct counting 的必要入口：同一批早期 heads 既在描述性 attention 中广泛覆盖 prompt needles，又在删除后造成大幅 final-count 损伤。低 count 的最强单头与中高 count 略有差异，说明容易样本有更多可替代路径；但 top-2 累计删除后三段都接近崩溃，说明 broad circuit 整体不是可有可无的伴随现象。</p>
@@ -2361,6 +2545,23 @@ def build_report(run_dir: Path) -> Path:
       <h4>实验</h4>
       <p>在 CoT 的数字 <code>&lt;k&gt;</code> query 上，以第 k 个 prompt needle 的 raw attention mass 排名 targeted heads。逐头或累计 mask 后，首先测 teacher-forced trace-marker accuracy；同时测最终 teacher-forced final-count accuracy，用于区分“局部 marker retrieval 已损坏”与“给定 gold trace 后的最终 readout 已损坏”。</p>
       <h4>结果</h4>
+      {figure(
+          generated['single_targeted'],
+          'Figure 4C. CoT 单头消融对 trace-marker retrieval 的影响',
+          '<b>横轴</b>是 head index 0–3；<b>纵轴</b>是 Layer 1–4；三栏为三个 count 区间。颜色和格内数字是 teacher-forced trace-marker accuracy drop。它衡量整枚 head 被关闭后，数字 <code>&lt;k&gt;</code> 后正确 marker <code>M_k</code> 的预测损失。'
+      )}
+      {figure(
+          generated['cumulative_targeted_trace'],
+          'Figure 4D. CoT targeted heads 的累计消融：局部 trace-marker accuracy',
+          '<b>横轴</b>是累计 mask 的 targeted heads 数；<b>纵轴</b>是剩余 teacher-forced trace-marker accuracy。三栏为三个 count 区间；蓝/红/灰分别是 targeted top、bottom 与随机删除顺序。'
+      )}
+      {figure(
+          generated['cumulative_targeted_final'],
+          'Figure 4E. 同一 targeted-head 消融对最终 count readout 的影响',
+          '<b>横轴</b>仍是累计 mask 的 targeted heads 数；<b>纵轴</b>改为给定 gold trace 后的 teacher-forced final-count accuracy。与 Figure 4D 对照可区分“trace marker 已生成失败”与“最终 readout 也失败”。'
+      )}
+      {table(ablation_rows,[('bin','count 区间'),('trace_head','最强 trace 单头'),('trace_drop','trace-marker drop')])}
+      {table(cumulative_ablation_rows,[('bin','count 区间'),('target_trace_top1','target top-1 后 trace'),('target_trace_top4','top-4 后 trace'),('target_trace_top8','top-8 后 trace'),('target_final_top8','同一 top-8 后 final')])}
       <div class="callout good">第 5 节 raw k-to-k mass 最高的是 <code>L4H2</code>，其次包括 <code>L3H1</code> 和 <code>L3H0</code>；但三个区间中，单头 mask 后 trace-marker drop 最大的都是 <code>{ablation_lookup['1-10']['trace_head']}</code> 一类早期 heads，最大 drop 分别为 <b>{ablation_lookup['1-10']['trace_drop']}</b> / <b>{ablation_lookup['11-20']['trace_drop']}</b> / <b>{ablation_lookup['21-30']['trace_drop']}</b>。只删 targeted top-1 时，三个区间的 trace-marker accuracy 仍为 <b>{cumulative_ablation_lookup['1-10']['target_trace_top1']}</b> / <b>{cumulative_ablation_lookup['11-20']['target_trace_top1']}</b> / <b>{cumulative_ablation_lookup['21-30']['target_trace_top1']}</b>；删 top-4 后降到 <b>{cumulative_ablation_lookup['1-10']['target_trace_top4']}</b> / <b>{cumulative_ablation_lookup['11-20']['target_trace_top4']}</b> / <b>{cumulative_ablation_lookup['21-30']['target_trace_top4']}</b>，删 top-8 后进一步降到 <b>{cumulative_ablation_lookup['1-10']['target_trace_top8']}</b> / <b>{cumulative_ablation_lookup['11-20']['target_trace_top8']}</b> / <b>{cumulative_ablation_lookup['21-30']['target_trace_top8']}</b>。同一 top-8 干预下，final-count accuracy 仍为 <b>{cumulative_ablation_lookup['1-10']['target_final_top8']}</b> / <b>{cumulative_ablation_lookup['11-20']['target_final_top8']}</b> / <b>{cumulative_ablation_lookup['21-30']['target_final_top8']}</b>。</div>
       <h4>分析</h4>
       <p>“最尖锐地指向 matching needle”与“单独删除时最不可替代”不是同一性质。top-1 几乎无损、top-4 开始下降、top-8 接近崩溃，说明 targeted retrieval 由多枚可互补的 routing heads 共同实现，而不是一枚唯一的“第 k 个 needle head”。final count 仍稳定也不能解释为 trace 无用：teacher-forced 输入已经给出 gold marker tokens，最终 <code>&lt;Ans&gt;</code> 可以绕过被损坏的生成步骤直接读取正确 trace。检验自由生成中的级联失败仍需要 autoregressive ablation。</p>
@@ -2369,18 +2570,82 @@ def build_report(run_dir: Path) -> Path:
       <h4>实验</h4>
       <p>Targeted ranking 读取数字 <code>&lt;k&gt;</code> query；本实验改在最终 <code>&lt;Ans&gt;</code> query 上，以投向全部 trace marker positions 的 <code>trace_markers_mass</code> 排名 heads，再累计 mask top-n，并测 teacher-forced final-count accuracy。这样能检验“从已给定 trace 读出 count”的候选组，而不是再次检验 prompt retrieval。</p>
       <h4>结果</h4>
+      {figure(
+          generated['single_cot_final'],
+          'Figure 4F. CoT 单头消融对最终 count readout 的影响',
+          '<b>横轴</b>是 head index 0–3；<b>纵轴</b>是 Layer 1–4；三栏为三个 count 区间。颜色和格内数字是给定 gold trace 时的 final-count accuracy drop。'
+      )}
+      {figure(
+          generated['cumulative_readout_final'],
+          'Figure 4G. CoT trace-readout heads 的累计消融剂量曲线',
+          '<b>横轴</b>是按 <code>trace_markers_mass</code> 排名后累计 mask 的 head 数；<b>纵轴</b>是剩余 teacher-forced final-count accuracy。三栏为三个 count 区间；蓝线是 readout top 排名，灰线和阴影是随机顺序均值及 min–max。'
+      )}
+      {table(ablation_rows,[('bin','count 区间'),('cot_final_head','最强 final 单头'),('cot_final_drop','final-count drop')])}
+      {table(cumulative_ablation_rows,[('bin','count 区间'),('readout_final_top4','readout top-4 后 final'),('readout_final_top8','readout top-8 后 final')])}
       <div class="callout">描述性 readout ranking 以前列 <code>L2H3</code>、<code>L2H2</code>、<code>L4H1</code>、<code>L4H0</code> 为主，与 k-to-k targeted ranking 不同。删 readout top-4 后，三个区间的 final-count accuracy 为 <b>{cumulative_ablation_lookup['1-10']['readout_final_top4']}</b> / <b>{cumulative_ablation_lookup['11-20']['readout_final_top4']}</b> / <b>{cumulative_ablation_lookup['21-30']['readout_final_top4']}</b>；删 top-8 后为 <b>{cumulative_ablation_lookup['1-10']['readout_final_top8']}</b> / <b>{cumulative_ablation_lookup['11-20']['readout_final_top8']}</b> / <b>{cumulative_ablation_lookup['21-30']['readout_final_top8']}</b>。累计曲线并不严格单调。</div>
       <h4>分析</h4>
       <p>Targeted retrieval 与 final trace readout 是两个不同阶段的候选 circuit。低 count 在 readout 删除下更早受损，中高 count 仍保留明显冗余；非单调曲线则说明 global mask 同时改变了多个相互补偿或竞争的通路，所以不能把“再增加一枚被 mask head”带来的边际差当作该 head 的独立贡献。第 8 节需要把 patch 限定在 <code>&lt;Ans&gt;</code> query，才能进一步确认 readout activation 是否足以搬运 count 信息。</p>
 
-      <h3>7.6 描述性 attention score 与因果 drop 是否一致</h3>
+      <h3>7.6 Position-local ablation：把“哪个 head”与“在哪个 query 起作用”分开</h3>
+      <h4>实验</h4>
+      <p>前面的 global mask 会关闭一枚 head 在整条 sequence 的所有输出，因此 reverse/bottom 顺序如果更早选到 Layer 1 heads，就可能比 targeted top 顺序更快破坏网络，即使这些 Layer 1 heads 在数字 <code>&lt;k&gt;</code> query 上没有较高 k-to-k mass。为去除这个混淆，本实验直接 hook 每层 attention 的 <code>c_proj</code> 输入；这个张量仍按四个 head slices 拼接。对选中的 head，只把指定语义 query 行对应的 64 维 slice 置零，其余 token positions、其余 heads、MLP 与参数全部保持原值。</p>
+      <div class="protocol"><ol>
+        <li><b>Non-thinking broad。</b>只在最终 <code>&lt;Ans&gt;</code> query 屏蔽 selected head outputs，测 final-count accuracy；同一 heads 在 prompt token 上的作用不受影响。</li>
+        <li><b>CoT targeted retrieval。</b>只在所有 gold trace 数字 <code>&lt;k&gt;</code> queries 屏蔽 selected head outputs，测下一 token 是否为正确 <code>M_k</code> 的 trace-marker accuracy；marker、successor 和最终 <code>&lt;Ans&gt;</code> rows 不直接被 mask。</li>
+        <li><b>CoT trace readout。</b>只在最终 <code>&lt;Ans&gt;</code> query 屏蔽 selected head outputs，测给定 gold trace 后的 final-count accuracy；trace 生成 rows 不受影响。</li>
+        <li><b>严格同层对照。</b><code>same-layer low</code> 与 <code>same-layer random</code> 在累计第 t 步都使用与 ranked-top 第 t 步相同的 Layer，只在该 Layer 内换成低分或随机 head。因此每个 prefix 的 Layer 组成完全相同，差异不能再归因于“一个顺序先删 Layer 1、另一个先删 Layer 3/4”。红色 reverse curve 仍保留为旧式、Layer 分布混淆的对照，不作为 top-vs-bottom 的严格检验。</li>
+      </ol></div>
+
+      <h4>结果 A：Non-thinking broad heads，仅在 &lt;Ans&gt; 局部屏蔽</h4>
+      {figure(
+          generated['local_nonthinking'],
+          'Figure 4H. Position-local non-thinking broad-head ablation',
+          '<b>横轴</b>是累计只在 <code>&lt;Ans&gt;</code> query 屏蔽的 head 数；<b>纵轴</b>是剩余 teacher-forced final-count accuracy。三栏为 count 1–10、11–20、21–30。蓝=按 broad score 排名；红虚线=旧 reverse 排名（Layer-confounded）；橙点划线=保持蓝线 Layer 序列、但在同层选低分 heads；灰线/阴影=保持同一 Layer 序列的 8 个同层随机顺序的均值与 min–max；黑色点线=无干预 baseline。'
+      )}
+      {table(position_local_direct_rows,[('bin','count 区间'),('top_n','局部 mask 数'),('ranked_top','broad top'),('reverse','reverse（层混淆）'),('same_layer_low','同层 low'),('same_layer_random','同层 random 均值')])}
+      <h4>分析 A</h4>
+      <p>局部结果确认了 broad score 在最终答案 query 上具有同层内的特异性，但效应随 count 难度变化。只屏蔽 broad top-1 后，1–10 / 11–20 / 21–30 的 final-count accuracy 分别只剩 <b>12.5% / 11.3% / 68.8%</b>；严格同层 low control 分别为 <b>1.3% / 73.8% / 100.0%</b>，同层 random 均值为 <b>2.7% / 65.5% / 99.5%</b>。因此中高 count 下，broad top 比同层 low/random 更早造成损伤；低 count 的 Layer-1 heads 普遍重要，top 与同层 control 都接近崩溃。累计到同一 Layer 序列中的 top-2 后，三段 accuracy 为 <b>3.8% / 17.5% / 10.0%</b>，而旧 reverse 顺序仍为 <b>90.0% / 100.0% / 88.8%</b>。这说明旧 global bottom 曲线的异常不能解释成“低 broad-score heads 在答案位置更重要”；它主要混入了这些 heads 在整条序列其他位置的上游作用。</p>
+
+      <h4>结果 B：CoT targeted heads，仅在 trace 数字 &lt;k&gt; 局部屏蔽</h4>
+      {figure(
+          generated['local_targeted'],
+          'Figure 4I. Position-local CoT targeted-retrieval ablation',
+          '<b>横轴</b>是累计在所有 trace 数字 <code>&lt;k&gt;</code> queries 局部屏蔽的 head 数；<b>纵轴</b>是剩余 teacher-forced trace-marker accuracy。颜色和对照定义与 Figure 4H 相同。它直接回答 matching-needle 高分 heads 在产生 <code>M_k</code> 的 query 上是否比同层低分/随机 heads 更必要。'
+      )}
+      {table(position_local_targeted_rows,[('bin','count 区间'),('top_n','局部 mask 数'),('ranked_top','targeted top'),('reverse','reverse（层混淆）'),('same_layer_low','同层 low'),('same_layer_random','同层 random 均值')])}
+      <h4>分析 B</h4>
+      <p>这是对“bottom 为什么比 top 更显著”的直接校正。Position-local + same-layer control 让每个累计步拥有完全相同的 Layer 序列后，targeted top 的损伤明显早于同层 low/random：局部屏蔽 top-4 后，三个区间的 trace-marker accuracy 为 <b>76.8% / 65.9% / 61.7%</b>；同层 low 为 <b>99.3% / 99.7% / 99.5%</b>，同层 random 均值为 <b>96.4% / 96.7% / 94.0%</b>。Top-1 单头仍是冗余的，三个区间均保持 100%；top-2 后开始降至 <b>96.1% / 92.1% / 90.6%</b>。这支持 k-to-k mass 定位的是一组在数字 <code>&lt;k&gt;</code> query 上具有特异局部因果作用、但成员可相互补偿的 retrieval circuit，而不是唯一一枚“第 k 个 needle head”。屏蔽到 top-8 时各同层排序最终覆盖同一批 heads，三条对照共同崩溃，因此该端点不能用于比较排名优劣。</p>
+
+      <h4>结果 C：CoT trace-readout heads，仅在 &lt;Ans&gt; 局部屏蔽</h4>
+      {figure(
+          generated['local_readout'],
+          'Figure 4J. Position-local CoT trace-readout ablation',
+          '<b>横轴</b>是累计只在最终 <code>&lt;Ans&gt;</code> query 屏蔽的 head 数；<b>纵轴</b>是给定 gold trace 后的 teacher-forced final-count accuracy。蓝线按 <code>trace_markers_mass</code> 排名；橙/灰是严格同层 low/random 对照。'
+      )}
+      {table(position_local_readout_rows,[('bin','count 区间'),('top_n','局部 mask 数'),('ranked_top','readout top'),('reverse','reverse（层混淆）'),('same_layer_low','同层 low'),('same_layer_random','同层 random 均值')])}
+      <h4>分析 C</h4>
+      <p>该实验把 readout 干预限制到最终答案 row，因此不会直接破坏前面的 trace construction。结果显示 readout 的局部表示比 retrieval 更冗余：累计屏蔽 top-4 时三个区间仍全部为 <b>100%</b>；到 top-8 时才变为 <b>56.2% / 90.0% / 100.0%</b>。同层 random 在 top-8 的均值为 <b>70.8% / 91.3% / 100.0%</b>，同层 low 仍为 100%。这给出低 count 上有限的 readout-score 特异性，但中高 count 下尚不能证明前八枚 readout heads 的局部必要性。零消融仍只检验必要性，不检验某个 clean head output 是否足以恢复 corrupt count；充分性需要第 8 节的 query-local clean-to-corrupt patch。</p>
+
+      <div class="callout warn"><b>修正后的结论边界。</b>原先“bottom 比 top 更伤”的 global 曲线不能直接反驳 targeted retrieval，因为它同时改变了 Layer 前缀与所有 token positions。严格的 position-local 结果显示：targeted top-4 在三个 count 区间都比同层低分/随机 heads 更早损伤 marker retrieval；broad top 的同层特异性主要出现在 11–20 与 21–30，低 count 则表现为同层 Layer-1 heads 普遍必要。Global 曲线仍可说明某些 heads 对整条网络必要，但不能用来判断它们究竟在 retrieval、早期支持计算，还是最终 readout 位置发挥作用。</div>
+
+      <h3>7.7 描述性 attention score 与因果 drop 是否一致</h3>
       <h4>实验</h4>
       <p>对每个机制和 count 区间，把 16 枚 heads 的描述性 attention score 与对应单头 global-ablation accuracy drop 对齐，并计算 Spearman 秩相关。该检验不要求两者线性，只问“描述分数排名更高的 head，是否通常也造成更大因果损伤”。</p>
       <h4>结果</h4>
       {figure(
-          generated['ablation_alignment'],
-          'Figure 4C. Attention score 与单头 ablation drop 的逐 head 对齐',
-          '<b>每个点</b>是一枚 Layer×head；只标注描述分数最高 4 个与因果 drop 最高 4 个 head 的并集，标签使用 1-based Layer 与 0-based head。<b>三行</b>依次比较 non-thinking broad score→final-count drop、CoT raw k-to-k mass→trace-marker drop、CoT trace-readout mass→final-count drop；<b>三列</b>为 count 1–10、11–20、21–30。横轴是描述性 score，纵轴是 mask 后 accuracy drop；标题给出全部 16 枚 heads 的 Spearman ρ。'
+          generated['alignment_nonthinking'],
+          'Figure 4H. Non-thinking broad score 与 final-count drop',
+          '<b>每个点</b>是一枚 Layer×head；<b>横轴</b>是 broad attention score；<b>纵轴</b>是单头 mask 后 final-count accuracy drop。三栏为三个 count 区间，标题给出 16 枚 heads 的 Spearman ρ。'
+      )}
+      {figure(
+          generated['alignment_targeted'],
+          'Figure 4I. CoT k-to-k mass 与 trace-marker drop',
+          '<b>横轴</b>是 matching prompt needle 的 raw k-to-k attention mass；<b>纵轴</b>是单头 mask 后 trace-marker accuracy drop。每点是一枚 head，三栏为三个 count 区间。'
+      )}
+      {figure(
+          generated['alignment_readout'],
+          'Figure 4J. CoT trace-readout mass 与 final-count drop',
+          '<b>横轴</b>是最终 <code>&lt;Ans&gt;</code> query 投向全部 trace markers 的 attention mass；<b>纵轴</b>是单头 mask 后 final-count accuracy drop。三栏为三个 count 区间。'
       )}
       {table(alignment_rows,[('mechanism','比较'),('bin','count 区间'),('rho','Spearman ρ'),('n','heads')])}
       <div class="callout">Non-thinking broad score 与 final-count drop 的 Spearman ρ 在三个区间分别为 <b>{alignment_lookup[('nonthinking','1-10','broad_attention_score')]}</b> / <b>{alignment_lookup[('nonthinking','11-20','broad_attention_score')]}</b> / <b>{alignment_lookup[('nonthinking','21-30','broad_attention_score')]}</b>。CoT k-to-k mass 与 trace-marker drop 分别为 <b>{alignment_lookup[('thinking','1-10','correct_prompt_needle_mass')]}</b> / <b>{alignment_lookup[('thinking','11-20','correct_prompt_needle_mass')]}</b> / <b>{alignment_lookup[('thinking','21-30','correct_prompt_needle_mass')]}</b>。CoT readout mass 与 final-count drop 分别为 <b>{alignment_lookup[('thinking','1-10','trace_markers_mass')]}</b> / <b>{alignment_lookup[('thinking','11-20','trace_markers_mass')]}</b> / <b>{alignment_lookup[('thinking','21-30','trace_markers_mass')]}</b>；最后一个区间因单头 drop 缺少方差而无法定义秩相关。</div>
@@ -2388,7 +2653,7 @@ def build_report(run_dir: Path) -> Path:
       <p>Non-thinking broad score 与必要性呈中等正相关，说明描述性 broad attention 对 direct-count circuit 有实际筛选价值。CoT k-to-k 的相关为负，进一步说明 raw matching mass 不能等同于单头不可替代性：尖锐 retrieval heads 可能被其他 routing heads 替代，而早期支持性 heads 的删除反而更伤性能。readout score 的相关接近 0，也说明 final readout 不能只靠单头 attention mass 概括。可靠结论必须同时报告描述排序、单头必要性和累计 top-n 剂量曲线。
       </p>
 
-      <h3>7.7 本节结论与下一步</h3>
+      <h3>7.8 本节结论与下一步</h3>
       <div class="mechanisms">
         <div class="mechanism"><h3>Non-thinking</h3><p><b>当前支持：</b>Layer 1 broad heads 既有描述性 prompt-wide attention，也有强单头/累计必要性；它们很可能是直接 set aggregation 的关键入口。</p><p><b>仍缺：</b>global mask 不能证明这些 heads 把“count 数值”写到了哪里。第 8 节需要在 <code>&lt;Ans&gt;</code> 局部 patch broad-head output，并测 hidden-state/count logits 是否随 donor count 搬运。</p></div>
         <div class="mechanism"><h3>CoT</h3><p><b>当前支持：</b>k-to-k heads 作为一个组对 marker trace 必要，但单头可替代；targeted retrieval 与 final trace readout 是不同阶段、不同排名的多头 circuit。</p><p><b>仍缺：</b>teacher forcing 隔断了局部 trace 错误向最终答案的级联。第 8 节应分别在 <code>&lt;k&gt;</code> 和 <code>&lt;Ans&gt;</code> 做局部 activation patch，并使用 marker-identity margin、next-index margin 与 final-count margin 区分检索、successor 和 readout。</p></div>
@@ -2410,7 +2675,7 @@ def build_report(run_dir: Path) -> Path:
 
     <section id="attention"><h2>5. 描述性 attention：候选 broad 与 targeted heads</h2><div class="protocol"><b>Non-thinking。</b>在完整 prompt 后的 <code>&lt;Ans&gt;</code> query 读取 16 个 head 的 attention row，计算 broad score。<b>CoT。</b>对每个 gold trace 的 <code>&lt;k&gt;</code> query，取它指向 prompt 第 k 个 needle 的 raw mass；先按 query 求值，再在所选 count 区间内平均。高分只用于候选排序，不作为因果结论。</div>{figure(generated['attention'],'Figure 2. Broad aggregation 与 k-to-k retrieval 的候选 head signatures','<b>横轴</b>是 head 0–3；<b>纵轴</b>是 Layer 1–4；单元格为标题所示分数。左图是 non-thinking 全 count 的 broad score；右侧三图把 CoT matching-needle raw mass 按 gold count 区间分开。更高 count 有更多 k queries，因此全局 query-weighted 平均会偏向 21–30；本图通过分栏消除了这个混淆。')}</section>
 
-    <section id="ablation"><h2>6. 分层 global head ablation：哪些 heads 对哪个难度区间必要</h2><div class="protocol"><b>样本。</b>本次重新生成每个 exact count {manifest['ablation_examples_per_exact_count']} 个 prompts，共 {30*manifest['ablation_examples_per_exact_count']} 个；两个模型使用各自格式做 teacher-forced forward。<b>干预。</b>用 GPT-2 <code>head_mask</code> 将指定 head 在整条 sequence、所有 query positions 的输出设为 0。单头逐个测 16 次；累计实验按候选排名依次 mask top-1…top-16，并与排名倒序和 {manifest['ablation_random_orders']} 条固定随机顺序比较。<b>指标。</b>remaining accuracy 是 mask 后的绝对 accuracy；drop 是无干预 baseline 减去 mask 后 accuracy。</div>{figure(generated['single'],'Figure 3. 单头必要性按 count 区间分解',single_ablation_caption)}{table(ablation_rows,[('bin','count 区间'),('direct_head','最强 non-thinking 单头'),('direct_drop','final accuracy drop'),('trace_head','最强 CoT trace 单头'),('trace_drop','trace-marker accuracy drop')])}{figure(generated['cumulative'],'Figure 4. Top-n 累计 mask 的剂量曲线与强对照',cumulative_ablation_caption)}</section>
+    <section id="ablation"><h2>6. 分层 global head ablation：哪些 heads 对哪个难度区间必要</h2><div class="protocol"><b>样本。</b>本次重新生成每个 exact count {manifest['ablation_examples_per_exact_count']} 个 prompts，共 {30*manifest['ablation_examples_per_exact_count']} 个；两个模型使用各自格式做 teacher-forced forward。<b>干预。</b>用 GPT-2 <code>head_mask</code> 将指定 head 在整条 sequence、所有 query positions 的输出设为 0。单头逐个测 16 次；累计实验按候选排名依次 mask top-1…top-16，并与排名倒序和 {manifest['ablation_random_orders']} 条固定随机顺序比较。<b>指标。</b>remaining accuracy 是 mask 后的绝对 accuracy；drop 是无干预 baseline 减去 mask 后 accuracy。</div>{figure(generated['single_nonthinking'],'Figure 3. 单头必要性按 count 区间分解',single_ablation_caption)}{table(ablation_rows,[('bin','count 区间'),('direct_head','最强 non-thinking 单头'),('direct_drop','final accuracy drop'),('trace_head','最强 CoT trace 单头'),('trace_drop','trace-marker accuracy drop')])}{figure(generated['cumulative_nonthinking'],'Figure 4. Top-n 累计 mask 的剂量曲线与强对照',cumulative_ablation_caption)}</section>
 
     <section id="patching"><h2>8. Attention-head patching：候选 heads 是否局部充分</h2><h3>8.1 CoT marker-identity clean-to-corrupt retrieval patch</h3><div class="protocol"><b>配对输入。</b>clean 与 corrupt prompt 位置、noise、count 和 trace index 完全相同，只把目标第 k 个 prompt marker identity 换成另一 marker；读取同一个 <code>&lt;k&gt;</code> query 对 clean marker 的 logit margin。<b>patch。</b>先缓存 clean run 在每层 attention <code>c_proj</code> 前按 head 切分的 output slice，再把选中 top-n slices 替换到 corrupt run 同一 query；其余 activation 保持 corrupt。interior 取约中间 k，final 取 k=n。<b>样本来源。</b>原始逐 query 干预记录每个 exact count 2 个 prompts，本报告按 gold count 无损重聚合。</div>{figure(generated['retrieval'],'Figure 5. Targeted retrieval patch 的 normalized recovery','<b>横轴</b>是被 patch 的 head 数；<b>纵轴</b>是 clean-marker logit margin 的 normalized recovery。上行为 interior k，下行为 final k=n；三列为 count 区间。蓝=targeted ranking top；红=bottom；灰=三个随机 head 顺序的均值与范围。')}
     <h3>8.2 Nested prompt donor→receiver count-head patch</h3><div class="protocol"><b>配对输入。</b>receiver count=n 与 donor count=m 共享同一 256-token noise 序列；needle 集合是 nested 的，即较小 count 的 needles 是较大 count 的子集。m−n 穷举配置中的 ±1、±2、±3、±5、±10（只保留 1–30 内合法 pair）。<b>query。</b>在各自 final <code>&lt;Ans&gt;</code> position patch head-output slices；CoT donor/receiver trace 长度不同，所以语义 query 对齐但绝对位置可不同。<b>结果量。</b>对每个 bin 独立拟合 expected-count shift 对 donor offset 的 slope；primary=non-thinking broad 或 CoT trace-readout 排名。bottom/random 是必要对照。</div>{figure(generated['nested'],'Figure 6. Head-output 是否能够运输 count state','<b>横轴</b>是 patch 的 donor head slices 数；<b>纵轴</b>是 expected-count shift 对 donor offset 的回归 slope。1 表示一比一随 donor 移动，0 表示没有 count transport。上行为 non-thinking，下行为 CoT；三列为 receiver count 区间。')}{table(patch_rows,[('bin','receiver/gold count 区间'),('retrieval','targeted top-4 final-k recovery'),('direct','non-thinking primary top-4 slope'),('cot','CoT trace-readout top-4 slope')])}</section>
@@ -2442,14 +2707,14 @@ def build_report(run_dir: Path) -> Path:
       <li><a href="#setting">数据、模型与 sequence</a></li>
       <li><a href="#definitions">术语、指标与公式</a></li>
       <li><a href="#dynamics">学习动态</a></li>
-      <li><a href="#attention">5. 描述性 attention</a></li>
-      <li><a href="#geometry">6. 描述性 hidden state</a></li>
-      <li><a href="#ablation">7. Attention-head ablation</a></li>
-      <li><a href="#patching">8. Attention-head patching</a></li>
-      <li><a href="#steering">9. Hidden-state geometry steering</a></li>
-      <li><a href="#transplant">10. Hidden-state patching</a></li>
-      <li><a href="#interaction">11. Head 与 hidden state 的因果联系</a></li>
-      <li><a href="#synthesis">12. 综合结论与边界</a></li>
+      <li><a href="#attention">描述性 attention</a></li>
+      <li><a href="#geometry">描述性 hidden state</a></li>
+      <li><a href="#ablation">Attention-head ablation</a></li>
+      <li><a href="#patching">Attention-head patching</a></li>
+      <li><a href="#steering">Hidden-state geometry steering</a></li>
+      <li><a href="#transplant">Hidden-state patching</a></li>
+      <li><a href="#interaction">Head 与 hidden state 的因果联系</a></li>
+      <li><a href="#synthesis">综合结论与边界</a></li>
     </ol></nav>
     """
     report = report[:nav_start] + new_nav + report[nav_end:]

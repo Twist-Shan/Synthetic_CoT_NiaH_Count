@@ -67,6 +67,47 @@ def _count_margin(logits: torch.Tensor, vocab: Vocab, count: int) -> float:
     return margin(logits, vocab.number_id(count), vocab.number_ids)
 
 
+def _local_query_positions(item, site: str) -> list[int]:
+    if site == "ans_token":
+        return [int(item.spans.ans_pos)]
+    if site == "trace_index_tokens":
+        return [int(position) for position in item.spans.trace_index_positions]
+    raise ValueError(f"Unknown position-local ablation site: {site}")
+
+
+def _forward_with_position_local_head_ablation(
+    model,
+    input_ids: torch.Tensor,
+    attention_mask: torch.Tensor,
+    heads: Iterable[Head],
+    positions_by_row: list[list[int]],
+):
+    """Zero selected pre-c_proj head slices only at the requested query rows."""
+    by_layer: dict[int, list[int]] = {}
+    for layer, head in heads:
+        by_layer.setdefault(int(layer), []).append(int(head))
+    head_dim = int(model.config.n_embd) // int(model.config.n_head)
+    handles = []
+    for layer, layer_heads in by_layer.items():
+        def hook(_module, args, layer_heads=tuple(layer_heads)):
+            value = args[0].clone()
+            for row_idx, positions in enumerate(positions_by_row):
+                valid = [int(position) for position in positions if 0 <= int(position) < value.shape[1]]
+                if not valid:
+                    continue
+                for head in layer_heads:
+                    start = int(head) * head_dim
+                    value[row_idx, valid, start : start + head_dim] = 0.0
+            return (value, *args[1:])
+
+        handles.append(model.transformer.h[layer].attn.c_proj.register_forward_pre_hook(hook))
+    try:
+        return model(input_ids=input_ids, attention_mask=attention_mask)
+    finally:
+        for handle in handles:
+            handle.remove()
+
+
 @torch.no_grad()
 def batched_teacher_forced_metrics(
     model,
@@ -76,6 +117,8 @@ def batched_teacher_forced_metrics(
     device: str | torch.device,
     *,
     head_mask: torch.Tensor | None = None,
+    local_ablation_heads: Iterable[Head] | None = None,
+    local_ablation_site: str | None = None,
     batch_size: int = 24,
 ) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
@@ -83,7 +126,24 @@ def batched_teacher_forced_metrics(
         batch = examples[start : start + int(batch_size)]
         rendered = [render(example, vocab, mode) for example in batch]
         ids, _, attention_mask = collate(rendered, vocab, device)
-        logits = model(input_ids=ids, attention_mask=attention_mask, head_mask=head_mask).logits
+        local_heads = list(local_ablation_heads or [])
+        if local_heads:
+            if head_mask is not None:
+                raise ValueError("Global head_mask and position-local ablation cannot be combined.")
+            if local_ablation_site is None:
+                raise ValueError("local_ablation_site is required when local_ablation_heads is set.")
+            positions_by_row = [
+                _local_query_positions(item, local_ablation_site) for item in rendered
+            ]
+            logits = _forward_with_position_local_head_ablation(
+                model,
+                ids,
+                attention_mask,
+                local_heads,
+                positions_by_row,
+            ).logits
+        else:
+            logits = model(input_ids=ids, attention_mask=attention_mask, head_mask=head_mask).logits
         for row_idx, (example, item) in enumerate(zip(batch, rendered)):
             count_logits = logits[row_idx, item.spans.ans_pos]
             pred, expected, _ = count_prediction(count_logits, vocab)
@@ -295,6 +355,158 @@ def run_strict_ablation_suite(
             axis=1,
         )
     return single, cumulative
+
+
+def _layer_matched_order(
+    primary: list[Head],
+    *,
+    seed: int | None = None,
+    reverse_within_layer: bool = False,
+) -> list[Head]:
+    """Match the primary ranking's layer sequence while changing heads within each layer."""
+    pools: dict[int, list[Head]] = {}
+    for layer, _head in primary:
+        pools.setdefault(int(layer), [])
+    for layer in pools:
+        layer_heads = [head for head in primary if int(head[0]) == layer]
+        if reverse_within_layer:
+            layer_heads = list(reversed(layer_heads))
+        elif seed is not None:
+            random.Random(int(seed) + layer).shuffle(layer_heads)
+        pools[layer] = layer_heads
+    offsets = {layer: 0 for layer in pools}
+    result: list[Head] = []
+    for layer, _head in primary:
+        index = offsets[int(layer)]
+        result.append(pools[int(layer)][index])
+        offsets[int(layer)] = index + 1
+    return result
+
+
+@torch.no_grad()
+def run_position_local_ablation_suite(
+    models: dict[str, Any],
+    cfg: V10Config,
+    vocab: Vocab,
+    rankings: dict[str, list[Head]],
+    *,
+    examples_per_count: int = 8,
+    random_replicates: int = 8,
+) -> pd.DataFrame:
+    """Ablate head outputs only at the semantic query used by each mechanism."""
+    examples = balanced_examples(cfg, vocab, examples_per_count, cfg.seed + 930_000)
+    specifications = (
+        ("nonthinking", "direct_broad", "ans_token"),
+        ("thinking", "targeted_retrieval", "trace_index_tokens"),
+        ("thinking", "trace_readout", "ans_token"),
+    )
+    rows: list[dict[str, Any]] = []
+    for mode, mechanism, site in specifications:
+        model = models[mode]
+        primary = list(rankings[mechanism])
+        families: dict[str, tuple[int, list[Head]]] = {
+            "ranked_top": (0, primary),
+            "global_reverse": (0, list(reversed(primary))),
+            "layer_matched_low": (
+                0,
+                _layer_matched_order(primary, reverse_within_layer=True),
+            ),
+        }
+        for replicate in range(int(random_replicates)):
+            families[f"layer_matched_random_{replicate}"] = (
+                replicate,
+                _layer_matched_order(
+                    primary,
+                    seed=cfg.seed + 931_000 + 101 * replicate,
+                ),
+            )
+
+        baseline = batched_teacher_forced_metrics(
+            model,
+            vocab,
+            examples,
+            mode,
+            cfg.device,
+            batch_size=cfg.analysis_batch_size,
+        )
+        for metric_row in aggregate_metrics(baseline):
+            rows.append(
+                {
+                    "mode": mode,
+                    "mechanism": mechanism,
+                    "site": site,
+                    "family": "baseline",
+                    "replicate": 0,
+                    "top_n": 0,
+                    "masked_heads": "",
+                    **metric_row,
+                }
+            )
+
+        total = len(families) * len(primary)
+        progress = tqdm(total=total, desc=f"v10 position-local ablation: {mechanism}")
+        for family, (replicate, ranking) in families.items():
+            family_label = "layer_matched_random" if family.startswith("layer_matched_random_") else family
+            for top_n in range(1, len(ranking) + 1):
+                heads = ranking[:top_n]
+                detail = batched_teacher_forced_metrics(
+                    model,
+                    vocab,
+                    examples,
+                    mode,
+                    cfg.device,
+                    local_ablation_heads=heads,
+                    local_ablation_site=site,
+                    batch_size=cfg.analysis_batch_size,
+                )
+                for metric_row in aggregate_metrics(detail):
+                    rows.append(
+                        {
+                            "mode": mode,
+                            "mechanism": mechanism,
+                            "site": site,
+                            "family": family_label,
+                            "replicate": replicate,
+                            "top_n": top_n,
+                            "masked_heads": _head_label(heads),
+                            **metric_row,
+                        }
+                    )
+                progress.update(1)
+        progress.close()
+
+    frame = pd.DataFrame(rows)
+    baseline = frame[frame["family"] == "baseline"].set_index(
+        ["mode", "mechanism", "site", "count_bin"]
+    )
+    for metric in (
+        "final_count_accuracy",
+        "final_count_margin",
+        "trace_marker_accuracy",
+        "trace_marker_margin",
+        "trace_index_accuracy",
+    ):
+        frame[f"drop_{metric}"] = frame.apply(
+            lambda row: (
+                float(
+                    baseline.loc[
+                        (row["mode"], row["mechanism"], row["site"], row["count_bin"]),
+                        metric,
+                    ]
+                    - row[metric]
+                )
+                if np.isfinite(row[metric])
+                and np.isfinite(
+                    baseline.loc[
+                        (row["mode"], row["mechanism"], row["site"], row["count_bin"]),
+                        metric,
+                    ]
+                )
+                else math.nan
+            ),
+            axis=1,
+        )
+    return frame
 
 
 def nested_example_pair(
@@ -734,4 +946,3 @@ def run_report_followups(
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     return outputs
-

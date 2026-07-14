@@ -32,11 +32,17 @@ def main() -> None:
     parser.add_argument("--examples-per-count", type=int, default=8)
     parser.add_argument("--random-replicates", type=int, default=8)
     parser.add_argument("--reuse-ablation", action="store_true")
+    parser.add_argument(
+        "--reuse-position-local-ablation",
+        action="store_true",
+        help="Reuse an existing position_local_ablation_by_bin.csv instead of rerunning it",
+    )
     args = parser.parse_args()
     outputs = build_stratified_tables(
         args.run_dir,
         device=args.device,
         rerun_ablation=not args.reuse_ablation,
+        rerun_position_local_ablation=not args.reuse_position_local_ablation,
         ablation_examples_per_count=args.examples_per_count,
         random_replicates=args.random_replicates,
     )

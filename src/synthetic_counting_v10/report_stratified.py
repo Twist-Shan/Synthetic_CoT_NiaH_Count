@@ -13,6 +13,7 @@ from .report_followups import (
     centroid_mean_pca,
     load_rankings,
     load_run,
+    run_position_local_ablation_suite,
     run_strict_ablation_suite,
 )
 from .training import load_final_model
@@ -268,6 +269,7 @@ def build_stratified_tables(
     *,
     device: str | None = None,
     rerun_ablation: bool = True,
+    rerun_position_local_ablation: bool = True,
     ablation_examples_per_count: int = 8,
     random_replicates: int = 8,
 ) -> dict[str, pd.DataFrame]:
@@ -279,10 +281,14 @@ def build_stratified_tables(
     state = run_dir / "analysis" / "state_causal" / "tables"
     outputs: dict[str, pd.DataFrame] = {}
 
-    if rerun_ablation:
+    cfg = vocab = rankings = models = None
+    if rerun_ablation or rerun_position_local_ablation:
         cfg, vocab = load_run(run_dir, device=device)
         rankings = load_rankings(run_dir)
         models = {mode: load_final_model(cfg, vocab, run_dir, mode) for mode in cfg.modes}
+
+    if rerun_ablation:
+        assert cfg is not None and vocab is not None and rankings is not None and models is not None
         single, cumulative = run_strict_ablation_suite(
             models,
             cfg,
@@ -293,10 +299,6 @@ def build_stratified_tables(
         )
         outputs["single_head_ablation_by_bin"] = single
         outputs["cumulative_head_ablation_by_bin"] = cumulative
-        for model in models.values():
-            del model
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
     else:
         outputs["single_head_ablation_by_bin"] = pd.read_csv(
             followup / "single_head_ablation.csv"
@@ -304,6 +306,27 @@ def build_stratified_tables(
         outputs["cumulative_head_ablation_by_bin"] = pd.read_csv(
             followup / "strict_cumulative_ablation.csv"
         )
+
+    if rerun_position_local_ablation:
+        assert cfg is not None and vocab is not None and rankings is not None and models is not None
+        outputs["position_local_ablation_by_bin"] = run_position_local_ablation_suite(
+            models,
+            cfg,
+            vocab,
+            rankings,
+            examples_per_count=int(ablation_examples_per_count),
+            random_replicates=int(random_replicates),
+        )
+    else:
+        outputs["position_local_ablation_by_bin"] = pd.read_csv(
+            table_dir / "position_local_ablation_by_bin.csv"
+        )
+
+    if models is not None:
+        for model in models.values():
+            del model
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     outputs.update(_aggregate_nested_patching(followup / "nested_head_patching.csv"))
     outputs.update(_aggregate_retrieval_patching(followup / "retrieval_control_patching.csv"))
@@ -336,9 +359,19 @@ def build_stratified_tables(
         "fresh_forward_passes": {
             "single_head_ablation_by_bin": bool(rerun_ablation),
             "cumulative_head_ablation_by_bin": bool(rerun_ablation),
+            "position_local_ablation_by_bin": bool(rerun_position_local_ablation),
         },
         "ablation_examples_per_exact_count": int(ablation_examples_per_count),
         "ablation_random_orders": int(random_replicates),
+        "position_local_ablation": {
+            "direct_broad": "zero selected pre-c_proj head slices only at the non-thinking <Ans> query",
+            "targeted_retrieval": "zero selected pre-c_proj head slices only at every CoT trace <k> query",
+            "trace_readout": "zero selected pre-c_proj head slices only at the CoT <Ans> query",
+            "layer_matched_controls": (
+                "each cumulative control preserves the ranked-top layer sequence while replacing "
+                "the selected head within that layer"
+            ),
+        },
         "reaggregated_from_existing_per_example_interventions": {
             "nested_head_patching": "analysis/report_followups/tables/nested_head_patching.csv",
             "retrieval_control_patching": "analysis/report_followups/tables/retrieval_control_patching.csv",
@@ -362,4 +395,3 @@ def build_stratified_tables(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return outputs
-
