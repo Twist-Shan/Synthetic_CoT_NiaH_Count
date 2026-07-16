@@ -68,6 +68,16 @@ def _char_token(character: str) -> str:
     return f"<CH_{ord(character):04X}>"
 
 
+@lru_cache(maxsize=1)
+def shakespeare_char_tokens() -> tuple[str, ...]:
+    return tuple(_char_token(char) for char in shakespeare_text())
+
+
+@lru_cache(maxsize=1)
+def shakespeare_vocab_tokens() -> tuple[str, ...]:
+    return tuple(sorted(set(shakespeare_char_tokens())))
+
+
 @dataclass(frozen=True)
 class Vocab:
     token_to_id: dict[str, int]
@@ -81,7 +91,7 @@ class Vocab:
     def build(cls, cfg: ExperimentConfig) -> "Vocab":
         special = ["<PAD>", "<BOS>", "<EOS>", "<Think>", "</Think>", "<Ans>"]
         if cfg.noise_source == "shakespeare_char":
-            noise = [_char_token(char) for char in sorted(set(shakespeare_text()))]
+            noise = list(shakespeare_vocab_tokens())
         else:
             noise = [f"<N{i}>" for i in range(cfg.noise_vocab_size)]
         markers = [f"<M{i}>" for i in range(cfg.marker_vocab_size)]
@@ -213,11 +223,11 @@ class Rendered:
 def _noise_sequence(cfg: ExperimentConfig, vocab: Vocab, rng: random.Random) -> list[str]:
     if cfg.noise_source == "uniform":
         return [rng.choice(vocab.noise) for _ in range(cfg.seq_len)]
-    source = [_char_token(char) for char in shakespeare_text()]
+    source = shakespeare_char_tokens()
     if len(source) < cfg.seq_len:
         repeats = (cfg.seq_len + len(source) - 1) // len(source)
         source = (source * repeats)[: cfg.seq_len]
-        return source
+        return list(source)
     start = rng.randrange(0, len(source) - cfg.seq_len + 1)
     return list(source[start : start + cfg.seq_len])
 
