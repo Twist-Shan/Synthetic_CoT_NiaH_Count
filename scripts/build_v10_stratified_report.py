@@ -2420,6 +2420,31 @@ def build_report(run_dir: Path) -> Path:
     hidden_rollout_summary = pd.read_csv(hidden_patch_paths["rollout"])
     hidden_rollout_factors = pd.read_csv(hidden_patch_paths["rollout_factors"])
 
+    final_bridge_root = run_dir / "analysis" / "final_bridge_causal"
+    final_bridge_tables = final_bridge_root / "tables"
+    final_bridge_figures = final_bridge_root / "figures"
+    final_bridge_manifest_path = final_bridge_root / "manifest.json"
+    final_bridge_paths = {
+        "conflict": final_bridge_tables / "cot_conflict_summary.csv",
+        "bridge": final_bridge_tables / "cot_final_bridge_patching_summary.csv",
+        "nonthinking_mlp": final_bridge_tables
+        / "nonthinking_mlp_transport_summary.csv",
+    }
+    if not final_bridge_manifest_path.exists() or not all(
+        path.exists() for path in final_bridge_paths.values()
+    ):
+        raise FileNotFoundError(
+            "Missing final scalar-bridge causal outputs. Run "
+            "scripts/run_v10_final_bridge_causal.py for "
+            f"{run_dir} before rebuilding the report."
+        )
+    final_bridge_manifest = json.loads(
+        final_bridge_manifest_path.read_text(encoding="utf-8")
+    )
+    cot_conflict_summary = pd.read_csv(final_bridge_paths["conflict"])
+    cot_bridge_summary = pd.read_csv(final_bridge_paths["bridge"])
+    nonthinking_mlp_transport = pd.read_csv(final_bridge_paths["nonthinking_mlp"])
+
     generated = {
         "training_overall": figures / "training_overall_accuracy_and_loss.png",
         "training_bins": figures / "training_accuracy_by_count_bin.png",
@@ -2476,6 +2501,12 @@ def build_report(run_dir: Path) -> Path:
         / "misaligned_rollout_final_count.png",
         "hidden_rollout_factors": hidden_patch_figures
         / "misaligned_rollout_factor_coefficients.png",
+        "cot_conflict_source": final_bridge_figures
+        / "cot_conflict_source_attribution.png",
+        "cot_final_bridge": final_bridge_figures
+        / "cot_final_bridge_component_recovery.png",
+        "nonthinking_mlp_transport": final_bridge_figures
+        / "nonthinking_mlp_feature_transport.png",
     }
     # The legacy inline report body is replaced below after f-string evaluation.
     # Keep these aliases until that body is removed entirely.
@@ -3228,6 +3259,133 @@ def build_report(run_dir: Path) -> Path:
     successor_table_rows = [row for row in successor_patch_rows if row["heads"] == 4]
     patch_rows = retrieval_patch_rows
 
+    conflict_labels = {
+        "prompt_count_only": "prompt=m, trace=n",
+        "trace_count_and_length": "prompt=n, trace=m",
+        "final_trace_index_only": "prompt/trace=n, final index=m",
+        "trace_marker_identity_control": "trace marker identities rotated",
+    }
+    conflict_rows = []
+    for conflict_type in (
+        "prompt_count_only",
+        "trace_count_and_length",
+        "final_trace_index_only",
+        "trace_marker_identity_control",
+    ):
+        for count_bin in COUNT_BINS:
+            row = select_row(
+                cot_conflict_summary,
+                conflict_type=conflict_type,
+                count_bin=count_bin,
+            )
+            conflict_rows.append(
+                {
+                    "condition": conflict_labels[conflict_type],
+                    "bin": count_bin,
+                    "receiver": pct(row.follows_receiver),
+                    "donor": pct(row.follows_donor),
+                    "target": pct(row.follows_target),
+                    "margin": fmt(row.mean_target_margin, 2),
+                    "abs_position": fmt(row.mean_abs_ans_position_shift, 1),
+                }
+            )
+
+    def bridge_value(
+        count_bin: str,
+        intervention: str,
+        layer: int,
+        field: str = "mean_normalized_recovery",
+    ) -> float:
+        row = select_row(
+            cot_bridge_summary,
+            conflict_type="prompt_count_only",
+            count_bin=count_bin,
+            intervention_family="sublayer_or_residual",
+            intervention=intervention,
+            layer=layer,
+        )
+        return float(row[field])
+
+    bridge_rows = []
+    for count_bin in COUNT_BINS:
+        for intervention, label in (
+            ("attn_out", "Layer 1 attention output"),
+            ("mlp_out", "Layer 1 MLP output"),
+            ("post_mlp", "Layer 1 post-MLP residual"),
+        ):
+            bridge_rows.append(
+                {
+                    "bin": count_bin,
+                    "component": label,
+                    "recovery": fmt(bridge_value(count_bin, intervention, 0)),
+                    "target_follow": pct(
+                        bridge_value(count_bin, intervention, 0, "follows_target")
+                    ),
+                }
+            )
+
+    nonthinking_ranked = nonthinking_mlp_transport[
+        nonthinking_mlp_transport.family == "ranked"
+    ].copy()
+    nonthinking_random = nonthinking_mlp_transport[
+        nonthinking_mlp_transport.family == "random"
+    ][
+        [
+            "count_bin",
+            "layer",
+            "support_size",
+            "transport_slope",
+            "mean_normalized_margin_recovery",
+        ]
+    ].rename(
+        columns={
+            "transport_slope": "random_transport_slope",
+            "mean_normalized_margin_recovery": "random_margin_recovery",
+        }
+    )
+    nonthinking_feature_comparison = nonthinking_ranked.merge(
+        nonthinking_random,
+        on=["count_bin", "layer", "support_size"],
+        how="left",
+    )
+    nonthinking_feature_comparison["slope_gain"] = (
+        nonthinking_feature_comparison.transport_slope
+        - nonthinking_feature_comparison.random_transport_slope
+    )
+    nonthinking_feature_rows = []
+    for count_bin in COUNT_BINS:
+        subset = nonthinking_feature_comparison[
+            nonthinking_feature_comparison.count_bin == count_bin
+        ]
+        chosen = [
+            subset[(subset.layer == 0) & (subset.support_size == 128)].iloc[0],
+            subset[(subset.layer == 0) & (subset.support_size == 1024)].iloc[0],
+            subset[subset.support_size < 1024]
+            .sort_values("slope_gain", ascending=False)
+            .iloc[0],
+        ]
+        labels = ("Layer 1 top-128", "Layer 1 full MLP", "best sparse gain")
+        seen: set[tuple[int, int]] = set()
+        for label, row in zip(labels, chosen):
+            key = (int(row.layer), int(row.support_size))
+            if key in seen:
+                continue
+            seen.add(key)
+            nonthinking_feature_rows.append(
+                {
+                    "bin": count_bin,
+                    "selection": label,
+                    "layer": f"Layer {int(row.layer) + 1}",
+                    "features": int(row.support_size),
+                    "ranked_slope": fmt(row.transport_slope),
+                    "random_slope": fmt(row.random_transport_slope),
+                    "gain": fmt(row.slope_gain),
+                    "r2": fmt(row.transport_r2),
+                    "margin_recovery": fmt(row.mean_normalized_margin_recovery),
+                    "donor_follow": pct(row.follows_donor),
+                }
+            )
+
     steering_rows = []
     for count_bin in COUNT_BINS:
         for site, label in (
@@ -3540,8 +3698,8 @@ def build_report(run_dir: Path) -> Path:
         },
         {
             "aspect": "仍未定位的桥接",
-            "direct": "Broad evidence 经哪些具体 non-thinking MLP features 完成集合求和与 30-way logit 离散化，尚未像 CoT successor 那样分解。",
-            "cot": "完整 trace/context 如何压缩成 final scalar-count state 尚不清楚；固定 trace-readout heads 的必要性与 donor transport 都弱。",
+            "direct": "低/中 count 已定位可运输 donor offset 的 post-GELU feature 子集；高 count 仍缺跨层、跨 1–30 通用的稀疏算术 basis。",
+            "cot": "最终答案行为跟 trace pair 数/extent，Layer-1 MLP output 可运输 donor scalar；但 trace extent 与 <Ans> 绝对位置仍共变。",
         },
         {
             "aspect": "被当前结果排除的纯版本",
@@ -3553,21 +3711,21 @@ def build_report(run_dir: Path) -> Path:
     <section id="object">
       <h2>1. 研究对象、目标与证据更新后的两个工作机制</h2>
       <p>两个独立模型看到同一类 256-token prompt、同一套 marker tokens 和同一套 count tokens，模型规模完全相同；差别只在于<b>被要求生成什么输出序列</b>。Non-thinking 模型把 prompt 直接压缩成一个 count。CoT 模型则先生成逐项 indexed trace，再回答同一个 count。最初我们把它们分别假设为“并行集合聚合”和“逐项检索循环”；经过第 5–11 节的描述、ablation、clean-to-corrupt patch、MLP feature patch、geometry steering 与 residual transplant 后，现在可以把若干箭头升级为工作机制，同时保留尚未闭合的桥接。</p>
-      <div class="callout good"><b>当前最稳健的总图景。</b>Non-thinking 是非对称前馈链：<code>Layer-1 broad routing → distributed count residual → later-Layer discretization → C_n</code>。CoT 的 trace 内部形成局部双向循环：<code>progress state → targeted retrieval → M_k → successor/close → updated progress</code>；但 trace/context 如何进一步压缩成 final <code>&lt;Ans&gt;</code> scalar-count state，尚未由一组固定 readout heads 解释。</div>
+      <div class="callout good"><b>当前最稳健的总图景。</b>Non-thinking 是非对称前馈链：<code>Layer-1 broad routing → post-GELU count features → distributed count residual → C_n</code>。CoT 的 trace 内部形成局部双向循环：<code>progress state → targeted retrieval → M_k → successor/close → updated progress</code>；最终 <code>&lt;Ans&gt;</code> 则跟随 trace pair 数/extent，且 Layer-1 MLP output 已足以运输 donor scalar count，但这一桥仍可能利用 learned absolute position。</div>
       <div class="callout warn"><b>证据边界。</b>这里的“支持”表示干预效应大于匹配随机对照，或 clean/donor activation 能在 held-out pair 中运输目标信息；不是跨 seed 的总体统计定理。实线工作路径也不意味着由单个 head 完成。CoT 的 progress state 与 final scalar-count state 必须分开：前者控制下一 index/close，后者直接控制最终 count logits。</div>
       <div class="mechanisms">
         <div class="mechanism">
           <h3>工作机制 A · Non-thinking：broad set routing 写入后层 count state</h3>
           <p><b>已支持：</b>最终 <code>&lt;Ans&gt;</code> query 的 Layer-1 broad heads 并行覆盖多个 prompt needles。Position-local ablation 使 final accuracy 大幅下降；donor broad slices 能运输部分 count；mask broad group 又会同步破坏末层 count geometry 与输出。Layer-4 natural residual/centroid transplant 最终可以一比一搬运 donor count。</p>
-          <p><b>当前解释：</b>早期 attention 负责收集集合证据，后续 residual/MLP 将其逐层压缩成分布式 cardinality state，再离散化为 30 个 count logits。高 count 的 state 成形更晚，且局部 centroid path 有效而全局直线 <code>+1</code> 轴不成立。</p>
-          <p><b>仍缺：</b>尚未把 non-thinking 中“多个 value 如何变成具体数值”的 MLP intermediate features 与算术步骤完整拆开；也没有证据表明后期 count state 会反向控制早期 broad routing。</p>
+          <p><b>当前解释：</b>早期 attention 负责收集集合证据；held-out post-GELU feature patch 进一步证明低/中 count 的一部分 MLP features 能按 donor offset 运输数值，再由 residual/后层离散化为 30 个 count logits。高 count 的 state 成形更晚，且局部 centroid path 有效而全局直线 <code>+1</code> 轴不成立。</p>
+          <p><b>仍缺：</b>还没有一套跨 1–30 与跨层通用的稀疏 feature basis；高 count 的 sparse transport 较弱，也没有证据表明后期 count state 会反向控制早期 broad routing。</p>
           <div class="flow"><span class="node">needle set</span><span class="arrow">→</span><span class="node">parallel broad retrieval</span><span class="arrow">→</span><span class="node">count residual</span><span class="arrow">→</span><span class="node">C_n</span></div>
         </div>
         <div class="mechanism">
           <h3>工作机制 B · CoT：targeted retrieval/progress loop，加上独立 final count state</h3>
           <p><b>已支持的 trace loop：</b>数字 <code>&lt;k&gt;</code> 的 targeted multi-head bundle 定位第 k 个 prompt needle并写出 <code>M_k</code>；marker 后 residual 保存可执行 progress/termination state；Layer-3 MLP 转换 routed evidence，Layer-4 的分布式 feature 子空间把它写成 <code>&lt;k+1&gt;</code> 或 <code>&lt;/Think&gt;</code> logit。Progress transplant 还能反向改变下一步 targeted routing，形成当前最清楚的局部双向因果耦合。</p>
-          <p><b>必须分开的 final state：</b>最后一个 marker residual 能改变继续/关闭，却不能独立运输最终 scalar count。真正可以一比一搬运 donor count 的是 final <code>&lt;Ans&gt;</code> residual；它从早层起就比 non-thinking 更可执行。</p>
-          <p><b>仍缺：</b>完整 trace、trace 长度/位置和 prompt evidence 如何压缩成 final scalar-count state尚未定位。Trace-readout top heads 的局部必要性较弱，head-slice patch 也不足以运输 donor count，所以不能把虚线桥接冒充为已找到的 readout circuit。</p>
+          <p><b>必须分开的 final state：</b>最后一个 marker residual 能改变继续/关闭，却不能独立运输最终 scalar count。Source-conflict 显示最终答案跟 trace pair 数/extent，而非 prompt count、marker identity 或最后 trace 数字；clean Layer-1 MLP output 与 post-MLP residual 已能把 donor scalar 写入 conflict receiver。</p>
+          <p><b>仍缺：</b>trace pair 数每变化 1，<code>&lt;Ans&gt;</code> 绝对位置也变化 2。由于模型使用 learned absolute positions，当前实验还不能区分真正的 trace-length aggregation 与 position lookup；固定少数 trace-readout heads 也不足以解释这座桥。</p>
           <div class="flow"><span class="node">progress k</span><span class="arrow">↔</span><span class="node">targeted retrieval</span><span class="arrow">→</span><span class="node">M_k</span><span class="arrow">→</span><span class="node">k+1 / close</span></div>
           <div class="flow"><span class="node">complete trace/context</span><span class="arrow">⇢</span><span class="node">final scalar-count state</span><span class="arrow">→</span><span class="node">C_n</span></div>
         </div>
@@ -4280,7 +4438,28 @@ def build_report(run_dir: Path) -> Path:
       <p>Broad-ranked top-1 已产生区间依赖的正 transport：1–10 / 11–20 / 21–30 的 slope 为 <b>{count_transport_lookup[('non-thinking broad','1-10',1)]['slope']}</b> / <b>{count_transport_lookup[('non-thinking broad','11-20',1)]['slope']}</b> / <b>{count_transport_lookup[('non-thinking broad','21-30',1)]['slope']}</b>。Top-4 后升至 <b>{count_transport_lookup[('non-thinking broad','1-10',4)]['slope']}</b> / <b>{count_transport_lookup[('non-thinking broad','11-20',4)]['slope']}</b> / <b>{count_transport_lookup[('non-thinking broad','21-30',4)]['slope']}</b>，而随机 top-4 均值仅为 <b>{count_transport_lookup[('non-thinking broad','1-10',4)]['random']}</b> / <b>{count_transport_lookup[('non-thinking broad','11-20',4)]['random']}</b> / <b>{count_transport_lookup[('non-thinking broad','21-30',4)]['random']}</b>。</p>
       <div class="callout good"><b>因果结论：</b>non-thinking broad heads 不只“看着 needles”，其最终-query outputs 足以搬运相当比例的 donor count。低 count 的 top-4 几乎达到一比一 transport；随着 receiver count 增大，固定四枚 heads 的 slope 下降到 0.53，说明高 count 需要更多分布式 head slices 或更多 residual/MLP 支持。Top-16 达到 1 是“全部 attention output 都来自 donor”的 sanity endpoint，不能被解释为 broad ranking 的特异性。</div>
 
-      <h3>8.7 CoT trace-readout heads：最终 &lt;Ans&gt; 的 attention slices 单独不足以搬运 count</h3>
+      <h3>8.7 Non-thinking MLP intermediate：集合证据如何变成具体 count</h3>
+      <h4>实验</h4>
+      <p>这一实验把第 8.6 节的链条再向后推进一步。Receiver prompt 含 <code>n</code> 个 needles，donor prompt 含 <code>m=n±3</code> 个 needles；两者使用 nested prompt，使 receiver 的 needle 集合严格包含于 donor 或反之。我们在最终 <code>&lt;Ans&gt;</code> query、每个 Layer 的 MLP 中间层读取经过激活函数后的 <b>1024 维 post-GELU activation</b>，而不是读取完整 residual。</p>
+      <div class="protocol"><ol>
+        <li><b>Fit split。</b>对每个 feature <code>i</code> 计算 <code>(a_i(m)−a_i(n)) × w_i(m versus n)</code>。其中 <code>a_i</code> 是 post-GELU activation；<code>w_i</code> 是该 feature 经 <code>c_proj</code> 与 tied unembedding 后，对 donor-count logit 相对 receiver-count logit 的线性系数。按跨 fit pairs 的平均 signed evidence 从大到小排序。</li>
+        <li><b>Held-out causal split。</b>Fit 与 evaluation 使用不相交的随机 seeds。在 receiver forward 中，只把排名 top-8 / 32 / 128 / 512 / 1024 个 post-GELU features 替换成 donor 值；其余 features、attention、residual 和后续 Layers 都保留 receiver 值。每个 support size 另采样 {int(final_bridge_manifest['random_replicates'])} 组等大小 random features。</li>
+        <li><b>Transport slope。</b>对 held-out pairs 回归 <code>ΔE[C] = a + b(m−n)</code>。<code>b=1</code> 表示 patched output 一比一跟随 donor offset；<code>b=0</code> 表示没有数值运输。另报告 <code>R²</code>、donor-vs-receiver logit-margin recovery，以及 argmax 是否真正翻转到 donor count。</li>
+      </ol></div>
+      <h4>结果</h4>
+      {figure(
+          generated['nonthinking_mlp_transport'],
+          'Figure 6B. Non-thinking post-GELU feature transplant 的 count transport',
+          '<b>横轴</b>是被 donor 值替换的 post-GELU features 数量；<b>纵轴</b>是 expected-count transport slope。三栏为 receiver count 1–10、11–20、21–30；每条彩线是一层的 ranked features，灰色虚线是理想的一比一 transport。完整 1024-feature replacement 是整层 MLP intermediate transplant 的充分性 sanity check，而不是稀疏选择优势。'
+      )}
+      {table(nonthinking_feature_rows,[('bin','receiver count 区间'),('selection','选择'),('layer','Layer'),('features','features'),('ranked_slope','ranked slope'),('random_slope','matched random slope'),('gain','slope gain'),('r2','ranked R²'),('margin_recovery','margin recovery'),('donor_follow','argmax follows donor')])}
+      <h4>分析</h4>
+      <p>低 count 的 Layer-1 top-128 已达到 slope <b>{fmt(nonthinking_feature_comparison[(nonthinking_feature_comparison.count_bin == '1-10') & (nonthinking_feature_comparison.layer == 0) & (nonthinking_feature_comparison.support_size == 128)].iloc[0].transport_slope)}</b>、R² <b>{fmt(nonthinking_feature_comparison[(nonthinking_feature_comparison.count_bin == '1-10') & (nonthinking_feature_comparison.layer == 0) & (nonthinking_feature_comparison.support_size == 128)].iloc[0].transport_r2)}</b>，明显高于 matched-random slope <b>{fmt(nonthinking_feature_comparison[(nonthinking_feature_comparison.count_bin == '1-10') & (nonthinking_feature_comparison.layer == 0) & (nonthinking_feature_comparison.support_size == 128)].iloc[0].random_transport_slope)}</b>；替换完整 Layer-1 1024 features 时 slope 为 <b>{fmt(nonthinking_feature_comparison[(nonthinking_feature_comparison.count_bin == '1-10') & (nonthinking_feature_comparison.layer == 0) & (nonthinking_feature_comparison.support_size == 1024)].iloc[0].transport_slope)}</b>、R² 为 <b>{fmt(nonthinking_feature_comparison[(nonthinking_feature_comparison.count_bin == '1-10') & (nonthinking_feature_comparison.layer == 0) & (nonthinking_feature_comparison.support_size == 1024)].iloc[0].transport_r2)}</b>，输出完整翻到 donor。</p>
+      <p>11–20 中最强稀疏优势出现在 Layer 4 top-512：ranked slope <b>0.475</b>，matched-random slope <b>−0.643</b>；Layer 3 top-512 的 ranked slope 更高，达到 <b>0.721</b>。21–30 的稀疏运输则整体很弱，最佳 sparse slope 仅约 <b>0.092</b>，完整 Layer-4 MLP transplant 也只有约 <b>0.264</b>。这与高 count state 更分布式、更依赖跨层 residual 的结论一致。</p>
+      <div class="callout good"><b>因果结论：</b>non-thinking 的“needle-set evidence → numeric count”不只是线性可读。Held-out donor MLP features 被写入 receiver 后，低/中 count 的连续 count logits 按 donor offset 系统移动；ranked sparse features 在多个条件下明显胜过等大小随机 features。这把 broad-head transport 与后层 count state 之间补上了一段局部因果桥。</div>
+      <div class="callout warn"><b>边界：</b>这仍不是一枚“加一 neuron”。排名依赖 donor-vs-receiver logit 方向，最佳 Layer/support 随 count 区间变化；1024-feature 结果是整层充分性检查。高 count 的弱 sparse transport 表明表示可能分散在 attention、多个 MLP Layers 和 residual 中。</div>
+
+      <h3>8.8 CoT trace-readout heads：最终 &lt;Ans&gt; 的 attention slices 单独不足以搬运 count</h3>
       <h4>实验</h4>
       <p>使用同一 nested donor/receiver protocol，但换成 thinking 模型，并按最终 <code>&lt;Ans&gt;</code> query 对全部 trace markers 的 attention mass 排名。Donor 与 receiver 的 gold trace 长度分别为 m 与 n，所以 semantic anchor 相同而绝对 position 不同。只替换 attention head-output slices；receiver 的 residual stream、MLP 输入与其余上下文仍保留 receiver 状态。</p>
       <h4>结果</h4>
@@ -4294,10 +4473,53 @@ def build_report(run_dir: Path) -> Path:
       <p>CoT top-4 readout slices 的 slope 只有 <b>{count_transport_lookup[('CoT trace readout','1-10',4)]['slope']}</b> / <b>{count_transport_lookup[('CoT trace readout','11-20',4)]['slope']}</b> / <b>{count_transport_lookup[('CoT trace readout','21-30',4)]['slope']}</b>；即使 top-8 也只有 <b>{count_transport_lookup[('CoT trace readout','1-10',8)]['slope']}</b> / <b>{count_transport_lookup[('CoT trace readout','11-20',8)]['slope']}</b> / <b>{count_transport_lookup[('CoT trace readout','21-30',8)]['slope']}</b>，而且剂量曲线非单调。</p>
       <div class="callout warn"><b>解释：</b>这不等于“CoT trace readout 无用”。它说明最终答案的 count state 不能由 selected attention slices 单独搬运；receiver residual、位置/trace-length 表征、MLP 或多头组合仍占主导。第 7 节的局部 ablation 可以证明某些 readout heads 被使用，本节则表明这些 slices 本身不具备把 m−n 一比一写入 logits 的充分性。完整 residual transplant 才是对 CoT final count state 的更合适充分性测试。</div>
 
-      <h3>8.8 本节结论与证据边界</h3>
+      <h3>8.9 CoT source-conflict：最终答案跟 prompt、trace，还是最后一个 trace 数字？</h3>
+      <h4>实验</h4>
+      <p>我们构造 receiver count <code>n</code> 与 donor count <code>m=n±3</code> 的冲突序列，并保持模型权重不变。以 <code>n=5, m=8</code> 为例，四个条件分别是：</p>
+      <div class="protocol"><ol>
+        <li><b>prompt=m, trace=n。</b>Prompt 里有 8 个 needles，但 teacher-forced trace 只有 5 组 <code>&lt;k&gt;, M_k</code>；检验最终答案是重读 prompt 还是跟 trace。</li>
+        <li><b>prompt=n, trace=m。</b>Prompt 里有 5 个 needles，trace 却有 8 组；检验 trace extent 是否能覆盖 prompt evidence。</li>
+        <li><b>final trace index=m only。</b>Prompt、trace marker 数量与 trace 总长度都对应 5，只把最后一个 trace 数字改成 <code>&lt;8&gt;</code>；检验模型是否简单复制最后一个数字。</li>
+        <li><b>marker-identity control。</b>保持 prompt count、trace pair 数和数字不变，只循环置换 trace 中的 marker identities；检验 final count 是否依赖具体 marker 内容。</li>
+      </ol></div>
+      <p>每个 count 区间使用两个有向 count pairs（5↔8、15↔18、25↔28），每个 pair 有 {int(final_bridge_manifest['behavior_examples_per_pair'])} 个 prompts，因此每个 condition×bin 有 12 个 held-out conflict examples。<code>follows receiver/donor</code> 表示 30-way count argmax 等于哪一个 count；target margin 是预注册 target count logit 减去其余 29 个 count logits 的最大值。</p>
+      <h4>结果</h4>
+      {figure(
+          generated['cot_conflict_source'],
+          'Figure 6C. CoT final answer 的信息源冲突',
+          '<b>横轴</b>是三种真正改变候选 count 来源的 conflict；<b>纵轴</b>是最终 count argmax 跟随 receiver 或 donor 的比例。每栏是一个 count 区间。Marker-identity control 不改变目标 count，故列入下表而不混入二选一图。'
+      )}
+      {table(conflict_rows,[('condition','冲突条件'),('bin','count 区间'),('receiver','follows receiver'),('donor','follows donor'),('target','target correct'),('margin','target logit margin'),('abs_position','mean |Ans-position shift|')])}
+      <h4>分析</h4>
+      <p>三个区间的行为完全一致：<code>prompt=m, trace=n</code> 时模型 <b>100%</b> 输出 n；<code>prompt=n, trace=m</code> 时 <b>100%</b> 输出 m；只改最后 trace 数字时仍 <b>100%</b> 输出 n；置换 marker identity 也不改变答案。因而当前模型的最终答案不靠重新统计 prompt，也不是复制最后一个 trace 数字或读取 marker identity；最强行为证据指向<b>完整 trace 的 pair 数/extent</b>。</p>
+      <div class="callout warn"><b>关键混淆变量：</b>模型使用 learned absolute-position embeddings。Trace 增减 3 pairs 会让最终 <code>&lt;Ans&gt;</code> 绝对位置移动 6 tokens；正负方向平均后 signed shift 恰好为 0，所以表中必须看 <code>mean |Ans-position shift|=6</code>。因此本实验排除了 prompt 重读与 final-index copy，但还不能区分“语义上的 trace 长度计数”与“从 <code>&lt;Ans&gt;</code> 的绝对位置读出 count”。</div>
+
+      <h3>8.10 CoT final scalar bridge：哪一层把 trace/position evidence 写成可执行 count state？</h3>
+      <h4>实验</h4>
+      <p>对同一个 <code>prompt=m, trace=n</code> conflict，先运行 clean donor（prompt 与 trace 都为 m）并缓存最终 <code>&lt;Ans&gt;</code> row 的 activation；再运行 conflict receiver（prompt=m、trace=n，基线输出 n）。我们只在 receiver 的语义 <code>&lt;Ans&gt;</code> row 替换 clean donor activation，测 donor count m 的 logit-margin recovery。由于 donor 与 receiver 的 <code>&lt;Ans&gt;</code> 绝对位置不同，这个 patch 同时问：clean component 是否足以把 donor 的 trace/position-derived count evidence带到 receiver。</p>
+      <div class="protocol"><ol>
+        <li><b>Attention output。</b>替换某一 Layer 完整 attention sublayer 的输出，但保留 receiver MLP 与 residual。</li>
+        <li><b>MLP output。</b>替换该 Layer MLP 投回 residual 的输出；attention 与 MLP 输入仍来自 receiver。</li>
+        <li><b>Post-MLP residual。</b>替换该 Layer 完成 attention、MLP 与 residual additions 后的整条 256 维 state；后续 Layers 继续在 receiver context 中运行。</li>
+        <li><b>Normalized recovery。</b><code>(patched donor-margin − conflict margin) / (clean donor-margin − conflict margin)</code>。1 表示完全恢复 clean donor margin；另报告 argmax 是否真正翻到 donor target。</li>
+      </ol></div>
+      <h4>结果</h4>
+      {figure(
+          generated['cot_final_bridge'],
+          'Figure 6D. CoT final &lt;Ans&gt; 的 sublayer/residual clean-to-conflict recovery',
+          '<b>横轴</b>是 Layer 1–4；<b>纵轴</b>是 donor-count normalized recovery。三种线分别替换完整 attention output、MLP output 与 post-MLP residual；三栏为 count 区间。虚线 1 表示恢复到 clean donor margin。'
+      )}
+      {table(bridge_rows,[('bin','count 区间'),('component','Layer-1 component'),('recovery','normalized recovery'),('target_follow','argmax follows donor')])}
+      <h4>分析</h4>
+      <p>Layer-1 attention output 的 recovery 在 1–10 / 11–20 / 21–30 仅为 <b>{fmt(bridge_value('1-10','attn_out',0))}</b> / <b>{fmt(bridge_value('11-20','attn_out',0))}</b> / <b>{fmt(bridge_value('21-30','attn_out',0))}</b>，从不把 argmax 翻到 donor。相反，Layer-1 MLP output 已恢复 <b>{fmt(bridge_value('1-10','mlp_out',0))}</b> / <b>{fmt(bridge_value('11-20','mlp_out',0))}</b> / <b>{fmt(bridge_value('21-30','mlp_out',0))}</b>，三个区间的 argmax 都 <b>100%</b> 跟随 donor；Layer-1 post-MLP residual 进一步达到 <b>{fmt(bridge_value('1-10','post_mlp',0))}</b> / <b>{fmt(bridge_value('11-20','post_mlp',0))}</b> / <b>{fmt(bridge_value('21-30','post_mlp',0))}</b>。</p>
+      <p>固定的 prompt-broad、trace-index 或 trace-marker head bundles 在同一位置的 recovery 很弱，而且没有翻转 target；这与 8.8 的 readout-slice 结果一致：最终 scalar state 不是由少数固定 attention slices 单独携带。</p>
+      <div class="callout good"><b>因果结论：</b>在当前 learned-position 模型中，CoT 的 trace/position-derived evidence 最晚在 Layer-1 MLP 后已经成为可执行的 donor scalar-count state。完整 Layer-1 MLP output 单独就足以翻转 count；完整 post-MLP residual 几乎完全恢复。这个结果补上了“trace/context → final scalar state”的局部桥，但没有消除 trace length 与绝对位置的混淆。</div>
+      <div class="callout warn"><b>定位边界：</b>post-MLP residual 包含该 Layer 以前的全部计算，所以高 recovery 不能单独证明 count 首次诞生于 Layer 1。更有定位力的证据是：Layer-1 attention output 弱，而 Layer-1 MLP output 强；它支持 MLP 把已有的 trace/position evidence转换为 count logits 所需方向，但不说明 MLP 内部采用了符号式加法。</div>
+
+      <h3>8.11 本节结论与证据边界</h3>
       <div class="mechanisms">
-        <div class="mechanism"><h3>Non-thinking</h3><p><b>当前支持：</b>early broad heads 既在第 7 节表现出必要性，也能在最终 <code>&lt;Ans&gt;</code> 局部 patch 中运输 donor count；这是“broad set aggregation → answer count state”最直接的 head-level 因果证据。</p><p><b>边界：</b>高 count 的 top-4 slope 明显低于 1，说明 count state 还分布在更多 heads、residual 或 MLP 中。</p></div>
-        <div class="mechanism"><h3>CoT</h3><p><b>当前支持：</b>数字 <code>&lt;k&gt;</code> row 的 top-2/top-4 targeted bundle 足以恢复 marker identity；marker <code>M_k</code> row 的 successor-ranked multi-head bundle 能双向运输 next-step evidence；Layer 3 MLP 参与非线性转换，Layer 4 MLP 中一个分布式、部分稀疏的 post-GELU feature 子空间负责最强的具体 token-logit 写入；最终 <code>&lt;Ans&gt;</code> row 的 readout slices 单独不能运输完整 donor count。</p><p><b>仍缺：</b>feature patch 已提供局部因果证据，但 feature 组合随 k、count 区间和 continue/close 方向变化，尚不能压缩成一根统一的符号式 <code>+1</code> 轴，也没有跨 seed 或自然语言任务验证。</p></div>
+        <div class="mechanism"><h3>Non-thinking</h3><p><b>当前支持：</b>early broad heads 既表现出必要性，也能在最终 <code>&lt;Ans&gt;</code> 局部 patch 中运输 donor count；held-out post-GELU feature transplant 又证明低/中 count 的一部分 numeric state 可由特定 MLP feature 子集搬运。因此“broad set aggregation → MLP count conversion → answer state”已有连续的局部因果证据。</p><p><b>边界：</b>高 count 的 fixed-head 与 sparse-feature transport 都明显变弱，说明 state 分布到更多 heads、Layers 与 residual；尚未得到一套跨 1–30 通用的算术 feature basis。</p></div>
+        <div class="mechanism"><h3>CoT</h3><p><b>当前支持：</b>数字 <code>&lt;k&gt;</code> row 的 targeted bundle 恢复 marker identity；marker <code>M_k</code> row 的 successor bundle 运输 next-step evidence；MLP features 写入 continue/close logits。最终答案在冲突中跟 trace pair count/extent，而不是 prompt count、marker identity或最后 trace 数字；clean Layer-1 MLP output 和 post-MLP residual 足以把 donor scalar count 写入 conflict receiver。</p><p><b>仍缺：</b>trace pair 数与 <code>&lt;Ans&gt;</code> 绝对位置共变，尚未区分语义 trace-length counting 与 learned-position shortcut；也没有把 final scalar bridge 压缩为固定少数 heads 或一根统一 count direction。</p></div>
       </div>
     </section>
     """

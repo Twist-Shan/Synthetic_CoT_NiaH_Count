@@ -76,6 +76,15 @@ from synthetic_counting_v10.head_state_bidirectional import (
     summarize_head_to_state,
     summarize_state_to_head,
 )
+from synthetic_counting_v10.final_bridge_causal import (
+    CONFLICT_FINAL_INDEX,
+    CONFLICT_MARKERS,
+    CONFLICT_PROMPT,
+    CONFLICT_TRACE,
+    _feature_replacements,
+    _normalized_recovery,
+    build_conflict_case,
+)
 
 
 def tiny_setup():
@@ -155,6 +164,66 @@ def test_v10_main_matches_requested_v2_architecture_and_count_range():
     assert cfg.early_stop_patience == 0
     assert cfg.max_render_len == 322
     assert cfg.n_positions >= cfg.max_render_len
+
+
+def test_final_bridge_conflicts_isolate_prompt_trace_and_last_index_sources():
+    cfg, vocab, _ = tiny_setup()
+    receiver_count, donor_count, seed = 3, 5, 917
+
+    prompt = build_conflict_case(
+        cfg, vocab, receiver_count, donor_count, seed, CONFLICT_PROMPT
+    )
+    assert len(prompt.conflict.prompt_needle_positions) == donor_count
+    assert len(prompt.conflict.spans.trace_index_positions) == receiver_count
+    assert prompt.conflict.spans.ans_pos == 1 + cfg.seq_len + 1 + 2 * receiver_count + 1
+    assert (prompt.target_count, prompt.alternative_count) == (donor_count, receiver_count)
+
+    trace = build_conflict_case(
+        cfg, vocab, receiver_count, donor_count, seed, CONFLICT_TRACE
+    )
+    assert len(trace.conflict.prompt_needle_positions) == receiver_count
+    assert len(trace.conflict.spans.trace_index_positions) == donor_count
+    assert trace.conflict.spans.ans_pos == trace.clean.spans.ans_pos
+
+    last_index = build_conflict_case(
+        cfg, vocab, receiver_count, donor_count, seed, CONFLICT_FINAL_INDEX
+    )
+    assert len(last_index.conflict.spans.trace_index_positions) == receiver_count
+    assert last_index.conflict.spans.ans_pos == 1 + cfg.seq_len + 1 + 2 * receiver_count + 1
+    assert last_index.conflict.tokens[last_index.conflict.spans.trace_index_positions[-1]] == "<5>"
+    assert last_index.conflict.tokens[last_index.conflict.spans.trace_index_positions[-2]] == "<2>"
+
+    marker_control = build_conflict_case(
+        cfg, vocab, receiver_count, donor_count, seed, CONFLICT_MARKERS
+    )
+    assert marker_control.target_count == receiver_count
+    assert marker_control.clean.spans.ans_pos == marker_control.conflict.spans.ans_pos
+    assert marker_control.clean.tokens != marker_control.conflict.tokens
+
+
+def test_final_bridge_recovery_and_feature_support_controls_are_well_defined():
+    assert _normalized_recovery(4.0, -2.0, 1.0) == 0.5
+    assert np.isnan(_normalized_recovery(1.0, 1.0, 1.0))
+
+    donor = torch.arange(12, dtype=torch.float32)
+    receiver = torch.zeros(12, dtype=torch.float32)
+    ranking = torch.arange(11, -1, -1)
+    conditions, replacements = _feature_replacements(
+        donor,
+        receiver,
+        ranking,
+        support_sizes=(2, 12),
+        random_replicates=1,
+        seed=29,
+    )
+    assert len(conditions) == len(replacements) == 4
+    full = [
+        replacement
+        for condition, replacement in zip(conditions, replacements)
+        if condition["family"] == "ranked" and condition["support_size"] == 12
+    ]
+    assert len(full) == 1
+    assert torch.equal(full[0], donor)
 
 
 def test_bidirectional_residual_patch_is_pre_layer_and_hook_safe():
