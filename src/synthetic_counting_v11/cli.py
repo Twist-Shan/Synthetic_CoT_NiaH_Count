@@ -13,6 +13,14 @@ def build_parser(version: str) -> argparse.ArgumentParser:
     parser.add_argument("--device", default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--train-steps", type=int, default=None)
+    parser.add_argument(
+        "--count-sampling",
+        choices=("power", "exponential"),
+        default=None,
+        help="v17 training-count sampler; balanced validation is unchanged",
+    )
+    parser.add_argument("--power-alpha", type=float, default=None)
+    parser.add_argument("--exponential-beta", type=float, default=None)
     parser.add_argument("--out-root", default=f"runs/synthetic_counting_{version}")
     parser.add_argument("--run-name", default=None)
     parser.add_argument("--checkpoint-sync-root", default=None)
@@ -30,6 +38,9 @@ def main(version: str, argv: list[str] | None = None) -> None:
             "device": args.device,
             "seed": args.seed,
             "train_steps": args.train_steps,
+            "count_sampling": args.count_sampling,
+            "power_alpha": args.power_alpha,
+            "exponential_beta": args.exponential_beta,
         }.items()
         if value is not None
     }

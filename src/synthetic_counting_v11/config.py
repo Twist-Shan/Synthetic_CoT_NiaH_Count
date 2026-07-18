@@ -7,8 +7,9 @@ from typing import Any
 import torch
 
 
-SUPPORTED_VERSIONS = ("v11", "v12", "v13", "v14")
+SUPPORTED_VERSIONS = ("v11", "v12", "v13", "v14", "v15", "v16", "v17")
 SUPPORTED_POSITION_ENCODINGS = ("ape", "rope", "rpe")
+TARGET_SHAKESPEARE_CHARACTERS = ("S", "H", "A", "K", "E", "R", "s", "h", "a", "k", "e", "r")
 
 
 @dataclass(frozen=True)
@@ -22,7 +23,13 @@ class ExperimentConfig:
     noise_vocab_size: int = 64
     marker_vocab_size: int = 10
     noise_source: str = "uniform"
+    task_type: str = "inserted_marker"
+    target_characters: tuple[str, ...] = TARGET_SHAKESPEARE_CHARACTERS
     training_data_mode: str = "streaming"
+    loss_scope: str = "completion"
+    count_sampling: str = "uniform"
+    power_alpha: float = 1.0
+    exponential_beta: float = 0.15
     fixed_train_examples_per_count: int = 512
     position_encodings: tuple[str, ...] = ("ape", "rope", "rpe")
 
@@ -58,7 +65,8 @@ class ExperimentConfig:
 
     @property
     def max_render_len(self) -> int:
-        return int(self.seq_len) + 2 * int(self.count_max) + 6
+        task_prefix = 3 if self.task_type == "target_character" else 0
+        return int(self.seq_len) + 2 * int(self.count_max) + 6 + task_prefix
 
     @property
     def model_variants(self) -> tuple[tuple[str, str], ...]:
@@ -88,8 +96,18 @@ class ExperimentConfig:
             raise ValueError("count range must satisfy 1 <= count_min <= count_max")
         if self.count_max > self.seq_len:
             raise ValueError("count_max cannot exceed seq_len")
-        if self.n_layer != 4 or self.n_head != 4 or self.n_embd != 64:
-            raise ValueError("v11-v14 use exactly 4 layers, 4 heads, and hidden size 64")
+        expected_width = 64 if self.version in {"v11", "v12", "v13", "v14"} else 256
+        expected_inner = 256 if expected_width == 64 else 1024
+        if (
+            self.n_layer != 4
+            or self.n_head != 4
+            or self.n_embd != expected_width
+            or self.n_inner != expected_inner
+        ):
+            raise ValueError(
+                f"{self.version} requires exactly 4 layers, 4 heads, "
+                f"hidden size {expected_width}, and MLP size {expected_inner}"
+            )
         if self.n_embd % self.n_head:
             raise ValueError("n_embd must be divisible by n_head")
         if self.max_render_len > self.n_positions:
@@ -101,29 +119,64 @@ class ExperimentConfig:
             raise ValueError(f"Unsupported position encodings: {invalid}")
         if self.noise_source not in {"uniform", "shakespeare_char"}:
             raise ValueError(f"Unsupported noise source: {self.noise_source}")
+        if self.task_type not in {"inserted_marker", "target_character"}:
+            raise ValueError(f"Unsupported task type: {self.task_type}")
+        if self.loss_scope not in {"completion", "all_sequence"}:
+            raise ValueError(f"Unsupported loss scope: {self.loss_scope}")
+        if self.count_sampling not in {"uniform", "power", "exponential"}:
+            raise ValueError(f"Unsupported count sampling: {self.count_sampling}")
+        if not self.target_characters or any(len(char) != 1 for char in self.target_characters):
+            raise ValueError("target_characters must contain one-character strings")
         if self.training_data_mode not in {"streaming", "fixed"}:
             raise ValueError(f"Unsupported training data mode: {self.training_data_mode}")
         if self.version == "v11" and set(self.position_encodings) != set(SUPPORTED_POSITION_ENCODINGS):
             raise ValueError("v11 must compare APE, RoPE, and RPE")
         if self.version in {"v12", "v13", "v14"} and self.position_encodings != ("ape",):
             raise ValueError(f"{self.version} must use APE only")
+        if self.version in {"v15", "v16"} and self.position_encodings != ("rope", "rpe"):
+            raise ValueError(f"{self.version} must compare RoPE and RPE")
+        if self.version == "v17" and self.position_encodings != ("ape",):
+            raise ValueError("v17 must use APE only")
+        if self.version in {"v15", "v16", "v17"} and self.loss_scope != "completion":
+            raise ValueError(f"{self.version} must use the v10 completion-only autoregressive loss")
+        if self.version == "v15" and (
+            self.noise_source != "shakespeare_char" or self.task_type != "inserted_marker"
+        ):
+            raise ValueError("v15 uses Shakespeare haystacks with inserted marker needles")
+        if self.version == "v16" and (
+            self.noise_source != "shakespeare_char" or self.task_type != "target_character"
+        ):
+            raise ValueError("v16 counts native target-character occurrences in Shakespeare")
+        if self.version == "v17" and self.count_sampling not in {"power", "exponential"}:
+            raise ValueError("v17 requires a decreasing power or exponential count sampler")
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
         result["position_encodings"] = list(self.position_encodings)
+        result["target_characters"] = list(self.target_characters)
         result["count_bins"] = [list(pair) for pair in self.count_bins]
         result["architecture"] = (
             "v10-style random-init GPT-2/pre-LN causal Transformer core; "
-            "4 layers; 4 heads; d_model=64; MLP=256; "
+            f"4 layers; 4 heads; d_model={self.n_embd}; MLP={self.n_inner}; "
             "tied token embedding/unembedding"
         )
         result["architecture_note"] = (
-            "v12-v14 reuse the v10-style computation and rendering path, but never "
-            "the v10 width: every v11-v14 model is fixed at hidden size 64"
+            "v11-v14 are controlled hidden size 64 (d_model=64) experiments; v15-v17 restore the "
+            "v10 d_model=256 and MLP=1024 capacity while keeping 4 layers and 4 heads"
         )
         result["rpe_definition"] = "learned per-layer, per-head causal relative-distance attention bias"
         result["separate_transformers"] = True
         result["shared_trace_and_answer_numbers"] = True
+        result["training_objective"] = (
+            "teacher-forced next-token cross-entropy over every non-padding token"
+            if self.loss_scope == "all_sequence"
+            else "teacher-forced completion-only next-token cross-entropy"
+        )
+        result["count_sampling_definition"] = {
+            "uniform": "p(n) proportional to 1",
+            "power": f"p(n) proportional to n^(-{self.power_alpha})",
+            "exponential": f"p(n) proportional to exp(-{self.exponential_beta} * (n-count_min))",
+        }[self.count_sampling]
         if self.noise_source == "shakespeare_char":
             result["tiny_shakespeare_source"] = (
                 "Karpathy char-rnn data/tinyshakespeare/input.txt; "
@@ -158,6 +211,37 @@ def _main_config(version: str) -> ExperimentConfig:
             preset="main",
             noise_source="shakespeare_char",
             position_encodings=("ape",),
+        )
+    if version == "v15":
+        return ExperimentConfig(
+            version="v15",
+            preset="main",
+            noise_source="shakespeare_char",
+            loss_scope="completion",
+            position_encodings=("rope", "rpe"),
+            n_embd=256,
+            n_inner=1024,
+        )
+    if version == "v16":
+        return ExperimentConfig(
+            version="v16",
+            preset="main",
+            noise_source="shakespeare_char",
+            task_type="target_character",
+            loss_scope="completion",
+            position_encodings=("rope", "rpe"),
+            n_embd=256,
+            n_inner=1024,
+        )
+    if version == "v17":
+        return ExperimentConfig(
+            version="v17",
+            preset="main",
+            loss_scope="completion",
+            count_sampling="power",
+            position_encodings=("ape",),
+            n_embd=256,
+            n_inner=1024,
         )
     raise ValueError(f"Unknown experiment version: {version}")
 
@@ -196,6 +280,8 @@ def preset_config(version: str, preset: str, **overrides: Any) -> ExperimentConf
         raise TypeError(f"Unknown ExperimentConfig overrides: {unknown}")
     if "position_encodings" in overrides:
         overrides["position_encodings"] = tuple(overrides["position_encodings"])
+    if "target_characters" in overrides:
+        overrides["target_characters"] = tuple(overrides["target_characters"])
     cfg = replace(cfg, **overrides)
     cfg.validate()
     return cfg
@@ -211,9 +297,12 @@ def config_from_dict(values: dict[str, Any]) -> ExperimentConfig:
         "shared_trace_and_answer_numbers",
         "count_bins",
         "tiny_shakespeare_source",
+        "training_objective",
+        "count_sampling_definition",
     ):
         data.pop(derived, None)
     data["position_encodings"] = tuple(data["position_encodings"])
+    data["target_characters"] = tuple(data.get("target_characters", TARGET_SHAKESPEARE_CHARACTERS))
     cfg = ExperimentConfig(**data)
     cfg.validate()
     return cfg
@@ -224,7 +313,7 @@ def default_run_name(cfg: ExperimentConfig) -> str:
     data_tag = "fixed" if cfg.training_data_mode == "fixed" else cfg.noise_source
     return (
         f"{cfg.version}_{cfg.preset}_L{cfg.seq_len}_count{cfg.count_min}-{cfg.count_max}_"
-        f"4L4H_d64_{positions}_{data_tag}_seed{cfg.seed}"
+        f"4L4H_d{cfg.n_embd}_{positions}_{data_tag}_{cfg.loss_scope}_{cfg.count_sampling}_seed{cfg.seed}"
     )
 
 

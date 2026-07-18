@@ -22,6 +22,7 @@ from .data import (
     balanced_examples,
     collate,
     component_loss_values,
+    count_sampling_probabilities,
     count_prediction,
     load_or_create_fixed_pool,
     make_example,
@@ -173,7 +174,9 @@ def _parse_generation(tokens: list[str], mode: str, vocab: Vocab, example: Examp
         for k, marker in enumerate(example.needle_markers, start=1)
         for token in (vocab.number_token(k), marker)
     ]
-    generated_markers = [token for token in trace if token in vocab.markers]
+    # Trace grammar is always index, marker, index, marker, ... . In v16 the
+    # marker is a native Shakespeare character token rather than an <M*> token.
+    generated_markers = trace[1::2]
     marker_matches = sum(
         int(index < len(generated_markers) and generated_markers[index] == marker)
         for index, marker in enumerate(example.needle_markers)
@@ -203,11 +206,11 @@ def autoregressive_evaluate(
     batch_size = min(cfg.analysis_batch_size, len(examples))
     for start in range(0, len(examples), batch_size):
         chunk = examples[start : start + batch_size]
-        prefixes = (
-            [["<BOS>", *example.seq_tokens, "<Ans>"] for example in chunk]
-            if mode == "nonthinking"
-            else [["<BOS>", *example.seq_tokens, "<Think>"] for example in chunk]
-        )
+        prefixes = []
+        for example in chunk:
+            item = render(example, vocab, mode)
+            stop = item.spans.ans_pos + 1 if mode == "nonthinking" else item.spans.think_pos + 1
+            prefixes.append(item.tokens[:stop])
         generated = torch.tensor([vocab.encode(prefix) for prefix in prefixes], device=cfg.device)
         done = torch.zeros(len(chunk), dtype=torch.bool, device=cfg.device)
         max_new_tokens = 2 if mode == "nonthinking" else 2 * cfg.count_max + 5
@@ -382,6 +385,7 @@ def train_variant(
         optimizer.step()
         if step % cfg.log_every == 0 or step == 1 or step == cfg.train_steps:
             components = component_loss_values(token_losses, rendered)
+            batch_counts = np.asarray([item.count for item in rendered], dtype=np.float64)
             row = pd.DataFrame(
                 [
                     {
@@ -391,6 +395,13 @@ def train_variant(
                         "train_total_loss": float(loss.detach().cpu()),
                         "learning_rate": rate,
                         "gradient_norm": gradient_norm,
+                        "batch_count_mean": float(batch_counts.mean()),
+                        **{
+                            f"batch_fraction_count_{lo}_{hi}": float(
+                                np.mean((batch_counts >= lo) & (batch_counts <= hi))
+                            )
+                            for lo, hi in cfg.count_bins
+                        },
                         **{f"train_{name}_loss": value for name, value in components.items()},
                     }
                 ]
@@ -488,6 +499,18 @@ def train_all_models(
     sync_run_dir: Path | None,
     skip_completed: bool,
 ) -> None:
+    probabilities = count_sampling_probabilities(cfg)
+    distribution = pd.DataFrame(
+        {
+            "count": np.arange(cfg.count_min, cfg.count_max + 1),
+            "probability": probabilities,
+            "count_sampling": cfg.count_sampling,
+            "power_alpha": cfg.power_alpha,
+            "exponential_beta": cfg.exponential_beta,
+        }
+    )
+    distribution["count_bin"] = distribution["count"].map(cfg.count_bin)
+    _atomic_csv(distribution, run_dir / "tables" / "training_count_distribution.csv")
     fixed_pool = None
     if cfg.training_data_mode == "fixed":
         fixed_pool = load_or_create_fixed_pool(run_dir / "data" / "fixed_train_dataset.npz", cfg, vocab)

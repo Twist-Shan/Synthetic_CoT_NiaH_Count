@@ -29,6 +29,9 @@ Importable code follows a standard `src/` layout. Public module names are unchan
 | `synthetic_counting_v12` | v12 APE wrapper: length 512 and count range 1-50 |
 | `synthetic_counting_v13` | v13 APE wrapper: finite fixed-dataset training |
 | `synthetic_counting_v14` | v14 APE wrapper: Shakespeare character haystacks |
+| `synthetic_counting_v15` | v15 RoPE/RPE Shakespeare haystacks with inserted needles and v10-style completion loss |
+| `synthetic_counting_v16` | v16 RoPE/RPE native Shakespeare target-letter counting |
+| `synthetic_counting_v17` | v17 APE decreasing long-tail synthetic training distribution |
 
 Commands such as `python -m synthetic_niah_v4.run_v4` therefore remain valid after
 `pip install -e .`.
@@ -134,6 +137,33 @@ Regenerate all four notebooks after editing their shared builder:
 
 ```bash
 python scripts/build_v11_v14_notebooks.py
+```
+
+For the v10-capacity completion-only causal experiments, use:
+
+```bash
+python -m synthetic_counting_v15.run_v15 --preset main --stage all --device cuda
+python -m synthetic_counting_v16.run_v16 --preset main --stage all --device cuda
+python -m synthetic_counting_v17.run_v17 --preset main --stage all --device cuda
+```
+
+The matching Colab notebooks are `Trace_Count_v15_Colab.ipynb` through
+`Trace_Count_v17_Colab.ipynb`. v15 and v16 each train four independent models
+(`RoPE/RPE x non-thinking/thinking`); v17 trains two independent APE models.
+All use 4 layers, 4 heads, `d_model=256`, MLP size 1024, prompt length 256,
+counts 1-30, shared trace/final number tokens, and v10-style completion-only
+next-token cross-entropy. Prompt/haystack tokens remain causal context but are
+ignored by the loss. v15 inserts markers into Tiny Shakespeare windows;
+v16 counts explicitly named native Shakespeare characters without inserted
+markers; v17 retains v10 synthetic data but uses a decreasing power-law or
+exponential count distribution, so examples with more needles are rarer, while
+validation remains balanced. See
+`docs/pipelines/pipeline_v15_v17_completion.md` for exact formulas and formats.
+
+Regenerate these three notebooks with:
+
+```bash
+python scripts/build_v15_v17_notebooks.py
 ```
 
 To rebuild the v3 notebook after editing its generator:

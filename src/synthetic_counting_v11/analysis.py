@@ -41,6 +41,11 @@ def _attention_categories(item: Rendered, weights: np.ndarray, query_position: i
     needle_mass = float(needle_weights.sum()) if len(needle_weights) else 0.0
     values = {
         "bos_mass": float(weights[spans.bos_pos]),
+        "task_prefix_mass": (
+            float(weights[list(spans.task_prefix_positions)].sum())
+            if spans.task_prefix_positions
+            else 0.0
+        ),
         "prompt_needles_mass": needle_mass,
         "prompt_noise_mass": float(weights[noise].sum()) if noise else 0.0,
         "think_open_mass": float(weights[spans.think_pos]) if spans.think_pos is not None else 0.0,
@@ -64,6 +69,7 @@ def _attention_categories(item: Rendered, weights: np.ndarray, query_position: i
     # set, so other_context is computed from the disjoint context partition instead.
     named_context = (
         values["bos_mass"]
+        + values["task_prefix_mass"]
         + values["prompt_needles_mass"]
         + values["prompt_noise_mass"]
         + values["think_open_mass"]

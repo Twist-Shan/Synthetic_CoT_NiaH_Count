@@ -86,9 +86,28 @@ def plot_learning(cfg: ExperimentConfig, run_dir: Path) -> None:
             )
             axis.set_title(position.upper())
             axis.set_xlabel("training step")
-            axis.set_ylabel("completion next-token cross-entropy")
-        fig.suptitle("Training loss: paired prompt streams, separate output-mode Transformers", y=1.03)
+            axis.set_ylabel(
+                "all-sequence next-token cross-entropy"
+                if cfg.loss_scope == "all_sequence"
+                else "completion next-token cross-entropy"
+            )
+        objective = "all-sequence" if cfg.loss_scope == "all_sequence" else "completion-only"
+        fig.suptitle(
+            f"Training loss ({objective} teacher-forced causal objective)",
+            y=1.03,
+        )
         _save(fig, figures / "learning_loss.png")
+
+    distribution = _read(run_dir / "tables" / "training_count_distribution.csv")
+    if not distribution.empty:
+        fig, axis = plt.subplots(figsize=(9.0, 4.3))
+        axis.bar(distribution["count"], distribution["probability"], color="#2f6fed")
+        axis.set_title(f"Training count distribution: {cfg.count_sampling}")
+        axis.set_xlabel("needle count sampled for a training example")
+        axis.set_ylabel("sampling probability")
+        axis.set_xticks(distribution["count"])
+        axis.tick_params(axis="x", labelrotation=90 if len(distribution) > 20 else 0)
+        _save(fig, figures / "training_count_distribution.png")
 
     by_bin = _read(run_dir / "tables" / "eval_by_bin.csv")
     if not by_bin.empty:

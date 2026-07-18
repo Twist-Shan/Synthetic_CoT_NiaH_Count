@@ -86,10 +86,15 @@ class Vocab:
     markers: list[str]
     noise: list[str]
     noise_source: str
+    task_type: str = "inserted_marker"
+    loss_scope: str = "completion"
+    target_characters: tuple[str, ...] = ()
 
     @classmethod
     def build(cls, cfg: ExperimentConfig) -> "Vocab":
         special = ["<PAD>", "<BOS>", "<EOS>", "<Think>", "</Think>", "<Ans>"]
+        if cfg.task_type == "target_character":
+            special.extend(["<CountChar>", "<Sep>"])
         if cfg.noise_source == "shakespeare_char":
             noise = list(shakespeare_vocab_tokens())
         else:
@@ -98,7 +103,7 @@ class Vocab:
         numbers = [f"<{i}>" for i in range(1, cfg.count_max + 1)]
         tokens = special + noise + markers + numbers
         if len(tokens) != len(set(tokens)):
-            raise ValueError("v11-v14 vocabulary has duplicate tokens")
+            raise ValueError("Synthetic counting vocabulary has duplicate tokens")
         return cls(
             {token: idx for idx, token in enumerate(tokens)},
             tokens,
@@ -106,6 +111,9 @@ class Vocab:
             markers,
             noise,
             cfg.noise_source,
+            cfg.task_type,
+            cfg.loss_scope,
+            tuple(cfg.target_characters),
         )
 
     @classmethod
@@ -118,6 +126,9 @@ class Vocab:
             list(obj["markers"]),
             list(obj["noise"]),
             str(obj.get("noise_source", "uniform")),
+            str(obj.get("task_type", "inserted_marker")),
+            str(obj.get("loss_scope", "completion")),
+            tuple(obj.get("target_characters", ())),
         )
 
     def save(self, path: str | Path) -> None:
@@ -130,6 +141,9 @@ class Vocab:
                     "markers": self.markers,
                     "noise": self.noise,
                     "noise_source": self.noise_source,
+                    "task_type": self.task_type,
+                    "loss_scope": self.loss_scope,
+                    "target_characters": list(self.target_characters),
                     "shared_trace_and_answer_numbers": True,
                 },
                 indent=2,
@@ -193,6 +207,8 @@ class Example:
     needle_positions: list[int]
     needle_markers: list[str]
     seed: int | None = None
+    target_token: str | None = None
+    target_character: str | None = None
 
 
 @dataclass(frozen=True)
@@ -207,6 +223,7 @@ class Spans:
     ans_pos: int
     count_pos: int
     eos_pos: int
+    task_prefix_positions: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -232,6 +249,85 @@ def _noise_sequence(cfg: ExperimentConfig, vocab: Vocab, rng: random.Random) -> 
     return list(source[start : start + cfg.seq_len])
 
 
+def count_sampling_probabilities(cfg: ExperimentConfig) -> np.ndarray:
+    """Return the normalized training distribution over exact counts."""
+
+    counts = np.arange(cfg.count_min, cfg.count_max + 1, dtype=np.float64)
+    if cfg.count_sampling == "uniform":
+        weights = np.ones_like(counts)
+    elif cfg.count_sampling == "power":
+        weights = counts ** (-float(cfg.power_alpha))
+    elif cfg.count_sampling == "exponential":
+        weights = np.exp(-float(cfg.exponential_beta) * (counts - cfg.count_min))
+    else:
+        raise ValueError(f"Unknown count sampler: {cfg.count_sampling}")
+    return weights / weights.sum()
+
+
+def sample_training_count(cfg: ExperimentConfig, rng: random.Random) -> int:
+    probabilities = count_sampling_probabilities(cfg)
+    draw = rng.random()
+    cumulative = 0.0
+    for count, probability in zip(range(cfg.count_min, cfg.count_max + 1), probabilities):
+        cumulative += float(probability)
+        if draw <= cumulative:
+            return int(count)
+    return int(cfg.count_max)
+
+
+@lru_cache(maxsize=16)
+def _target_window_starts(
+    seq_len: int,
+    count_max: int,
+    target_tokens: tuple[str, ...],
+) -> dict[tuple[str, int], np.ndarray]:
+    """Index Tiny Shakespeare windows by target token and exact occurrence count."""
+
+    source = np.asarray(shakespeare_char_tokens(), dtype=object)
+    result: dict[tuple[str, int], np.ndarray] = {}
+    for target in target_tokens:
+        matches = (source == target).astype(np.int32)
+        prefix = np.concatenate((np.zeros(1, dtype=np.int64), np.cumsum(matches)))
+        window_counts = prefix[seq_len:] - prefix[:-seq_len]
+        for count in range(1, int(count_max) + 1):
+            result[(target, count)] = np.flatnonzero(window_counts == count)
+    return result
+
+
+def _target_character_example(
+    cfg: ExperimentConfig,
+    rng: random.Random,
+    count: int,
+    seed: int | None,
+) -> Example:
+    target_pairs = tuple((character, _char_token(character)) for character in cfg.target_characters)
+    starts = _target_window_starts(
+        cfg.seq_len,
+        cfg.count_max,
+        tuple(token for _, token in target_pairs),
+    )
+    viable = [pair for pair in target_pairs if len(starts[(pair[1], count)])]
+    if not viable:
+        raise ValueError(
+            f"Tiny Shakespeare has no length-{cfg.seq_len} target-character window "
+            f"with exactly {count} occurrences for targets {cfg.target_characters}"
+        )
+    character, target_token = rng.choice(viable)
+    candidate_starts = starts[(target_token, count)]
+    start = int(candidate_starts[rng.randrange(len(candidate_starts))])
+    sequence = list(shakespeare_char_tokens()[start : start + cfg.seq_len])
+    positions = [index for index, token in enumerate(sequence) if token == target_token]
+    return Example(
+        sequence,
+        int(count),
+        positions,
+        [target_token] * len(positions),
+        seed,
+        target_token,
+        character,
+    )
+
+
 def make_example(
     cfg: ExperimentConfig,
     vocab: Vocab,
@@ -239,9 +335,11 @@ def make_example(
     count: int | None = None,
     seed: int | None = None,
 ) -> Example:
-    n = rng.randint(cfg.count_min, cfg.count_max) if count is None else int(count)
+    n = sample_training_count(cfg, rng) if count is None else int(count)
     if not cfg.count_min <= n <= cfg.count_max:
         raise ValueError(f"count must be in {cfg.count_min}..{cfg.count_max}")
+    if cfg.task_type == "target_character":
+        return _target_character_example(cfg, rng, n, seed)
     positions = sorted(rng.sample(range(cfg.seq_len), n))
     markers = [rng.choice(vocab.markers) for _ in positions]
     sequence = _noise_sequence(cfg, vocab, rng)
@@ -272,18 +370,44 @@ def balanced_examples(
 
 
 def render(example: Example, vocab: Vocab, mode: str) -> Rendered:
-    prompt_start = 1
+    task_prefix = (
+        ["<CountChar>", str(example.target_token), "<Sep>"]
+        if vocab.task_type == "target_character"
+        else []
+    )
+    if vocab.task_type == "target_character" and example.target_token is None:
+        raise ValueError("target-character examples require target_token")
+    prompt_start = 1 + len(task_prefix)
     prompt_end = prompt_start + len(example.seq_tokens)
     prompt_needles = [prompt_start + position for position in example.needle_positions]
     if mode == "nonthinking":
-        tokens = ["<BOS>", *example.seq_tokens, "<Ans>", vocab.number_token(example.count), "<EOS>"]
+        tokens = [
+            "<BOS>",
+            *task_prefix,
+            *example.seq_tokens,
+            "<Ans>",
+            vocab.number_token(example.count),
+            "<EOS>",
+        ]
         ans_pos = prompt_end
         count_pos = ans_pos + 1
         eos_pos = count_pos + 1
         labels = [IGNORE_INDEX] * len(tokens)
         labels[count_pos] = vocab.number_id(example.count)
         labels[eos_pos] = vocab.eos_id
-        spans = Spans(0, prompt_start, prompt_end, None, [], [], None, ans_pos, count_pos, eos_pos)
+        spans = Spans(
+            0,
+            prompt_start,
+            prompt_end,
+            None,
+            [],
+            [],
+            None,
+            ans_pos,
+            count_pos,
+            eos_pos,
+            tuple(range(1, prompt_start)),
+        )
     elif mode == "thinking":
         trace: list[str] = []
         for k, marker in enumerate(example.needle_markers, start=1):
@@ -299,6 +423,7 @@ def render(example: Example, vocab: Vocab, mode: str) -> Rendered:
         eos_pos = count_pos + 1
         tokens = [
             "<BOS>",
+            *task_prefix,
             *example.seq_tokens,
             "<Think>",
             *trace,
@@ -321,10 +446,14 @@ def render(example: Example, vocab: Vocab, mode: str) -> Rendered:
             ans_pos,
             count_pos,
             eos_pos,
+            tuple(range(1, prompt_start)),
         )
     else:
         raise ValueError(f"Unknown mode: {mode}")
-    return Rendered(mode, tokens, vocab.encode(tokens), labels, spans, prompt_needles, example.count)
+    input_ids = vocab.encode(tokens)
+    if vocab.loss_scope == "all_sequence":
+        labels = list(input_ids)
+    return Rendered(mode, tokens, input_ids, labels, spans, prompt_needles, example.count)
 
 
 def collate(
@@ -360,14 +489,37 @@ def shifted_token_losses(logits: torch.Tensor, labels: torch.Tensor) -> tuple[to
 
 def component_target_positions(item: Rendered) -> dict[str, list[int]]:
     if item.mode == "nonthinking":
-        return {"final_count": [item.spans.count_pos], "eos": [item.spans.eos_pos]}
+        components = {
+            "ans_token": [item.spans.ans_pos],
+            "final_count": [item.spans.count_pos],
+            "eos": [item.spans.eos_pos],
+        }
+    else:
+        components = {
+            "trace_index": list(item.spans.trace_index_positions),
+            "trace_marker": list(item.spans.trace_marker_positions),
+            "think_close": (
+                [item.spans.think_close_pos]
+                if item.spans.think_close_pos is not None
+                else []
+            ),
+            "ans_token": [item.spans.ans_pos],
+            "final_count": [item.spans.count_pos],
+            "eos": [item.spans.eos_pos],
+        }
+    active_positions = {
+        position for position, label in enumerate(item.labels) if label != IGNORE_INDEX and position > 0
+    }
+    if item.spans.task_prefix_positions:
+        components["task_prefix"] = list(item.spans.task_prefix_positions)
+    components["prompt_body"] = list(
+        range(item.spans.prompt_start, item.spans.prompt_end_exclusive)
+    )
+    if item.spans.think_pos is not None:
+        components["think_open"] = [item.spans.think_pos]
     return {
-        "trace_index": list(item.spans.trace_index_positions),
-        "trace_marker": list(item.spans.trace_marker_positions),
-        "think_close": [item.spans.think_close_pos] if item.spans.think_close_pos is not None else [],
-        "ans_token": [item.spans.ans_pos],
-        "final_count": [item.spans.count_pos],
-        "eos": [item.spans.eos_pos],
+        name: [position for position in positions if position in active_positions]
+        for name, positions in components.items()
     }
 
 
