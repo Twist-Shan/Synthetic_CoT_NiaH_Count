@@ -20,6 +20,7 @@ from .data import (
     Example,
     FixedExamplePool,
     Vocab,
+    WindowWithoutReplacementSampler,
     balanced_examples,
     collate,
     component_loss_values,
@@ -28,6 +29,7 @@ from .data import (
     load_or_create_fixed_pool,
     make_example,
     render,
+    split_target_window_starts,
     shifted_token_losses,
 )
 from .model import TinyPositionCausalLM, build_model
@@ -149,6 +151,7 @@ def _save_checkpoint(
     sync_run_dir: Path | None,
     *,
     label: str | None = None,
+    window_sampler: WindowWithoutReplacementSampler | None = None,
 ) -> Path:
     root = _checkpoint_root(run_dir, position_encoding, mode)
     directory = root / (label or f"step_{step:06d}")
@@ -164,6 +167,9 @@ def _save_checkpoint(
         "torch_rng_state": torch.get_rng_state(),
         "cuda_rng_state_all": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
         "vocab_fingerprint": vocab.fingerprint,
+        "window_sampler_state": (
+            window_sampler.state_dict() if window_sampler is not None else None
+        ),
     }
     _atomic_torch_save(payload, path)
     latest = root / "latest.json"
@@ -185,12 +191,14 @@ def _sample_training_batch(
     mode: str,
     rng: random.Random,
     fixed_pool: FixedExamplePool | None,
+    window_sampler: WindowWithoutReplacementSampler | None,
 ) -> list:
-    examples = (
-        fixed_pool.sample(rng, cfg.batch_size, vocab)
-        if fixed_pool is not None
-        else [make_example(cfg, vocab, rng) for _ in range(cfg.batch_size)]
-    )
+    if window_sampler is not None:
+        examples = window_sampler.sample(cfg.batch_size)
+    elif fixed_pool is not None:
+        examples = fixed_pool.sample(rng, cfg.batch_size, vocab)
+    else:
+        examples = [make_example(cfg, vocab, rng) for _ in range(cfg.batch_size)]
     return [render(example, vocab, mode) for example in examples]
 
 
@@ -388,6 +396,16 @@ def train_variant(
     # Pair the prompt stream across output modes. Rendering still changes the
     # supervised completion, but each optimization step sees the same haystack.
     rng = random.Random(cfg.seed)
+    window_sampler = (
+        WindowWithoutReplacementSampler(
+            cfg,
+            vocab,
+            split="train",
+            seed=cfg.seed + 31_000,
+        )
+        if cfg.training_data_mode == "split_window_index"
+        else None
+    )
     start_step = 0
     latest = _latest_checkpoint(root) if skip_completed else None
     if latest is not None:
@@ -396,6 +414,14 @@ def train_variant(
         model.load_state_dict(payload["model_state_dict"])
         optimizer.load_state_dict(payload["optimizer_state_dict"])
         _restore_rng_states(payload, rng)
+        if window_sampler is not None:
+            sampler_state = payload.get("window_sampler_state")
+            if sampler_state is None:
+                raise ValueError(
+                    "Cannot resume v16.2 exactly: checkpoint has no window_sampler_state. "
+                    "Use a fresh run name or remove the incomplete local checkpoint."
+                )
+            window_sampler.load_state_dict(sampler_state)
         print(f"[resume] {position_encoding}/{mode} from step {start_step}", flush=True)
 
     train_path = run_dir / "tables" / "train_metrics.csv"
@@ -410,7 +436,14 @@ def train_variant(
     )
     for step in progress:
         model.train()
-        rendered = _sample_training_batch(cfg, vocab, mode, rng, fixed_pool)
+        rendered = _sample_training_batch(
+            cfg,
+            vocab,
+            mode,
+            rng,
+            fixed_pool,
+            window_sampler,
+        )
         ids, labels, attention_mask = collate(rendered, vocab, cfg.device)
         with _autocast_context(cfg):
             output = model(input_ids=ids, attention_mask=attention_mask)
@@ -479,6 +512,7 @@ def train_variant(
                 rng,
                 run_dir,
                 sync_run_dir,
+                window_sampler=window_sampler,
             )
     _save_checkpoint(
         model,
@@ -492,6 +526,7 @@ def train_variant(
         run_dir,
         sync_run_dir,
         label="final",
+        window_sampler=window_sampler,
     )
 
 
@@ -539,6 +574,35 @@ def train_all_models(
     skip_completed: bool,
 ) -> None:
     probabilities = count_sampling_probabilities(cfg)
+    window_summary = pd.DataFrame()
+    if cfg.training_data_mode == "split_window_index":
+        rows: list[dict[str, Any]] = []
+        for split in ("train", "validation", "test"):
+            for (target_token, count), starts in split_target_window_starts(cfg, split).items():
+                rows.append(
+                    {
+                        "split": split,
+                        "target_token": target_token,
+                        "count": int(count),
+                        "candidate_windows": int(len(starts)),
+                        "eligible_for_training": bool(
+                            split == "train" and len(starts) >= cfg.min_candidate_windows
+                        ),
+                    }
+                )
+        window_summary = pd.DataFrame(rows)
+        _atomic_csv(window_summary, run_dir / "tables" / "window_index_summary.csv")
+        eligible = window_summary[window_summary["eligible_for_training"]]
+        totals = eligible.groupby("count")["candidate_windows"].sum()
+        denominator = float(totals.sum())
+        if denominator <= 0:
+            raise ValueError(
+                "v16.2 has no eligible training windows. Lower "
+                "min_candidate_windows, shorten seq_len, or choose more target characters."
+            )
+        probabilities = np.asarray(
+            [float(totals.get(count, 0)) / denominator for count in range(cfg.count_min, cfg.count_max + 1)]
+        )
     distribution = pd.DataFrame(
         {
             "count": np.arange(cfg.count_min, cfg.count_max + 1),
@@ -546,6 +610,11 @@ def train_all_models(
             "count_sampling": cfg.count_sampling,
             "power_alpha": cfg.power_alpha,
             "exponential_beta": cfg.exponential_beta,
+            "sampling_unit": (
+                "eligible (target,count,window_start), without replacement per epoch"
+                if cfg.training_data_mode == "split_window_index"
+                else "streamed example"
+            ),
         }
     )
     distribution["count_bin"] = distribution["count"].map(cfg.count_bin)

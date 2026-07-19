@@ -31,7 +31,10 @@ Importable code follows a standard `src/` layout. Public module names are unchan
 | `synthetic_counting_v14` | v14 APE wrapper: Shakespeare character haystacks |
 | `synthetic_counting_v15` | v15 RoPE/RPE Shakespeare haystacks with inserted needles and prompt + completion all-sequence loss |
 | `synthetic_counting_v16` | v16 RoPE/RPE native Shakespeare target-letter counting |
+| `synthetic_counting_v16_2` | v16.2 split-local Shakespeare window indexing and without-replacement training |
 | `synthetic_counting_v17` | v17 RoPE decreasing long-tail synthetic training distribution |
+| `synthetic_counting_v18` | Four-model length-1024 count-128 comparison with uniform/power sampling and explicit index-marker CoT traces |
+| `synthetic_counting_v19` | v18 comparison with all trace indices and final counts tokenized as shared decimal digits |
 
 Commands such as `python -m synthetic_niah_v4.run_v4` therefore remain valid after
 `pip install -e .`.
@@ -167,6 +170,78 @@ Regenerate these three notebooks with:
 
 ```bash
 python scripts/build_v15_v17_notebooks.py
+```
+
+For v16.2, use `notebooks/Trace_Count_v16_2_Colab.ipynb` or run:
+
+```bash
+python -m synthetic_counting_v16_2.run_v16_2 \
+  --preset main --stage all --device cuda \
+  --min-candidate-windows 128 \
+  --out-root runs/synthetic_counting_v16_2 \
+  --run-name v16_2_main_split_windows_seed1234 \
+  --skip-completed
+```
+
+v16.2 keeps the four v16 models (`RoPE/RPE x non-thinking/thinking`) and the
+native Shakespeare target-character task, but changes the sampling protocol.
+It splits the raw corpus into 80%/10%/10% train/validation/test regions before
+constructing windows, rejects `(target character, exact count)` strata with
+fewer than 128 candidates, and consumes eligible training windows without
+replacement. Counts are not rebalanced: the corpus determines the realized
+training distribution. Checkpoints include sampler cursors and RNG state, so a
+resumed run consumes the exact next windows. See
+`docs/pipelines/pipeline_v16_2_split_window_sampling.md`.
+
+For v18, use `notebooks/Trace_Count_v18_Colab.ipynb` or run a staged suite:
+
+```bash
+python -m synthetic_counting_v18.run_v18 \
+  --preset main --suite power --stage all --device cuda \
+  --out-root runs/synthetic_counting_v18 \
+  --run-name v18_main_power_seed1234 \
+  --skip-completed
+```
+
+v18 uses an independent implementation while retaining the v10-style analysis
+surface. It trains four length-1024 models: uniform versus
+`p(c) proportional to c^-1.5`, crossed with direct versus CoT output. Prompts
+use 256 noise token types, 10 marker types, and counts 1-128. CoT emits explicit
+`I_k, M_type(k)` pairs followed by `END` and a separate final `C_n` token, which
+keeps targeted retrieval and scalar count readout independently measurable.
+The pipeline records learning dynamics by count band, broad/targeted/successor/
+trace-readout attention signatures, count/progress probes, and PC1-PC6 centroid
+geometry. `--suite all` launches four separate 10,000-step trainings. See
+`docs/pipelines/pipeline_v18_reference_reproduction.md`.
+
+Regenerate both notebooks with:
+
+```bash
+python scripts/build_v16_2_v18_notebooks.py
+```
+
+For v19, use `notebooks/Trace_Count_v19_Colab.ipynb` or run:
+
+```bash
+python -m synthetic_counting_v19.run_v19 \
+  --preset main --suite all --stage all --device cuda \
+  --out-root runs/synthetic_counting_v19 \
+  --run-name v19_main_all_seed1234 \
+  --skip-completed
+```
+
+v19 holds the v18 data distributions, model, optimizer, and four-run design
+fixed, but replaces the 128 index tokens and 128 count tokens with ten shared
+decimal digit tokens. Role tokens keep ordinal progress and final count
+semantically distinct: CoT uses `<Index> 1 2 M_k`, while the answer uses
+`<Count> 1 2 <NumEnd>`. This makes multi-digit composition part of the task and
+requires digit-aware generation, parsing, attention anchors, and state probes.
+See `docs/pipelines/pipeline_v19_digit_tokenization.md`.
+
+Regenerate the v19 notebook with:
+
+```bash
+python scripts/build_v19_notebook.py
 ```
 
 To rebuild the v3 notebook after editing its generator:

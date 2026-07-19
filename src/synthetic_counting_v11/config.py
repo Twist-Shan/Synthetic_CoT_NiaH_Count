@@ -7,7 +7,7 @@ from typing import Any
 import torch
 
 
-SUPPORTED_VERSIONS = ("v11", "v12", "v13", "v14", "v15", "v16", "v17")
+SUPPORTED_VERSIONS = ("v11", "v12", "v13", "v14", "v15", "v16", "v16_2", "v17")
 SUPPORTED_POSITION_ENCODINGS = ("ape", "rope", "rpe")
 TARGET_SHAKESPEARE_CHARACTERS = ("S", "H", "A", "K", "E", "R", "s", "h", "a", "k", "e", "r")
 
@@ -31,6 +31,10 @@ class ExperimentConfig:
     power_alpha: float = 1.0
     exponential_beta: float = 0.15
     fixed_train_examples_per_count: int = 512
+    corpus_train_fraction: float = 0.80
+    corpus_validation_fraction: float = 0.10
+    min_candidate_windows: int = 128
+    window_sampling: str = "with_replacement"
     position_encodings: tuple[str, ...] = ("ape", "rope", "rpe")
 
     train_steps: int = 10_000
@@ -137,17 +141,27 @@ class ExperimentConfig:
             raise ValueError("rope_base must be positive")
         if not self.target_characters or any(len(char) != 1 for char in self.target_characters):
             raise ValueError("target_characters must contain one-character strings")
-        if self.training_data_mode not in {"streaming", "fixed"}:
+        if self.training_data_mode not in {"streaming", "fixed", "split_window_index"}:
             raise ValueError(f"Unsupported training data mode: {self.training_data_mode}")
+        if not 0.0 < self.corpus_train_fraction < 1.0:
+            raise ValueError("corpus_train_fraction must be in (0, 1)")
+        if not 0.0 < self.corpus_validation_fraction < 1.0:
+            raise ValueError("corpus_validation_fraction must be in (0, 1)")
+        if self.corpus_train_fraction + self.corpus_validation_fraction >= 1.0:
+            raise ValueError("train + validation corpus fractions must leave a non-empty test split")
+        if self.min_candidate_windows < 1:
+            raise ValueError("min_candidate_windows must be positive")
+        if self.window_sampling not in {"with_replacement", "without_replacement"}:
+            raise ValueError(f"Unsupported window_sampling: {self.window_sampling}")
         if self.version == "v11" and set(self.position_encodings) != set(SUPPORTED_POSITION_ENCODINGS):
             raise ValueError("v11 must compare APE, RoPE, and RPE")
         if self.version in {"v12", "v13", "v14"} and self.position_encodings != ("ape",):
             raise ValueError(f"{self.version} must use APE only")
-        if self.version in {"v15", "v16"} and self.position_encodings != ("rope", "rpe"):
+        if self.version in {"v15", "v16", "v16_2"} and self.position_encodings != ("rope", "rpe"):
             raise ValueError(f"{self.version} must compare RoPE and RPE")
         if self.version == "v17" and self.position_encodings != ("rope",):
             raise ValueError("v17 must use RoPE only")
-        if self.version in {"v15", "v16"} and self.loss_scope != "all_sequence":
+        if self.version in {"v15", "v16", "v16_2"} and self.loss_scope != "all_sequence":
             raise ValueError(f"{self.version} must use all-sequence autoregressive loss")
         if self.version == "v17" and self.loss_scope != "completion":
             raise ValueError("v17 must use the v10 completion-only autoregressive loss")
@@ -159,6 +173,13 @@ class ExperimentConfig:
             self.noise_source != "shakespeare_char" or self.task_type != "target_character"
         ):
             raise ValueError("v16 counts native target-character occurrences in Shakespeare")
+        if self.version == "v16_2":
+            if self.noise_source != "shakespeare_char" or self.task_type != "target_character":
+                raise ValueError("v16.2 counts native target-character occurrences in Shakespeare")
+            if self.training_data_mode != "split_window_index":
+                raise ValueError("v16.2 requires split-before-index window data")
+            if self.window_sampling != "without_replacement":
+                raise ValueError("v16.2 requires without-replacement window sampling")
         if self.version == "v17" and self.count_sampling not in {"power", "exponential"}:
             raise ValueError("v17 requires a decreasing power or exponential count sampler")
 
@@ -174,7 +195,8 @@ class ExperimentConfig:
             "tied token embedding/unembedding"
         )
         result["architecture_note"] = (
-            "v11-v14 are controlled hidden size 64 (d_model=64) experiments; v15-v17 restore the "
+            "v11-v14 are controlled hidden size 64 (d_model=64) experiments; v15-v17, including "
+            "v16.2, restore the "
             "v10 d_model=256 and MLP=1024 capacity while keeping 4 layers and 4 heads"
         )
         result["rpe_definition"] = "learned per-layer, per-head causal relative-distance attention bias"
@@ -258,6 +280,20 @@ def _main_config(version: str) -> ExperimentConfig:
             n_embd=256,
             n_inner=1024,
         )
+    if version == "v16_2":
+        return ExperimentConfig(
+            version="v16_2",
+            preset="main",
+            noise_source="shakespeare_char",
+            task_type="target_character",
+            training_data_mode="split_window_index",
+            window_sampling="without_replacement",
+            min_candidate_windows=128,
+            loss_scope="all_sequence",
+            position_encodings=("rope", "rpe"),
+            n_embd=256,
+            n_inner=1024,
+        )
     if version == "v17":
         return ExperimentConfig(
             version="v17",
@@ -302,6 +338,7 @@ def preset_config(version: str, preset: str, **overrides: Any) -> ExperimentConf
             state_eval_examples_per_count=1,
             fixed_train_examples_per_count=4,
             analysis_batch_size=8,
+            min_candidate_windows=2 if version == "v16_2" else cfg.min_candidate_windows,
         )
     elif preset != "main":
         raise ValueError(f"Unknown preset: {preset}")
@@ -344,7 +381,11 @@ def config_from_dict(values: dict[str, Any]) -> ExperimentConfig:
 
 def default_run_name(cfg: ExperimentConfig) -> str:
     positions = "-".join(cfg.position_encodings)
-    data_tag = "fixed" if cfg.training_data_mode == "fixed" else cfg.noise_source
+    data_tag = (
+        cfg.training_data_mode
+        if cfg.training_data_mode in {"fixed", "split_window_index"}
+        else cfg.noise_source
+    )
     return (
         f"{cfg.version}_{cfg.preset}_L{cfg.seq_len}_count{cfg.count_min}-{cfg.count_max}_"
         f"4L4H_d{cfg.n_embd}_{positions}_{data_tag}_{cfg.loss_scope}_{cfg.count_sampling}_seed{cfg.seed}"

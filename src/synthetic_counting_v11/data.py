@@ -78,6 +78,27 @@ def shakespeare_vocab_tokens() -> tuple[str, ...]:
     return tuple(sorted(set(shakespeare_char_tokens())))
 
 
+def corpus_split_bounds(cfg: ExperimentConfig) -> dict[str, tuple[int, int]]:
+    """Split the corpus before any sliding-window index is constructed."""
+
+    size = len(shakespeare_char_tokens())
+    train_end = int(size * cfg.corpus_train_fraction)
+    validation_end = train_end + int(size * cfg.corpus_validation_fraction)
+    return {
+        "train": (0, train_end),
+        "validation": (train_end, validation_end),
+        "test": (validation_end, size),
+    }
+
+
+def corpus_split_tokens(cfg: ExperimentConfig, split: str) -> tuple[str, ...]:
+    bounds = corpus_split_bounds(cfg)
+    if split not in bounds:
+        raise ValueError(f"Unknown corpus split {split!r}; expected one of {tuple(bounds)}")
+    start, end = bounds[split]
+    return shakespeare_char_tokens()[start:end]
+
+
 @dataclass(frozen=True)
 class Vocab:
     token_to_id: dict[str, int]
@@ -294,6 +315,239 @@ def _target_window_starts(
     return result
 
 
+@lru_cache(maxsize=32)
+def _split_target_window_starts(
+    seq_len: int,
+    count_max: int,
+    target_tokens: tuple[str, ...],
+    train_fraction: float,
+    validation_fraction: float,
+    split: str,
+) -> dict[tuple[str, int], np.ndarray]:
+    """Index windows after the raw corpus has been partitioned."""
+
+    size = len(shakespeare_char_tokens())
+    train_end = int(size * train_fraction)
+    validation_end = train_end + int(size * validation_fraction)
+    bounds = {
+        "train": (0, train_end),
+        "validation": (train_end, validation_end),
+        "test": (validation_end, size),
+    }
+    if split not in bounds:
+        raise ValueError(f"Unknown corpus split {split!r}")
+    lo, hi = bounds[split]
+    source = np.asarray(shakespeare_char_tokens()[lo:hi], dtype=object)
+    if len(source) < seq_len:
+        raise ValueError(f"Corpus split {split!r} is shorter than seq_len={seq_len}")
+    result: dict[tuple[str, int], np.ndarray] = {}
+    for target in target_tokens:
+        matches = (source == target).astype(np.int32)
+        prefix = np.concatenate((np.zeros(1, dtype=np.int64), np.cumsum(matches)))
+        window_counts = prefix[seq_len:] - prefix[:-seq_len]
+        for count in range(1, int(count_max) + 1):
+            result[(target, count)] = np.flatnonzero(window_counts == count)
+    return result
+
+
+def split_target_window_starts(
+    cfg: ExperimentConfig,
+    split: str,
+) -> dict[tuple[str, int], np.ndarray]:
+    target_tokens = tuple(_char_token(character) for character in cfg.target_characters)
+    return _split_target_window_starts(
+        cfg.seq_len,
+        cfg.count_max,
+        target_tokens,
+        cfg.corpus_train_fraction,
+        cfg.corpus_validation_fraction,
+        split,
+    )
+
+
+class WindowWithoutReplacementSampler:
+    """Uniformly sample eligible indexed windows once per sampler epoch.
+
+    Strata are not balanced. Selecting in proportion to the number of remaining
+    windows makes every eligible `(target, count, start)` window equally likely.
+    """
+
+    def __init__(
+        self,
+        cfg: ExperimentConfig,
+        vocab: Vocab,
+        *,
+        split: str,
+        seed: int,
+        minimum_candidates: int | None = None,
+    ) -> None:
+        if cfg.task_type != "target_character":
+            raise ValueError("window sampler is only defined for target-character counting")
+        self.cfg = cfg
+        self.vocab = vocab
+        self.split = split
+        self.seed = int(seed)
+        self.minimum_candidates = int(
+            cfg.min_candidate_windows if minimum_candidates is None else minimum_candidates
+        )
+        self.index = split_target_window_starts(cfg, split)
+        self.token_to_character = {
+            _char_token(character): character for character in cfg.target_characters
+        }
+        self.strata = tuple(
+            sorted(
+                key
+                for key, starts in self.index.items()
+                if len(starts) >= self.minimum_candidates
+            )
+        )
+        if not self.strata:
+            raise ValueError(
+                f"No {split} (target,count) stratum has at least "
+                f"{self.minimum_candidates} candidate windows"
+            )
+        self.epoch = 0
+        self.cursors = {key: 0 for key in self.strata}
+        self.selection_rng = random.Random(self.seed)
+        self._orders: dict[tuple[str, int], np.ndarray] = {}
+        self._make_orders()
+
+    @property
+    def epoch_size(self) -> int:
+        return int(sum(len(self.index[key]) for key in self.strata))
+
+    def _order_seed(self, key: tuple[str, int]) -> int:
+        token, count = key
+        digest = hashlib.sha256(
+            f"{self.seed}|{self.split}|{self.epoch}|{token}|{count}".encode("utf-8")
+        ).digest()
+        return int.from_bytes(digest[:8], "little", signed=False)
+
+    def _make_orders(self) -> None:
+        self._orders = {}
+        for key in self.strata:
+            order = np.arange(len(self.index[key]), dtype=np.int64)
+            np.random.default_rng(self._order_seed(key)).shuffle(order)
+            self._orders[key] = order
+
+    def _start_next_epoch(self) -> None:
+        self.epoch += 1
+        self.cursors = {key: 0 for key in self.strata}
+        self._make_orders()
+
+    def state_dict(self) -> dict[str, object]:
+        return {
+            "split": self.split,
+            "seed": self.seed,
+            "minimum_candidates": self.minimum_candidates,
+            "epoch": self.epoch,
+            "cursors": {f"{token}\t{count}": value for (token, count), value in self.cursors.items()},
+            "selection_rng_state": self.selection_rng.getstate(),
+        }
+
+    def load_state_dict(self, state: dict[str, object]) -> None:
+        if state.get("split") != self.split or int(state.get("seed", -1)) != self.seed:
+            raise ValueError("window sampler state does not match split/seed")
+        if int(state.get("minimum_candidates", -1)) != self.minimum_candidates:
+            raise ValueError("window sampler state uses a different candidate threshold")
+        self.epoch = int(state["epoch"])
+        raw_cursors = dict(state["cursors"])
+        restored = {}
+        for key in self.strata:
+            restored[key] = int(raw_cursors.get(f"{key[0]}\t{key[1]}", 0))
+        self.cursors = restored
+        self.selection_rng.setstate(state["selection_rng_state"])
+        self._make_orders()
+
+    def _remaining(self, key: tuple[str, int]) -> int:
+        return len(self._orders[key]) - self.cursors[key]
+
+    def sample_example(self) -> Example:
+        remaining = [(key, self._remaining(key)) for key in self.strata if self._remaining(key)]
+        if not remaining:
+            self._start_next_epoch()
+            remaining = [(key, self._remaining(key)) for key in self.strata]
+        draw = self.selection_rng.randrange(sum(value for _, value in remaining))
+        chosen = remaining[-1][0]
+        cumulative = 0
+        for key, value in remaining:
+            cumulative += value
+            if draw < cumulative:
+                chosen = key
+                break
+        cursor = self.cursors[chosen]
+        local_start = int(self.index[chosen][self._orders[chosen][cursor]])
+        self.cursors[chosen] = cursor + 1
+        target_token, count = chosen
+        split_tokens = corpus_split_tokens(self.cfg, self.split)
+        sequence = list(split_tokens[local_start : local_start + self.cfg.seq_len])
+        positions = [idx for idx, token in enumerate(sequence) if token == target_token]
+        split_start = corpus_split_bounds(self.cfg)[self.split][0]
+        return Example(
+            sequence,
+            int(count),
+            positions,
+            [target_token] * len(positions),
+            split_start + local_start,
+            target_token,
+            self.token_to_character[target_token],
+        )
+
+    def sample(self, batch_size: int) -> list[Example]:
+        return [self.sample_example() for _ in range(int(batch_size))]
+
+
+def split_window_examples(
+    cfg: ExperimentConfig,
+    vocab: Vocab,
+    examples_per_count: int,
+    seed: int,
+    *,
+    split: str,
+    count_min: int | None = None,
+    count_max: int | None = None,
+) -> list[Example]:
+    """Balanced evaluation drawn without replacement from a held-out split."""
+
+    index = split_target_window_starts(cfg, split)
+    tokens = corpus_split_tokens(cfg, split)
+    split_start = corpus_split_bounds(cfg)[split][0]
+    token_to_character = {_char_token(char): char for char in cfg.target_characters}
+    rng = random.Random(seed)
+    result: list[Example] = []
+    lo = cfg.count_min if count_min is None else int(count_min)
+    hi = cfg.count_max if count_max is None else int(count_max)
+    for count in range(lo, hi + 1):
+        candidates = [
+            (target, int(start))
+            for (target, indexed_count), starts in index.items()
+            if indexed_count == count
+            for start in starts
+        ]
+        if len(candidates) < examples_per_count:
+            raise ValueError(
+                f"Held-out split {split!r} has {len(candidates)} windows for count={count}, "
+                f"but {examples_per_count} were requested"
+            )
+        rng.shuffle(candidates)
+        for target_token, local_start in candidates[:examples_per_count]:
+            sequence = list(tokens[local_start : local_start + cfg.seq_len])
+            positions = [idx for idx, token in enumerate(sequence) if token == target_token]
+            result.append(
+                Example(
+                    sequence,
+                    count,
+                    positions,
+                    [target_token] * count,
+                    split_start + local_start,
+                    target_token,
+                    token_to_character[target_token],
+                )
+            )
+    rng.shuffle(result)
+    return result
+
+
 def _target_character_example(
     cfg: ExperimentConfig,
     rng: random.Random,
@@ -359,6 +613,16 @@ def balanced_examples(
 ) -> list[Example]:
     lo = cfg.count_min if count_min is None else int(count_min)
     hi = cfg.count_max if count_max is None else int(count_max)
+    if cfg.training_data_mode == "split_window_index":
+        return split_window_examples(
+            cfg,
+            vocab,
+            examples_per_count,
+            seed,
+            split="validation",
+            count_min=lo,
+            count_max=hi,
+        )
     rng = random.Random(seed)
     result: list[Example] = []
     for count in range(lo, hi + 1):

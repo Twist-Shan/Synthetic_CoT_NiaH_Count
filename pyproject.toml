@@ -9,12 +9,14 @@ dependencies = [
     "matplotlib>=3.8",
     "numpy>=1.26,<2.0",
     "pandas>=2.1",
+    "plotly>=5.20",
     "pyyaml>=6.0",
     "scikit-learn>=1.4",
     "seaborn>=0.13",
     "torch>=2.2",
     "tqdm>=4.66",
     "transformers>=4.41",
+    "ipywidgets>=8.1",
 ]
 
 [build-system]
@@ -36,7 +38,10 @@ packages = [
     "src/synthetic_counting_v14",
     "src/synthetic_counting_v15",
     "src/synthetic_counting_v16",
+    "src/synthetic_counting_v16_2",
     "src/synthetic_counting_v17",
+    "src/synthetic_counting_v18",
+    "src/synthetic_counting_v19",
 ]
 
 [dependency-groups]

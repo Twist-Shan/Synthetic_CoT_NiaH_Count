@@ -21,6 +21,15 @@ def build_parser(version: str) -> argparse.ArgumentParser:
     )
     parser.add_argument("--power-alpha", type=float, default=None)
     parser.add_argument("--exponential-beta", type=float, default=None)
+    parser.add_argument(
+        "--min-candidate-windows",
+        type=int,
+        default=None,
+        help=(
+            "v16.2 minimum number of split-local windows required for a "
+            "(target character, count) stratum to enter training"
+        ),
+    )
     parser.add_argument("--out-root", default=f"runs/synthetic_counting_{version}")
     parser.add_argument("--run-name", default=None)
     parser.add_argument("--checkpoint-sync-root", default=None)
@@ -41,6 +50,7 @@ def main(version: str, argv: list[str] | None = None) -> None:
             "count_sampling": args.count_sampling,
             "power_alpha": args.power_alpha,
             "exponential_beta": args.exponential_beta,
+            "min_candidate_windows": args.min_candidate_windows,
         }.items()
         if value is not None
     }
