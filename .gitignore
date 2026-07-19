@@ -1,23 +1,43 @@
-.venv/
-.uv-cache/
+# Python environments, build products, and caches
+/.venv/
+/.uv-cache/
 __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Notebook and editor state
 .ipynb_checkpoints/
-artifacts/
+.idea/
+.vscode/
 
-data/
-runs/
-results/
-outputs/
-checkpoints/
-logs/
-wandb/
-paper_figs/
-tmp_extension_*/
+# Generated datasets, experiment runs, and reports
+/artifacts/
+/colab_results/
+/data/
+/runs/
+/results/
+/output/
+/outputs/
+/checkpoints/
+/logs/
+/wandb/
+/paper_figs/
 
+# Local scratch files and directories
+/tmp_*
+/tmp-*
+/temp_*
+/temp-*
+*.log
+
+# Model checkpoints and serialized arrays
 *.pt
 *.pth
 *.ckpt
@@ -27,7 +47,8 @@ tmp_extension_*/
 *.npy
 *.pkl
 
+# Local secrets and operating-system metadata
 .env
 .env.*
 .DS_Store
-/colab_results/
+Thumbs.db
