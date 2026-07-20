@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+import synthetic_counting_v11.data as legacy_data
 from synthetic_counting_v11.config import preset_config as legacy_preset_config
 from synthetic_counting_v11.data import (
     Vocab,
@@ -82,6 +83,26 @@ def test_v16_2_sampler_has_no_repeat_before_epoch_end_and_resumes_exactly():
 
     train_lo, train_hi = corpus_split_bounds(cfg)["train"]
     assert all(train_lo <= example.seed and example.seed + cfg.seq_len <= train_hi for example in examples)
+
+
+def test_v16_2_sampler_materializes_corpus_split_only_once(monkeypatch):
+    cfg = legacy_preset_config("v16_2", "debug", device="cpu")
+    vocab = Vocab.build(cfg)
+    original = legacy_data.corpus_split_tokens
+    calls = 0
+
+    def counted_corpus_split_tokens(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(legacy_data, "corpus_split_tokens", counted_corpus_split_tokens)
+    sampler = WindowWithoutReplacementSampler(cfg, vocab, split="train", seed=73)
+    assert calls == 1
+
+    examples = sampler.sample(32)
+    assert len(examples) == 32
+    assert calls == 1
 
 
 def test_v16_2_sampling_is_natural_not_forced_uniform():

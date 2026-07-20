@@ -386,6 +386,12 @@ class WindowWithoutReplacementSampler:
         self.cfg = cfg
         self.vocab = vocab
         self.split = split
+        # Materialize the immutable corpus split once per sampler.  Slicing the
+        # full Shakespeare token tuple creates a new tuple, so doing this in
+        # sample_example() would copy roughly the entire training split for
+        # every example in every batch.
+        self.split_tokens = corpus_split_tokens(cfg, split)
+        self.split_start = corpus_split_bounds(cfg)[split][0]
         self.seed = int(seed)
         self.minimum_candidates = int(
             cfg.min_candidate_windows if minimum_candidates is None else minimum_candidates
@@ -479,16 +485,14 @@ class WindowWithoutReplacementSampler:
         local_start = int(self.index[chosen][self._orders[chosen][cursor]])
         self.cursors[chosen] = cursor + 1
         target_token, count = chosen
-        split_tokens = corpus_split_tokens(self.cfg, self.split)
-        sequence = list(split_tokens[local_start : local_start + self.cfg.seq_len])
+        sequence = list(self.split_tokens[local_start : local_start + self.cfg.seq_len])
         positions = [idx for idx, token in enumerate(sequence) if token == target_token]
-        split_start = corpus_split_bounds(self.cfg)[self.split][0]
         return Example(
             sequence,
             int(count),
             positions,
             [target_token] * len(positions),
-            split_start + local_start,
+            self.split_start + local_start,
             target_token,
             self.token_to_character[target_token],
         )
