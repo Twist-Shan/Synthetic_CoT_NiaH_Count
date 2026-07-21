@@ -31,7 +31,9 @@ Importable code follows a standard `src/` layout. Public module names are unchan
 | `synthetic_counting_v14` | v14 APE wrapper: Shakespeare character haystacks |
 | `synthetic_counting_v15` | v15 RoPE/RPE Shakespeare haystacks with inserted needles and prompt + completion all-sequence loss |
 | `synthetic_counting_v16` | v16 RoPE/RPE native Shakespeare target-letter counting |
-| `synthetic_counting_v16_2` | v16.2 split-local Shakespeare window indexing and without-replacement training |
+| `synthetic_counting_v16_1` | v16.1 split-local Shakespeare window indexing and without-replacement training |
+| `synthetic_counting_v16_2` | v16.2 three-character-set Shakespeare counting with staged objectives and checkpoint dynamics |
+| `synthetic_counting_v16_3` | Controlled v16.2 replication with data-first/query-last task sequences in both output modes |
 | `synthetic_counting_v17` | v17 RoPE decreasing long-tail synthetic training distribution |
 | `synthetic_counting_v18` | Four-model length-1024 count-128 comparison with uniform/power sampling and explicit index-marker CoT traces |
 | `synthetic_counting_v19` | v18 comparison with all trace indices and final counts tokenized as shared decimal digits |
@@ -172,18 +174,18 @@ Regenerate these three notebooks with:
 python scripts/build_v15_v17_notebooks.py
 ```
 
-For v16.2, use `notebooks/Trace_Count_v16_2_Colab.ipynb` or run:
+For v16.1, use `notebooks/Trace_Count_v16_1_Colab.ipynb` or run:
 
 ```bash
-python -m synthetic_counting_v16_2.run_v16_2 \
+python -m synthetic_counting_v16_1.run_v16_1 \
   --preset main --stage all --device cuda \
   --min-candidate-windows 128 \
-  --out-root runs/synthetic_counting_v16_2 \
-  --run-name v16_2_main_split_windows_seed1234 \
+  --out-root runs/synthetic_counting_v16_1 \
+  --run-name v16_1_main_split_windows_seed1234 \
   --skip-completed
 ```
 
-v16.2 keeps the four v16 models (`RoPE/RPE x non-thinking/thinking`) and the
+v16.1 keeps the four v16 models (`RoPE/RPE x non-thinking/thinking`) and the
 native Shakespeare target-character task, but changes the sampling protocol.
 It splits the raw corpus into 80%/10%/10% train/validation/test regions before
 constructing windows, rejects `(target character, exact count)` strata with
@@ -191,7 +193,58 @@ fewer than 128 candidates, and consumes eligible training windows without
 replacement. Counts are not rebalanced: the corpus determines the realized
 training distribution. Checkpoints include sampler cursors and RNG state, so a
 resumed run consumes the exact next windows. See
-`docs/pipelines/pipeline_v16_2_split_window_sampling.md`.
+`docs/pipelines/pipeline_v16_1_split_window_sampling.md`.
+
+For v16.2, use `notebooks/Trace_Count_v16_2_Colab.ipynb` or run:
+
+```bash
+python -m synthetic_counting_v16_2.run_v16_2 \
+  --preset main --stage all --device cuda \
+  --out-root runs/synthetic_counting_v16_2 \
+  --skip-completed
+```
+
+v16.2 is an independent successor to v16. Each task specifies a set of three
+native Shakespeare characters and asks for their combined count in an untouched
+contiguous corpus window. The reproducibility default matches
+`niah_synthetic_071926.html`: every training example is a counting task, the two
+independent models are `rope/nonthinking` and `rope/thinking`, the first 1,500
+steps use all-sequence language modeling, and steps 1,501–10,000 use
+task-output-only supervision. RPE models and raw/task mixtures remain available
+as explicit ablations. Timing logs, fixed evaluation suites, and
+checkpoint-by-checkpoint learning-dynamics analyses are included. See
+`docs/pipelines/pipeline_v16_2_character_sets.md`.
+
+Regenerate its notebook or analyze an existing run with:
+
+```bash
+python scripts/build_v16_2_notebook.py
+python scripts/analyze_v16_2_checkpoint_dynamics.py RUN_DIR --device cuda
+```
+
+For v16.3, use `notebooks/Trace_Count_v16_3_Colab.ipynb` or run:
+
+```bash
+python -m synthetic_counting_v16_3.run_v16_3 \
+  --preset main --stage all --device cuda \
+  --out-root runs/synthetic_counting_v16_3 \
+  --skip-completed
+```
+
+v16.3 copies the v16.2 data, model, training, evaluation, checkpoint-dynamics,
+representation, and causal-analysis pipeline while changing one controlled factor.
+Both nonthinking and thinking sequences now render the complete Shakespeare data
+window first and the `<CountChar> q1 q2 q3 <Sep>` query second. Configs and run names
+record `sequence_layout=data_then_query`, so v16.2 query-first checkpoints cannot be
+silently reused. The Colab notebook mounts Drive, mirrors live checkpoints for exact
+resume, saves a complete timestamped result bundle, flushes/unmounts Drive, and can
+automatically disconnect the runtime. See
+`docs/pipelines/pipeline_v16_3_data_then_query.md`.
+
+```bash
+python scripts/build_v16_3_notebook.py
+python scripts/analyze_v16_3_checkpoint_dynamics.py RUN_DIR --device cuda
+```
 
 For v18, use `notebooks/Trace_Count_v18_Colab.ipynb` or run a staged suite:
 
@@ -217,7 +270,7 @@ geometry. `--suite all` launches four separate 10,000-step trainings. See
 Regenerate both notebooks with:
 
 ```bash
-python scripts/build_v16_2_v18_notebooks.py
+python scripts/build_v16_1_v18_notebooks.py
 ```
 
 For v19, use `notebooks/Trace_Count_v19_Colab.ipynb` or run:

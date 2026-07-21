@@ -7,7 +7,7 @@ from typing import Any
 import torch
 
 
-SUPPORTED_VERSIONS = ("v11", "v12", "v13", "v14", "v15", "v16", "v16_2", "v17")
+SUPPORTED_VERSIONS = ("v11", "v12", "v13", "v14", "v15", "v16", "v16_1", "v17")
 SUPPORTED_POSITION_ENCODINGS = ("ape", "rope", "rpe")
 TARGET_SHAKESPEARE_CHARACTERS = ("S", "H", "A", "K", "E", "R", "s", "h", "a", "k", "e", "r")
 
@@ -157,11 +157,11 @@ class ExperimentConfig:
             raise ValueError("v11 must compare APE, RoPE, and RPE")
         if self.version in {"v12", "v13", "v14"} and self.position_encodings != ("ape",):
             raise ValueError(f"{self.version} must use APE only")
-        if self.version in {"v15", "v16", "v16_2"} and self.position_encodings != ("rope", "rpe"):
+        if self.version in {"v15", "v16", "v16_1"} and self.position_encodings != ("rope", "rpe"):
             raise ValueError(f"{self.version} must compare RoPE and RPE")
         if self.version == "v17" and self.position_encodings != ("rope",):
             raise ValueError("v17 must use RoPE only")
-        if self.version in {"v15", "v16", "v16_2"} and self.loss_scope != "all_sequence":
+        if self.version in {"v15", "v16", "v16_1"} and self.loss_scope != "all_sequence":
             raise ValueError(f"{self.version} must use all-sequence autoregressive loss")
         if self.version == "v17" and self.loss_scope != "completion":
             raise ValueError("v17 must use the v10 completion-only autoregressive loss")
@@ -173,13 +173,13 @@ class ExperimentConfig:
             self.noise_source != "shakespeare_char" or self.task_type != "target_character"
         ):
             raise ValueError("v16 counts native target-character occurrences in Shakespeare")
-        if self.version == "v16_2":
+        if self.version == "v16_1":
             if self.noise_source != "shakespeare_char" or self.task_type != "target_character":
-                raise ValueError("v16.2 counts native target-character occurrences in Shakespeare")
+                raise ValueError("v16.1 counts native target-character occurrences in Shakespeare")
             if self.training_data_mode != "split_window_index":
-                raise ValueError("v16.2 requires split-before-index window data")
+                raise ValueError("v16.1 requires split-before-index window data")
             if self.window_sampling != "without_replacement":
-                raise ValueError("v16.2 requires without-replacement window sampling")
+                raise ValueError("v16.1 requires without-replacement window sampling")
         if self.version == "v17" and self.count_sampling not in {"power", "exponential"}:
             raise ValueError("v17 requires a decreasing power or exponential count sampler")
 
@@ -196,7 +196,7 @@ class ExperimentConfig:
         )
         result["architecture_note"] = (
             "v11-v14 are controlled hidden size 64 (d_model=64) experiments; v15-v17, including "
-            "v16.2, restore the "
+            "v16.1, restore the "
             "v10 d_model=256 and MLP=1024 capacity while keeping 4 layers and 4 heads"
         )
         result["rpe_definition"] = "learned per-layer, per-head causal relative-distance attention bias"
@@ -230,6 +230,14 @@ class ExperimentConfig:
                 "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
             )
         return result
+
+
+def same_experiment_except_version(
+    existing: dict[str, object],
+    requested: dict[str, object],
+) -> bool:
+    experimental_fields = set(ExperimentConfig.__dataclass_fields__) - {"version"}
+    return all(existing.get(field) == requested.get(field) for field in experimental_fields)
 
 
 def _main_config(version: str) -> ExperimentConfig:
@@ -280,9 +288,9 @@ def _main_config(version: str) -> ExperimentConfig:
             n_embd=256,
             n_inner=1024,
         )
-    if version == "v16_2":
+    if version == "v16_1":
         return ExperimentConfig(
-            version="v16_2",
+            version="v16_1",
             preset="main",
             noise_source="shakespeare_char",
             task_type="target_character",
@@ -338,7 +346,7 @@ def preset_config(version: str, preset: str, **overrides: Any) -> ExperimentConf
             state_eval_examples_per_count=1,
             fixed_train_examples_per_count=4,
             analysis_batch_size=8,
-            min_candidate_windows=2 if version == "v16_2" else cfg.min_candidate_windows,
+            min_candidate_windows=2 if version == "v16_1" else cfg.min_candidate_windows,
         )
     elif preset != "main":
         raise ValueError(f"Unknown preset: {preset}")

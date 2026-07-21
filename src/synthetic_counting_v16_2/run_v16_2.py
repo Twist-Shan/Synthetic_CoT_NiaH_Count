@@ -1,5 +1,5 @@
-from synthetic_counting_v11.cli import main
+from .cli import main
 
 
 if __name__ == "__main__":
-    main("v16_2")
+    main()

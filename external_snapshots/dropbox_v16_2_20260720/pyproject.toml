@@ -1,0 +1,56 @@
+[project]
+name = "trace-counting"
+version = "0.1.0"
+description = "Synthetic trace-enumeration counting experiments with probes, attention analysis, and Colab notebooks."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "accelerate>=0.30",
+    "matplotlib>=3.8",
+    "numpy>=1.26,<3.0",
+    "pandas>=2.1",
+    "pyyaml>=6.0",
+    "scikit-learn>=1.4",
+    "seaborn>=0.13",
+    "torch>=2.2",
+    "tqdm>=4.66",
+    "transformers>=4.41",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "src/trace_counting",
+    "src/synthetic_niah_v3",
+    "src/synthetic_niah_v4",
+    "src/synthetic_niah_v5",
+    "src/synthetic_counting_v6",
+    "src/synthetic_counting_extensions",
+    "src/synthetic_counting_v10",
+    "src/synthetic_counting_v11",
+    "src/synthetic_counting_v12",
+    "src/synthetic_counting_v13",
+    "src/synthetic_counting_v14",
+    "src/synthetic_counting_v15",
+    "src/synthetic_counting_v16",
+    "src/synthetic_counting_v16_2",
+    "src/synthetic_counting_v17",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [
+    "artifacts",
+    "colab_results",
+    "data",
+    "runs",
+]

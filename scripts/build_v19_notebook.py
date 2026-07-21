@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from build_v16_2_v18_notebooks import NOTEBOOK_DIR, ROOT, build_v19
+from build_v16_1_v18_notebooks import NOTEBOOK_DIR, ROOT, build_v19
 
 
 def main() -> None:

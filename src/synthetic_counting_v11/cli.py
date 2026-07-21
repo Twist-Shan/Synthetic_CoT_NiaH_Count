@@ -26,7 +26,7 @@ def build_parser(version: str) -> argparse.ArgumentParser:
         type=int,
         default=None,
         help=(
-            "v16.2 minimum number of split-local windows required for a "
+            "v16.1 minimum number of split-local windows required for a "
             "(target character, count) stratum to enter training"
         ),
     )

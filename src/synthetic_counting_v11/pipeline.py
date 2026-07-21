@@ -9,7 +9,7 @@ from typing import Iterable
 import pandas as pd
 
 from .analysis import run_attention_analysis, run_state_analysis
-from .config import ExperimentConfig, prepare_run_dir
+from .config import ExperimentConfig, prepare_run_dir, same_experiment_except_version
 from .data import Vocab
 from .plots import make_all_plots
 from .training import sync_tree, train_all_models
@@ -47,6 +47,9 @@ def _update_manifest(run_dir: Path, cfg: ExperimentConfig, stage: str, status: s
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "stages": {},
     }
+    manifest["version"] = cfg.version
+    manifest["preset"] = cfg.preset
+    manifest["seed"] = cfg.seed
     manifest["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
     manifest["stages"][stage] = {
         "status": status,
@@ -98,15 +101,19 @@ def run_pipeline(
         sync_tree(sync_run_dir, run_dir)
 
     config_path = run_dir / "config.json"
+    requested_config = cfg.to_dict()
     if config_path.exists():
         existing = json.loads(config_path.read_text(encoding="utf-8"))
-        if existing != cfg.to_dict():
+        if existing != requested_config and same_experiment_except_version(existing, requested_config):
+            print(f"[migrate] run metadata version -> {cfg.version}", flush=True)
+            _write_json(requested_config, config_path)
+        elif existing != requested_config:
             raise ValueError(
                 f"Run directory {run_dir} contains a different config. "
                 "Use a new --run-name instead of mixing experiments."
             )
     else:
-        _write_json(cfg.to_dict(), config_path)
+        _write_json(requested_config, config_path)
     vocab = Vocab.build(cfg)
     vocab_path = run_dir / "vocab.json"
     if vocab_path.exists():

@@ -1,6 +1,5 @@
-"""v16.2: split-first, indexed Shakespeare window counting."""
+"""Three-character-set Tiny Shakespeare counting experiments (v16_2)."""
 
-from synthetic_counting_v11.config import ExperimentConfig, preset_config
-from synthetic_counting_v11.pipeline import run_pipeline
+from .config import V16_2Config, config_from_dict, preset_config
 
-__all__ = ["ExperimentConfig", "preset_config", "run_pipeline"]
+__all__ = ["V16_2Config", "config_from_dict", "preset_config"]

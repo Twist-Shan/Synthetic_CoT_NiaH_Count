@@ -418,7 +418,7 @@ def train_variant(
             sampler_state = payload.get("window_sampler_state")
             if sampler_state is None:
                 raise ValueError(
-                    "Cannot resume v16.2 exactly: checkpoint has no window_sampler_state. "
+                    "Cannot resume v16.1 exactly: checkpoint has no window_sampler_state. "
                     "Use a fresh run name or remove the incomplete local checkpoint."
                 )
             window_sampler.load_state_dict(sampler_state)
@@ -597,7 +597,7 @@ def train_all_models(
         denominator = float(totals.sum())
         if denominator <= 0:
             raise ValueError(
-                "v16.2 has no eligible training windows. Lower "
+                "v16.1 has no eligible training windows. Lower "
                 "min_candidate_windows, shorten seq_len, or choose more target characters."
             )
         probabilities = np.asarray(
