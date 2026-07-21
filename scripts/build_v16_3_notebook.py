@@ -46,106 +46,22 @@ def build() -> Path:
         markdown("## 1. Mount Google Drive first", "drive-heading"),
         code(
             """
-            import os
             from pathlib import Path
 
-            # Set this only when you want to force one exact Drive location. With None,
-            # the notebook checks the common locations below and then performs a bounded
-            # search under MyDrive. This avoids depending on a renamed repository folder.
-            DRIVE_REPO_ROOT_OVERRIDE = None
-            DRIVE_REPO_HINTS = (
-                Path(
-                    "/content/drive/MyDrive/Colab_Notebooks/CoT_Counting/"
-                    "Synthetic_CoT_NiaH_Count"
-                ),
-                Path(
-                    "/content/drive/MyDrive/Colab Notebooks/NIAH_synthetic/"
-                    "Synthetic_CoT_NiaH_Count"
-                ),
-                Path(
-                    "/content/drive/MyDrive/Colab Notebooks/NIAH_synthetic/"
-                    "Synthetic_CoT_NiaH_Count-main"
-                ),
-                Path("/content/drive/MyDrive/Synthetic_CoT_NiaH_Count"),
+            # Match v16/v16.1: Drive stores checkpoints and result bundles only.
+            # Source code is cloned to the fast Colab-local filesystem in the next cell.
+            DRIVE_RESULTS_ROOT = Path(
+                "/content/drive/MyDrive/Colab_Notebooks/CoT_Counting/"
+                "Synthetic_CoT_NiaH_Count/colab_results"
             )
-
-            def _looks_like_counting_repo(path):
-                path = Path(path)
-                return (
-                    (path / "pyproject.toml").is_file()
-                    and (path / "src" / "synthetic_counting_v11").is_dir()
-                )
-
-            def _contains_v16_3(path):
-                return (Path(path) / "src" / "synthetic_counting_v16_3").is_dir()
-
-            def _discover_drive_repo():
-                if DRIVE_REPO_ROOT_OVERRIDE is not None:
-                    forced = Path(DRIVE_REPO_ROOT_OVERRIDE)
-                    if not _looks_like_counting_repo(forced):
-                        raise FileNotFoundError(
-                            f"DRIVE_REPO_ROOT_OVERRIDE is not a counting repo: {forced}"
-                        )
-                    return forced
-
-                # Prefer known locations. In particular, the first path matches the
-                # Drive layout used by the v16.2 runs.
-                hinted = [path for path in DRIVE_REPO_HINTS if _looks_like_counting_repo(path)]
-                for path in hinted:
-                    if _contains_v16_3(path):
-                        return path
-                if hinted:
-                    return hinted[0]
-
-                drive_root = Path("/content/drive/MyDrive")
-                matches = []
-                prune_names = {
-                    ".git", ".venv", "__pycache__", "artifacts", "colab_results", "runs"
-                }
-                base_depth = len(drive_root.parts)
-                for current, dirnames, _ in os.walk(drive_root):
-                    current_path = Path(current)
-                    depth = len(current_path.parts) - base_depth
-                    dirnames[:] = [name for name in dirnames if name not in prune_names]
-                    if _looks_like_counting_repo(current_path):
-                        matches.append(current_path)
-                        dirnames[:] = []
-                        continue
-                    if depth >= 6:
-                        dirnames[:] = []
-
-                if not matches:
-                    hint_text = "\\n  - ".join(str(path) for path in DRIVE_REPO_HINTS)
-                    raise FileNotFoundError(
-                        "Could not find the counting repo under MyDrive. Expected a folder "
-                        "containing pyproject.toml and src/synthetic_counting_v11. "
-                        "Either upload the repo or set DRIVE_REPO_ROOT_OVERRIDE.\\n"
-                        f"Checked common locations:\\n  - {hint_text}"
-                    )
-                matches.sort(
-                    key=lambda path: (
-                        _contains_v16_3(path),
-                        (path / "pyproject.toml").stat().st_mtime,
-                    ),
-                    reverse=True,
-                )
-                if len(matches) > 1:
-                    print("Multiple counting repos found; candidates:")
-                    for path in matches:
-                        print(" -", path, "[v16.3]" if _contains_v16_3(path) else "[older]")
-                return matches[0]
-
-            DRIVE_REPO_ROOT = None
-            DRIVE_RESULTS_ROOT = None
             DRIVE_READY = False
             if Path("/content").exists():
                 from google.colab import drive
                 if not Path("/content/drive/MyDrive").exists():
                     drive.mount("/content/drive")
-                DRIVE_REPO_ROOT = _discover_drive_repo()
-                DRIVE_RESULTS_ROOT = DRIVE_REPO_ROOT / "colab_results"
+                DRIVE_RESULTS_ROOT.mkdir(parents=True, exist_ok=True)
                 DRIVE_READY = True
-                print("Drive mounted; repository found at", DRIVE_REPO_ROOT)
+                print("Drive ready:", DRIVE_RESULTS_ROOT)
             else:
                 print("Local runtime: Drive mount skipped")
             """,
@@ -156,7 +72,7 @@ def build() -> Path:
         code(
             """
             import os
-            import shutil
+            import signal
             import subprocess
             import sys
             import time
@@ -164,61 +80,57 @@ def build() -> Path:
 
             setup_started = time.perf_counter()
             assert DRIVE_READY, "Run the Google Drive mount cell before environment setup"
-            assert DRIVE_REPO_ROOT is not None and DRIVE_REPO_ROOT.exists(), DRIVE_REPO_ROOT
-            assert (DRIVE_REPO_ROOT / "pyproject.toml").exists(), (
-                f"pyproject.toml not found under {DRIVE_REPO_ROOT}"
-            )
-            assert (DRIVE_REPO_ROOT / "src" / "synthetic_counting_v16_3").is_dir(), (
-                f"Found the repo at {DRIVE_REPO_ROOT}, but it does not contain the v16.3 "
-                "source package. Upload/sync the updated local repo to Drive, or point "
-                "DRIVE_REPO_ROOT_OVERRIDE at a Drive copy that contains v16.3."
-            )
-            assert DRIVE_RESULTS_ROOT == DRIVE_REPO_ROOT / "colab_results"
             DRIVE_RESULTS_ROOT.mkdir(parents=True, exist_ok=True)
 
-            # Copy source to the Colab VM: training against Drive is substantially slower.
-            LOCAL_REPO_ROOT = Path("/content/Synthetic_CoT_NiaH_Count-main")
-            shutil.copytree(
-                DRIVE_REPO_ROOT,
-                LOCAL_REPO_ROOT,
-                dirs_exist_ok=True,
-                ignore=shutil.ignore_patterns(
-                    ".git",
-                    ".venv*",
-                    "__pycache__",
-                    ".pytest_cache",
-                    ".ruff_cache",
-                    ".mypy_cache",
-                    "*.egg-info",
-                    "runs",
-                    "artifacts",
-                    "colab_results",
-                ),
+            # Match v16/v16.1: clone or fast-forward the public repo on Colab's local disk.
+            REPO_URL = "https://github.com/Twist-Shan/Synthetic_CoT_NiaH_Count.git"
+            preferred = Path("/content/Synthetic_CoT_NiaH_Count")
+            candidates = [Path.cwd(), *Path.cwd().parents, preferred]
+            repo = next(
+                (path.resolve() for path in candidates if (path / "pyproject.toml").exists()),
+                None,
             )
-
-            repo = LOCAL_REPO_ROOT
+            if repo is None:
+                subprocess.run(["git", "clone", REPO_URL, str(preferred)], check=True)
+                repo = preferred
+            elif Path("/content").exists() and (repo / ".git").exists():
+                subprocess.run(
+                    ["git", "-C", str(repo), "pull", "--ff-only"],
+                    check=True,
+                )
+            assert (repo / "src" / "synthetic_counting_v16_3").is_dir(), (
+                f"The checked-out repository at {repo} does not contain v16.3. "
+                "Confirm that the clone/pull reached the current origin/main."
+            )
             os.chdir(repo)
 
-            # Validate Colab's preinstalled binary stack without modifying it. If this
-            # fails, discard the runtime rather than mixing binary package generations.
+            # Use the same ABI repair used by v16 when a reused Colab runtime has an
+            # inconsistent NumPy/pandas/scientific stack.
             scientific_probe = subprocess.run(
                 [
                     sys.executable,
                     "-c",
-                    "import matplotlib,numpy,pandas,seaborn,torch,tqdm",
+                    "import numpy,pandas,scipy,matplotlib,seaborn",
                 ],
                 capture_output=True,
                 text=True,
             )
             if scientific_probe.returncode:
-                print(scientific_probe.stdout)
-                print(scientific_probe.stderr)
+                print(scientific_probe.stderr[-2000:])
+                subprocess.run(
+                    [
+                        sys.executable, "-m", "pip", "install", "-q", "--no-cache-dir",
+                        "--force-reinstall", "numpy==1.26.4", "pandas==2.2.3",
+                        "scipy==1.13.1", "matplotlib==3.8.4", "seaborn==0.13.2",
+                    ],
+                    check=True,
+                )
+                if Path("/content").exists():
+                    os.kill(os.getpid(), signal.SIGKILL)
                 raise RuntimeError(
-                    "Colab scientific-package imports are inconsistent. Use Runtime > "
-                    "Disconnect and delete runtime, reconnect, and rerun from the first cell."
+                    "Scientific ABI repaired. Reconnect and rerun all cells."
                 )
 
-            # Preserve Colab's binary-compatible NumPy/pandas/scientific stack.
             subprocess.run(
                 [sys.executable, "-m", "pip", "install", "-q", "--no-deps", "-e", "."],
                 check=True,
@@ -229,6 +141,7 @@ def build() -> Path:
             src_root = str(repo / "src")
             if src_root not in sys.path:
                 sys.path.insert(0, src_root)
+            os.environ["PYTHONPATH"] = src_root + os.pathsep + os.environ.get("PYTHONPATH", "")
 
             import synthetic_counting_v16_3
             import numpy as np
@@ -265,8 +178,9 @@ def build() -> Path:
             assert corpus_path.exists(), f"Tiny Shakespeare is missing: {corpus_path}"
 
             print({
-                "drive_repo": str(DRIVE_REPO_ROOT),
-                "working_repo": str(repo),
+                "repo": str(repo),
+                "repo_url": REPO_URL,
+                "drive_results": str(DRIVE_RESULTS_ROOT),
                 "src_root": src_root,
                 "kernel_package": str(package_path),
                 "subprocess_package": str(subprocess_package_path),
