@@ -46,21 +46,106 @@ def build() -> Path:
         markdown("## 1. Mount Google Drive first", "drive-heading"),
         code(
             """
+            import os
             from pathlib import Path
 
-            # Keep the uploaded source and result paths derived from one editable root.
-            DRIVE_REPO_ROOT = Path(
-                "/content/drive/MyDrive/Colab Notebooks/NIAH_synthetic/"
-                "Synthetic_CoT_NiaH_Count-main"
+            # Set this only when you want to force one exact Drive location. With None,
+            # the notebook checks the common locations below and then performs a bounded
+            # search under MyDrive. This avoids depending on a renamed repository folder.
+            DRIVE_REPO_ROOT_OVERRIDE = None
+            DRIVE_REPO_HINTS = (
+                Path(
+                    "/content/drive/MyDrive/Colab_Notebooks/CoT_Counting/"
+                    "Synthetic_CoT_NiaH_Count"
+                ),
+                Path(
+                    "/content/drive/MyDrive/Colab Notebooks/NIAH_synthetic/"
+                    "Synthetic_CoT_NiaH_Count"
+                ),
+                Path(
+                    "/content/drive/MyDrive/Colab Notebooks/NIAH_synthetic/"
+                    "Synthetic_CoT_NiaH_Count-main"
+                ),
+                Path("/content/drive/MyDrive/Synthetic_CoT_NiaH_Count"),
             )
-            DRIVE_RESULTS_ROOT = DRIVE_REPO_ROOT / "colab_results"
+
+            def _looks_like_counting_repo(path):
+                path = Path(path)
+                return (
+                    (path / "pyproject.toml").is_file()
+                    and (path / "src" / "synthetic_counting_v11").is_dir()
+                )
+
+            def _contains_v16_3(path):
+                return (Path(path) / "src" / "synthetic_counting_v16_3").is_dir()
+
+            def _discover_drive_repo():
+                if DRIVE_REPO_ROOT_OVERRIDE is not None:
+                    forced = Path(DRIVE_REPO_ROOT_OVERRIDE)
+                    if not _looks_like_counting_repo(forced):
+                        raise FileNotFoundError(
+                            f"DRIVE_REPO_ROOT_OVERRIDE is not a counting repo: {forced}"
+                        )
+                    return forced
+
+                # Prefer known locations. In particular, the first path matches the
+                # Drive layout used by the v16.2 runs.
+                hinted = [path for path in DRIVE_REPO_HINTS if _looks_like_counting_repo(path)]
+                for path in hinted:
+                    if _contains_v16_3(path):
+                        return path
+                if hinted:
+                    return hinted[0]
+
+                drive_root = Path("/content/drive/MyDrive")
+                matches = []
+                prune_names = {
+                    ".git", ".venv", "__pycache__", "artifacts", "colab_results", "runs"
+                }
+                base_depth = len(drive_root.parts)
+                for current, dirnames, _ in os.walk(drive_root):
+                    current_path = Path(current)
+                    depth = len(current_path.parts) - base_depth
+                    dirnames[:] = [name for name in dirnames if name not in prune_names]
+                    if _looks_like_counting_repo(current_path):
+                        matches.append(current_path)
+                        dirnames[:] = []
+                        continue
+                    if depth >= 6:
+                        dirnames[:] = []
+
+                if not matches:
+                    hint_text = "\\n  - ".join(str(path) for path in DRIVE_REPO_HINTS)
+                    raise FileNotFoundError(
+                        "Could not find the counting repo under MyDrive. Expected a folder "
+                        "containing pyproject.toml and src/synthetic_counting_v11. "
+                        "Either upload the repo or set DRIVE_REPO_ROOT_OVERRIDE.\\n"
+                        f"Checked common locations:\\n  - {hint_text}"
+                    )
+                matches.sort(
+                    key=lambda path: (
+                        _contains_v16_3(path),
+                        (path / "pyproject.toml").stat().st_mtime,
+                    ),
+                    reverse=True,
+                )
+                if len(matches) > 1:
+                    print("Multiple counting repos found; candidates:")
+                    for path in matches:
+                        print(" -", path, "[v16.3]" if _contains_v16_3(path) else "[older]")
+                return matches[0]
+
+            DRIVE_REPO_ROOT = None
+            DRIVE_RESULTS_ROOT = None
             DRIVE_READY = False
             if Path("/content").exists():
                 from google.colab import drive
                 if not Path("/content/drive/MyDrive").exists():
                     drive.mount("/content/drive")
+                DRIVE_REPO_ROOT = _discover_drive_repo()
+                DRIVE_RESULTS_ROOT = DRIVE_REPO_ROOT / "colab_results"
                 DRIVE_READY = True
-                print("Drive mounted; source expected at", DRIVE_REPO_ROOT)
+                print("Drive mounted; repository found at", DRIVE_REPO_ROOT)
             else:
                 print("Local runtime: Drive mount skipped")
             """,
@@ -79,9 +164,14 @@ def build() -> Path:
 
             setup_started = time.perf_counter()
             assert DRIVE_READY, "Run the Google Drive mount cell before environment setup"
-            assert DRIVE_REPO_ROOT.exists(), DRIVE_REPO_ROOT
+            assert DRIVE_REPO_ROOT is not None and DRIVE_REPO_ROOT.exists(), DRIVE_REPO_ROOT
             assert (DRIVE_REPO_ROOT / "pyproject.toml").exists(), (
                 f"pyproject.toml not found under {DRIVE_REPO_ROOT}"
+            )
+            assert (DRIVE_REPO_ROOT / "src" / "synthetic_counting_v16_3").is_dir(), (
+                f"Found the repo at {DRIVE_REPO_ROOT}, but it does not contain the v16.3 "
+                "source package. Upload/sync the updated local repo to Drive, or point "
+                "DRIVE_REPO_ROOT_OVERRIDE at a Drive copy that contains v16.3."
             )
             assert DRIVE_RESULTS_ROOT == DRIVE_REPO_ROOT / "colab_results"
             DRIVE_RESULTS_ROOT.mkdir(parents=True, exist_ok=True)

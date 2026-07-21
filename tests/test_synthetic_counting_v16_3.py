@@ -699,9 +699,13 @@ def test_v16_3_notebook_compiles_and_legacy_v16_runner_is_isolated(tmp_path):
     code_cells = [cell for cell in notebook["cells"] if cell["cell_type"] == "code"]
     assert "drive.mount" in "".join(code_cells[0]["source"])
     source = "\n".join("".join(cell["source"]) for cell in code_cells)
+    assert "DRIVE_REPO_ROOT_OVERRIDE = None" in source
+    assert "Colab_Notebooks/CoT_Counting" in source
     assert "Colab Notebooks/NIAH_synthetic" in source
+    assert "_discover_drive_repo" in source
+    assert "os.walk(drive_root)" in source
+    assert "synthetic_counting_v16_3\").is_dir()" in source
     assert 'DRIVE_RESULTS_ROOT = DRIVE_REPO_ROOT / "colab_results"' in source
-    assert "Colab_Notebooks/CoT_Counting" not in source
     assert '"--no-deps"' in source
     assert 'sys.path.insert(0, src_root)' in source
     assert "Notebook kernel imported stale package" in source

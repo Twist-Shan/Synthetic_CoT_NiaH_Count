@@ -111,7 +111,10 @@ Notebook：`notebooks/Trace_Count_v16_3_Colab.ipynb`。
 
 它按以下顺序运行：
 
-1. 挂载 Google Drive；
+1. 挂载 Google Drive；Notebook 会优先检查 v16.2 使用的
+   `MyDrive/Colab_Notebooks/CoT_Counting/Synthetic_CoT_NiaH_Count`，随后检查其他常见目录，
+   必要时在 MyDrive 内做有深度限制的自动搜索；也可以通过
+   `DRIVE_REPO_ROOT_OVERRIDE` 明确指定 repo；
 2. 从 Drive 把 repo 复制到 Colab 本地磁盘，避免直接在 Drive 上训练导致 I/O 变慢；
 3. 以 editable/no-deps 方式安装，并验证 kernel 与 subprocess 都导入本地 v16.3；
 4. 准备数据与固定 suites；
