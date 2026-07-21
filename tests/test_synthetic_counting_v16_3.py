@@ -711,6 +711,9 @@ def test_v16_3_notebook_compiles_and_legacy_v16_runner_is_isolated(tmp_path):
     assert '"--no-deps"' in source
     assert 'sys.path.insert(0, src_root)' in source
     assert 'os.environ["PYTHONPATH"]' in source
+    assert "def run_streaming(command):" in source
+    assert "os.read(process.stdout.fileno(), 4096)" in source
+    assert 'run_streaming([*base_cmd, "--stage", "train,attention,state,plots"])' in source
     assert "Notebook kernel imported stale package" in source
     assert "Subprocess imported stale package" in source
     assert "test_process.check_returncode()" in source

@@ -629,14 +629,26 @@ def test_v16_2_notebook_compiles_and_legacy_v16_runner_is_isolated(tmp_path):
     code_cells = [cell for cell in notebook["cells"] if cell["cell_type"] == "code"]
     assert "drive.mount" in "".join(code_cells[0]["source"])
     source = "\n".join("".join(cell["source"]) for cell in code_cells)
-    assert "Colab Notebooks/NIAH_synthetic" in source
-    assert 'DRIVE_RESULTS_ROOT = DRIVE_REPO_ROOT / "colab_results"' in source
-    assert "Colab_Notebooks/CoT_Counting" not in source
+    assert "Colab Notebooks/NIAH_synthetic" not in source
+    assert "Colab_Notebooks/CoT_Counting" in source
+    assert 'REPO_URL = "https://github.com/Twist-Shan/Synthetic_CoT_NiaH_Count.git"' in source
+    assert 'preferred = Path("/content/Synthetic_CoT_NiaH_Count")' in source
+    assert 'subprocess.run(["git", "clone", REPO_URL, str(preferred)], check=True)' in source
+    assert '"pull", "--ff-only"' in source
+    assert "DRIVE_REPO_ROOT" not in source
+    assert '"Synthetic_CoT_NiaH_Count/colab_results"' in source
     assert '"--no-deps"' in source
     assert 'sys.path.insert(0, src_root)' in source
+    assert 'os.environ["PYTHONPATH"]' in source
+    assert "def run_streaming(command):" in source
+    assert "os.read(process.stdout.fileno(), 4096)" in source
+    assert 'run_streaming([*base_cmd, "--stage", "train,attention,state,plots"])' in source
     assert "Notebook kernel imported stale package" in source
     assert "Subprocess imported stale package" in source
     assert "test_process.check_returncode()" in source
+    assert "AUTO_DISCONNECT = True" in source
+    assert "drive.flush_and_unmount()" in source
+    assert "runtime.unassign()" in source
     assert "TASK_OCCURRENCE_RATIO =" in source
     assert '"--task-occurrence-ratio", str(TASK_OCCURRENCE_RATIO)' in source
     for editable_setting in (

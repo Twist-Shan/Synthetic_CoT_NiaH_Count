@@ -177,6 +177,30 @@ def build() -> Path:
             )
             assert corpus_path.exists(), f"Tiny Shakespeare is missing: {corpus_path}"
 
+            def run_streaming(command):
+                # Forward every available child-output chunk, including tqdm carriage returns.
+                import codecs
+
+                command = [str(part) for part in command]
+                print("$", " ".join(command), flush=True)
+                process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    bufsize=0,
+                )
+                assert process.stdout is not None
+                decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+                while True:
+                    chunk = os.read(process.stdout.fileno(), 4096)
+                    if not chunk:
+                        break
+                    print(decoder.decode(chunk), end="", flush=True)
+                print(decoder.decode(b"", final=True), end="", flush=True)
+                returncode = process.wait()
+                if returncode:
+                    raise subprocess.CalledProcessError(returncode, command)
+
             print({
                 "repo": str(repo),
                 "repo_url": REPO_URL,
@@ -346,7 +370,7 @@ def build() -> Path:
             if SKIP_COMPLETED:
                 base_cmd.append("--skip-completed")
             prepare_started = time.perf_counter()
-            subprocess.run([*base_cmd, "--stage", "prepare"], check=True)
+            run_streaming([*base_cmd, "--stage", "prepare"])
             print(f"Prepare block: {time.perf_counter() - prepare_started:.1f} seconds")
 
             from synthetic_counting_v16_3.config import default_run_name
@@ -360,7 +384,7 @@ def build() -> Path:
         code(
             """
             training_started = time.perf_counter()
-            subprocess.run([*base_cmd, "--stage", "train,attention,state,plots"], check=True)
+            run_streaming([*base_cmd, "--stage", "train,attention,state,plots"])
             print(f"Training/final-diagnostics block: {time.perf_counter() - training_started:.1f} seconds")
             print("RUN_DIR =", RUN_DIR.resolve())
             """,
@@ -422,7 +446,7 @@ def build() -> Path:
                 if FORCE_CHECKPOINT_DYNAMICS:
                     dynamics_cmd.append("--force")
                 dynamics_started = time.perf_counter()
-                subprocess.run(dynamics_cmd, check=True)
+                run_streaming(dynamics_cmd)
                 print(f"Checkpoint-dynamics block: {time.perf_counter() - dynamics_started:.1f} seconds")
                 print("Dynamics manifest:", RUN_DIR / "analysis" / "checkpoint_dynamics" / "manifest.json")
                 print("Detailed tables:", RUN_DIR / "tables" / "checkpoint_*.csv")

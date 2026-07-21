@@ -1061,6 +1061,13 @@ def train_v16_3_variant(
                 ["position_encoding", "mode", "step"],
             )
             progress.set_postfix(loss=f"{loss.item():.4f}", task=f"{is_task.mean():.2f}")
+            print(
+                f"[train] {position_encoding}/{mode} "
+                f"step={step}/{cfg.train_steps} loss={loss.item():.4f} "
+                f"lr={rate:.3e} grad_norm={gradient_norm:.3f} "
+                f"task_ratio={is_task.mean():.2f}",
+                flush=True,
+            )
         if step % cfg.eval_every == 0 or step == cfg.train_steps:
             if str(cfg.device).startswith("cuda") and torch.cuda.is_available():
                 sync_started = time.perf_counter()

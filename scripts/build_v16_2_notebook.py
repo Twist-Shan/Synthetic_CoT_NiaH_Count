@@ -47,19 +47,20 @@ def build() -> Path:
             """
             from pathlib import Path
 
-            # Keep the uploaded source and result paths derived from one editable root.
-            DRIVE_REPO_ROOT = Path(
-                "/content/drive/MyDrive/Colab Notebooks/NIAH_synthetic/"
-                "Synthetic_CoT_NiaH_Count-main"
+            # Match v16/v16.1: Drive stores checkpoints and result bundles only.
+            # Source code is cloned to the fast Colab-local filesystem in the next cell.
+            DRIVE_RESULTS_ROOT = Path(
+                "/content/drive/MyDrive/Colab_Notebooks/CoT_Counting/"
+                "Synthetic_CoT_NiaH_Count/colab_results"
             )
-            DRIVE_RESULTS_ROOT = DRIVE_REPO_ROOT / "colab_results"
             DRIVE_READY = False
             if Path("/content").exists():
                 from google.colab import drive
                 if not Path("/content/drive/MyDrive").exists():
                     drive.mount("/content/drive")
+                DRIVE_RESULTS_ROOT.mkdir(parents=True, exist_ok=True)
                 DRIVE_READY = True
-                print("Drive mounted; source expected at", DRIVE_REPO_ROOT)
+                print("Drive ready:", DRIVE_RESULTS_ROOT)
             else:
                 print("Local runtime: Drive mount skipped")
             """,
@@ -70,7 +71,7 @@ def build() -> Path:
         code(
             """
             import os
-            import shutil
+            import signal
             import subprocess
             import sys
             import time
@@ -78,56 +79,57 @@ def build() -> Path:
 
             setup_started = time.perf_counter()
             assert DRIVE_READY, "Run the Google Drive mount cell before environment setup"
-            assert DRIVE_REPO_ROOT.exists(), DRIVE_REPO_ROOT
-            assert (DRIVE_REPO_ROOT / "pyproject.toml").exists(), (
-                f"pyproject.toml not found under {DRIVE_REPO_ROOT}"
-            )
-            assert DRIVE_RESULTS_ROOT == DRIVE_REPO_ROOT / "colab_results"
             DRIVE_RESULTS_ROOT.mkdir(parents=True, exist_ok=True)
 
-            # Copy source to the Colab VM: training against Drive is substantially slower.
-            LOCAL_REPO_ROOT = Path("/content/Synthetic_CoT_NiaH_Count-main")
-            shutil.copytree(
-                DRIVE_REPO_ROOT,
-                LOCAL_REPO_ROOT,
-                dirs_exist_ok=True,
-                ignore=shutil.ignore_patterns(
-                    ".git",
-                    ".venv*",
-                    "__pycache__",
-                    ".pytest_cache",
-                    ".ruff_cache",
-                    ".mypy_cache",
-                    "*.egg-info",
-                    "runs",
-                    "artifacts",
-                    "colab_results",
-                ),
+            # Match v16/v16.1: clone or fast-forward the public repo on Colab's local disk.
+            REPO_URL = "https://github.com/Twist-Shan/Synthetic_CoT_NiaH_Count.git"
+            preferred = Path("/content/Synthetic_CoT_NiaH_Count")
+            candidates = [Path.cwd(), *Path.cwd().parents, preferred]
+            repo = next(
+                (path.resolve() for path in candidates if (path / "pyproject.toml").exists()),
+                None,
             )
-
-            repo = LOCAL_REPO_ROOT
+            if repo is None:
+                subprocess.run(["git", "clone", REPO_URL, str(preferred)], check=True)
+                repo = preferred
+            elif Path("/content").exists() and (repo / ".git").exists():
+                subprocess.run(
+                    ["git", "-C", str(repo), "pull", "--ff-only"],
+                    check=True,
+                )
+            assert (repo / "src" / "synthetic_counting_v16_2").is_dir(), (
+                f"The checked-out repository at {repo} does not contain v16.2. "
+                "Confirm that the clone/pull reached the current origin/main."
+            )
             os.chdir(repo)
 
-            # Validate Colab's preinstalled binary stack without modifying it. If this
-            # fails, discard the runtime rather than mixing binary package generations.
+            # Use the same ABI repair used by v16 when a reused Colab runtime has an
+            # inconsistent NumPy/pandas/scientific stack.
             scientific_probe = subprocess.run(
                 [
                     sys.executable,
                     "-c",
-                    "import matplotlib,numpy,pandas,seaborn,torch,tqdm",
+                    "import numpy,pandas,scipy,matplotlib,seaborn",
                 ],
                 capture_output=True,
                 text=True,
             )
             if scientific_probe.returncode:
-                print(scientific_probe.stdout)
-                print(scientific_probe.stderr)
+                print(scientific_probe.stderr[-2000:])
+                subprocess.run(
+                    [
+                        sys.executable, "-m", "pip", "install", "-q", "--no-cache-dir",
+                        "--force-reinstall", "numpy==1.26.4", "pandas==2.2.3",
+                        "scipy==1.13.1", "matplotlib==3.8.4", "seaborn==0.13.2",
+                    ],
+                    check=True,
+                )
+                if Path("/content").exists():
+                    os.kill(os.getpid(), signal.SIGKILL)
                 raise RuntimeError(
-                    "Colab scientific-package imports are inconsistent. Use Runtime > "
-                    "Disconnect and delete runtime, reconnect, and rerun from the first cell."
+                    "Scientific ABI repaired. Reconnect and rerun all cells."
                 )
 
-            # Preserve Colab's binary-compatible NumPy/pandas/scientific stack.
             subprocess.run(
                 [sys.executable, "-m", "pip", "install", "-q", "--no-deps", "-e", "."],
                 check=True,
@@ -138,6 +140,7 @@ def build() -> Path:
             src_root = str(repo / "src")
             if src_root not in sys.path:
                 sys.path.insert(0, src_root)
+            os.environ["PYTHONPATH"] = src_root + os.pathsep + os.environ.get("PYTHONPATH", "")
 
             import synthetic_counting_v16_2
             import numpy as np
@@ -173,9 +176,34 @@ def build() -> Path:
             )
             assert corpus_path.exists(), f"Tiny Shakespeare is missing: {corpus_path}"
 
+            def run_streaming(command):
+                # Forward every available child-output chunk, including tqdm carriage returns.
+                import codecs
+
+                command = [str(part) for part in command]
+                print("$", " ".join(command), flush=True)
+                process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    bufsize=0,
+                )
+                assert process.stdout is not None
+                decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+                while True:
+                    chunk = os.read(process.stdout.fileno(), 4096)
+                    if not chunk:
+                        break
+                    print(decoder.decode(chunk), end="", flush=True)
+                print(decoder.decode(b"", final=True), end="", flush=True)
+                returncode = process.wait()
+                if returncode:
+                    raise subprocess.CalledProcessError(returncode, command)
+
             print({
-                "drive_repo": str(DRIVE_REPO_ROOT),
-                "working_repo": str(repo),
+                "repo": str(repo),
+                "repo_url": REPO_URL,
+                "drive_results": str(DRIVE_RESULTS_ROOT),
                 "src_root": src_root,
                 "kernel_package": str(package_path),
                 "subprocess_package": str(subprocess_package_path),
@@ -234,6 +262,8 @@ def build() -> Path:
             OUT_ROOT = "runs/synthetic_counting_v16_2"
             RUN_NAME = None                  # default name records all important settings
             SKIP_COMPLETED = True
+            AUTO_DISCONNECT = True           # after the final Drive copy succeeds
+            DISCONNECT_DELAY_SECONDS = 10    # leave a short window for the final save message
             CHECKPOINT_SYNC_ROOT = (
                 DRIVE_RESULTS_ROOT / "v16_2_live_checkpoints" if DRIVE_READY else None
             )
@@ -332,7 +362,7 @@ def build() -> Path:
             if SKIP_COMPLETED:
                 base_cmd.append("--skip-completed")
             prepare_started = time.perf_counter()
-            subprocess.run([*base_cmd, "--stage", "prepare"], check=True)
+            run_streaming([*base_cmd, "--stage", "prepare"])
             print(f"Prepare block: {time.perf_counter() - prepare_started:.1f} seconds")
 
             from synthetic_counting_v16_2.config import default_run_name
@@ -346,7 +376,7 @@ def build() -> Path:
         code(
             """
             training_started = time.perf_counter()
-            subprocess.run([*base_cmd, "--stage", "train,attention,state,plots"], check=True)
+            run_streaming([*base_cmd, "--stage", "train,attention,state,plots"])
             print(f"Training/final-diagnostics block: {time.perf_counter() - training_started:.1f} seconds")
             print("RUN_DIR =", RUN_DIR.resolve())
             """,
@@ -408,7 +438,7 @@ def build() -> Path:
                 if FORCE_CHECKPOINT_DYNAMICS:
                     dynamics_cmd.append("--force")
                 dynamics_started = time.perf_counter()
-                subprocess.run(dynamics_cmd, check=True)
+                run_streaming(dynamics_cmd)
                 print(f"Checkpoint-dynamics block: {time.perf_counter() - dynamics_started:.1f} seconds")
                 print("Dynamics manifest:", RUN_DIR / "analysis" / "checkpoint_dynamics" / "manifest.json")
                 print("Detailed tables:", RUN_DIR / "tables" / "checkpoint_*.csv")
@@ -442,13 +472,14 @@ def build() -> Path:
             """,
             "inspect-losses",
         ),
-        markdown("## 8. Save the complete result bundle", "save-heading"),
+        markdown("## 8. Save the complete result bundle and disconnect", "save-heading"),
         code(
             """
             import shutil
             from datetime import datetime
 
             save_started = time.perf_counter()
+            destination = None
             if DRIVE_READY:
                 destination = DRIVE_RESULTS_ROOT / f"{RUN_DIR.name}_{datetime.now():%Y%m%d_%H%M%S}"
                 shutil.copytree(RUN_DIR, destination, dirs_exist_ok=True)
@@ -456,6 +487,20 @@ def build() -> Path:
             else:
                 print("Drive unavailable; results remain at", RUN_DIR.resolve())
             print(f"Result-copy block: {time.perf_counter() - save_started:.1f} seconds")
+
+            # Disconnect only after the complete result copy has returned successfully.
+            # Live checkpoints already reside under colab_results/v16_2_live_checkpoints.
+            if DRIVE_READY:
+                from google.colab import drive, runtime
+
+                drive.flush_and_unmount()
+                print("Google Drive flushed and unmounted.")
+                if AUTO_DISCONNECT:
+                    print(f"Disconnecting this Colab runtime in {DISCONNECT_DELAY_SECONDS} seconds...")
+                    time.sleep(DISCONNECT_DELAY_SECONDS)
+                    runtime.unassign()
+                else:
+                    print("AUTO_DISCONNECT=False; runtime remains connected.")
             """,
             "save-drive",
             ["google-drive-save"],
