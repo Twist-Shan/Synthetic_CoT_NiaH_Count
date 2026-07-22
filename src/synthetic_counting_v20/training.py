@@ -748,6 +748,37 @@ def _training_batch(
     *,
     require_task: bool = False,
 ) -> tuple[list[V20Example], list[V20Rendered]]:
+    if cfg.training_count_distribution == "uniform":
+        # Draw the desired semantic counts first, then fill all count buckets
+        # from one shared stream of natural candidates.  Sharing rejected
+        # candidates across the whole batch is much cheaper than independently
+        # rejection-sampling each row (roughly 2-4x baseline work here instead
+        # of ~30x for counts 1..30).
+        targets = [
+            rng.randint(cfg.count_min, cfg.count_max_threshold)
+            for _ in range(cfg.batch_size)
+        ]
+        needed = {count: targets.count(count) for count in set(targets)}
+        buckets: dict[int, list[V20Example]] = {count: [] for count in needed}
+        proposals = 0
+        while any(len(buckets[count]) < amount for count, amount in needed.items()):
+            example = make_training_example(cfg, vocab, text, split, pool, rng)
+            proposals += 1
+            count = int(example.count or 0)
+            if count in needed and len(buckets[count]) < needed[count]:
+                buckets[count].append(example)
+            if proposals >= cfg.candidate_filter_max_attempts:
+                missing = {
+                    count: needed[count] - len(buckets[count])
+                    for count in needed
+                    if len(buckets[count]) < needed[count]
+                }
+                raise RuntimeError(
+                    f"could not fill uniform-count training batch after {proposals} proposals: "
+                    f"{missing}"
+                )
+        examples = [buckets[count].pop() for count in targets]
+        return examples, [render_v20(example, vocab, mode) for example in examples]
     for _ in range(1_000):
         examples = [make_training_example(cfg, vocab, text, split, pool, rng) for _ in range(cfg.batch_size)]
         if not require_task or any(item.example_kind == "counting_task" for item in examples):
@@ -1052,6 +1083,74 @@ def _write_final_test(
         pd.DataFrame(rows),
         ["position_encoding", "mode", "suite", "task_occurrence_ratio"],
     )
+    # Periodic AR curves deliberately stay small (``ar_examples_per_count``)
+    # because they are evaluated throughout training.  The final checkpoint is
+    # evaluated on the disjoint test task suite, whose size is controlled by
+    # ``final_examples_per_count`` (50/count in the main preset).  Keeping this
+    # in a separate table prevents a high-powered final estimate from being
+    # confused with the coarse 2/count learning curve.
+    final_ar = autoregressive_task_evaluation(
+        model,
+        cfg,
+        vocab,
+        test_suites["task"],
+        position_encoding=position_encoding,
+        mode=mode,
+        step=cfg.train_steps,
+    )
+    _write_final_autoregressive_artifacts(
+        final_ar,
+        run_dir,
+        examples_per_count=cfg.final_examples_per_count,
+    )
+
+
+def _write_final_autoregressive_artifacts(
+    frame: pd.DataFrame,
+    run_dir: Path,
+    *,
+    examples_per_count: int | None,
+) -> None:
+    """Persist compact sufficient statistics plus a bounded failure sample.
+
+    Full generated traces dominate CSV size and previously made Drive sync and
+    notebook inspection fragile.  The complete evaluation table therefore
+    keeps numeric outcomes for every prompt, while verbatim generations are
+    retained only for up to five failures per count and mode.
+    """
+
+    full = frame.copy()
+    full["evaluation_split"] = "test_task"
+    if examples_per_count is not None:
+        full["examples_per_count"] = int(examples_per_count)
+    elif "examples_per_count" not in full:
+        full["examples_per_count"] = full.groupby(
+            ["position_encoding", "mode", "count"]
+        )["row_id"].transform("size")
+    if "generated_tokens" in full:
+        failures = (
+            full[full["ar_accuracy"] < 1]
+            .sort_values(["position_encoding", "mode", "count", "row_id"])
+            .groupby(["position_encoding", "mode", "count"], as_index=False)
+            .head(5)
+        )
+        _append_unique(
+            run_dir / "tables" / "final_autoregressive_failures.csv",
+            failures,
+            ["position_encoding", "mode", "row_id"],
+        )
+        full = full.drop(columns="generated_tokens")
+    detail_path = run_dir / "tables" / "final_autoregressive_detail.csv"
+    _append_unique(
+        detail_path,
+        full,
+        ["position_encoding", "mode", "row_id"],
+    )
+    # Compact an older table that may still carry generations from a previous
+    # analysis revision.
+    compact = _read_table(detail_path)
+    if "generated_tokens" in compact:
+        atomic_csv(compact.drop(columns="generated_tokens"), detail_path)
 
 
 def train_v20_variant(
@@ -1073,11 +1172,18 @@ def train_v20_variant(
     final_path = root / "final" / "checkpoint.pt"
     required_test = run_dir / "tables" / "test_loss_summary.csv"
     required_permutation = run_dir / "tables" / "prefix_permutation_consistency.csv"
+    required_final_ar = run_dir / "tables" / "final_autoregressive_detail.csv"
     permutation_examples = _permutation_examples(cfg, curve_suites["heldout"]["task"])
     outputs_complete = False
-    if final_path.exists() and required_test.exists() and required_permutation.exists():
+    if (
+        final_path.exists()
+        and required_test.exists()
+        and required_permutation.exists()
+        and required_final_ar.exists()
+    ):
         test_table = _read_table(required_test)
         permutation_table = _read_table(required_permutation)
+        final_ar_table = _read_table(required_final_ar)
         test_rows = test_table[
             (test_table.position_encoding == position_encoding) & (test_table["mode"] == mode)
         ]
@@ -1085,10 +1191,17 @@ def train_v20_variant(
             (permutation_table.position_encoding == position_encoding)
             & (permutation_table["mode"] == mode)
         ]
+        final_ar_rows = final_ar_table[
+            (final_ar_table.position_encoding == position_encoding)
+            & (final_ar_table["mode"] == mode)
+        ]
         outputs_complete = (
             set(test_rows.get("suite", pd.Series(dtype=str)).astype(str)) >= {"raw", "task", "mixture"}
             and len(permutation_rows) == len(permutation_examples)
             and {"ar_permutation_accuracy", "tf_permutation_accuracy"}.issubset(permutation_rows.columns)
+            and len(final_ar_rows)
+            == int(cfg.final_examples_per_count * cfg.count_max_threshold)
+            and final_ar_rows.groupby("count").size().eq(cfg.final_examples_per_count).all()
         )
     if skip_completed and final_path.exists() and outputs_complete:
         print(f"[skip] {position_encoding}/{mode}: final checkpoint exists", flush=True)
@@ -1419,6 +1532,62 @@ def summarize_learning_tables(run_dir: Path) -> None:
             trace_marker_recall=("trace_marker_recall", "mean"),
         )
         atomic_csv(summary, run_dir / "tables" / "autoregressive_by_count.csv")
+    final_ar = _read_table(run_dir / "tables" / "final_autoregressive_detail.csv")
+    if not final_ar.empty:
+        if "ar_answered" not in final_ar:
+            final_ar["ar_answered"] = final_ar["ar_pred_count"].notna().astype(float)
+        if "trace_ordered_marker_accuracy" not in final_ar:
+            final_ar["trace_ordered_marker_accuracy"] = final_ar["trace_marker_recall"]
+        final_by_count = final_ar.groupby(
+            ["position_encoding", "mode", "step", "count"], as_index=False
+        ).agg(
+            examples=("ar_accuracy", "size"),
+            ar_final_accuracy=("ar_accuracy", "mean"),
+            ar_answer_rate=("ar_answered", "mean"),
+            ar_abs_error_answered_only=("ar_abs_error", "mean"),
+            ar_abs_error_with_missing_penalty=(
+                "ar_abs_error_with_missing_penalty",
+                "mean",
+            ),
+            trace_exact=("trace_exact", "mean"),
+            trace_ordered_marker_accuracy=("trace_ordered_marker_accuracy", "mean"),
+        )
+        atomic_csv(final_by_count, run_dir / "tables" / "final_autoregressive_by_count.csv")
+
+        rows: list[dict[str, Any]] = []
+        z = 1.959963984540054
+        for (position_encoding, mode, step), group in final_ar.groupby(
+            ["position_encoding", "mode", "step"]
+        ):
+            successes = float(group["ar_accuracy"].sum())
+            observations = int(len(group))
+            estimate = successes / max(1, observations)
+            denominator = 1.0 + z * z / observations
+            center = (estimate + z * z / (2 * observations)) / denominator
+            radius = z * math.sqrt(
+                estimate * (1 - estimate) / observations
+                + z * z / (4 * observations * observations)
+            ) / denominator
+            rows.append(
+                {
+                    "position_encoding": position_encoding,
+                    "mode": mode,
+                    "step": int(step),
+                    "examples": observations,
+                    "examples_per_count": int(group.groupby("count").size().min()),
+                    "ar_final_accuracy": estimate,
+                    "ar_final_accuracy_wilson95_low": max(0.0, center - radius),
+                    "ar_final_accuracy_wilson95_high": min(1.0, center + radius),
+                    "ar_answer_rate": float(group["ar_answered"].mean()),
+                    "trace_exact": float(group["trace_exact"].mean()),
+                    "trace_ordered_marker_accuracy": float(
+                        group["trace_ordered_marker_accuracy"].mean()
+                    ),
+                }
+            )
+        atomic_csv(
+            pd.DataFrame(rows), run_dir / "tables" / "final_autoregressive_summary.csv"
+        )
     train = _read_table(run_dir / "tables" / "train_metrics.csv")
     if not train.empty and "cumulative_sampling_json" in train:
         final = train.sort_values("step").groupby(["position_encoding", "mode"], as_index=False).tail(1)

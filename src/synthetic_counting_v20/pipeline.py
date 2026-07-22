@@ -23,6 +23,7 @@ from .data import (
     save_corpus_split,
     save_suite_manifests,
 )
+from .extended_analysis import collect_dense_attention_roles
 from .needle_pool import (
     NeedlePool,
     build_needle_pool,
@@ -37,8 +38,17 @@ from .timing import timed_event
 from .v10_port_analysis import run_v10_port_analysis
 
 
-STAGES = ("prepare", "train", "phase", "causal", "attention", "state", "plots")
-DEFAULT_STAGES = ("prepare", "train", "phase", "causal", "plots")
+STAGES = (
+    "prepare",
+    "train",
+    "phase",
+    "causal",
+    "extended",
+    "attention",
+    "state",
+    "plots",
+)
+DEFAULT_STAGES = ("prepare", "train", "phase", "causal", "extended", "plots")
 
 
 def _stage_list(stage: str | Iterable[str]) -> list[str]:
@@ -280,6 +290,8 @@ def run_v20_pipeline(
                                 },
                                 run_dir / "analysis" / "v10_port" / "not_applicable_v21.json",
                             )
+                    elif current == "extended":
+                        collect_dense_attention_roles(run_dir, device=cfg.device)
                     elif current == "plots":
                         make_all_v20_plots(cfg, run_dir)
         except Exception:

@@ -240,7 +240,13 @@ def _count_metrics(logits: torch.Tensor, items: Sequence[V20Rendered], vocab: V2
             continue
         values = logits[row_index, item.spans.ans_pos, number_ids].float()
         probabilities = torch.softmax(values, dim=-1)
-        expected = float((probabilities * torch.arange(1, 11, device=values.device)).sum().cpu())
+        count_values = torch.arange(
+            1,
+            len(vocab.number_ids) + 1,
+            device=values.device,
+            dtype=probabilities.dtype,
+        )
+        expected = float((probabilities * count_values).sum().cpu())
         gold_index = int(item.count) - 1
         alternatives = torch.cat((values[:gold_index], values[gold_index + 1 :]))
         rows.append(
@@ -301,6 +307,98 @@ def _capture_attention_inputs(
         for handle in handles:
             handle.remove()
     return output, captured
+
+
+def _capture_attention_internals(
+    model: torch.nn.Module,
+    items: Sequence[V20Rendered],
+    vocab: V20Vocab,
+    device: str,
+) -> tuple[Any, dict[int, torch.Tensor]]:
+    """Capture per-layer value vectors while also returning exact attention maps."""
+
+    inputs: dict[int, torch.Tensor] = {}
+    handles = []
+    for layer_index, layer in enumerate(model.layers, start=1):
+        def hook(_module, args, layer_index=layer_index):
+            inputs[layer_index] = args[0].detach().clone()
+
+        handles.append(layer.attention.register_forward_pre_hook(hook))
+    try:
+        output = _forward(
+            model,
+            items,
+            vocab,
+            device,
+            output_attentions=True,
+            output_hidden_states=True,
+        )
+    finally:
+        for handle in handles:
+            handle.remove()
+    values: dict[int, torch.Tensor] = {}
+    with torch.inference_mode():
+        for layer_index, hidden in inputs.items():
+            attention = model.layers[layer_index - 1].attention
+            batch, length, _ = hidden.shape
+            qkv = attention.qkv(hidden).view(
+                batch, length, 3, attention.n_head, attention.head_dim
+            )
+            values[layer_index] = qkv[:, :, 2].transpose(1, 2).detach().clone()
+    return output, values
+
+
+@contextlib.contextmanager
+def _attention_pattern_value_patch(
+    model: torch.nn.Module,
+    heads: Sequence[Head],
+    query_positions: Sequence[int],
+    source_positions: Sequence[int],
+    *,
+    donor_patterns: Sequence[torch.Tensor] | None = None,
+    donor_values: dict[int, torch.Tensor] | None = None,
+) -> Iterator[None]:
+    """Patch routing weights and/or source values without mixing the two."""
+
+    by_layer: dict[int, list[int]] = {}
+    for layer, head in heads:
+        by_layer.setdefault(int(layer), []).append(int(head))
+    previous: dict[int, Any] = {}
+    for layer_index, selected_heads in by_layer.items():
+        attention = model.layers[layer_index - 1].attention
+        previous[layer_index] = attention.intervention
+
+        def intervention(
+            _query,
+            _key,
+            value,
+            weights,
+            *,
+            layer_index=layer_index,
+            selected_heads=tuple(selected_heads),
+        ):
+            patched_value = value.clone() if donor_values is not None else value
+            patched_weights = weights.clone() if donor_patterns is not None else weights
+            for row, (query_position, source_position) in enumerate(
+                zip(query_positions, source_positions, strict=True)
+            ):
+                for head in selected_heads:
+                    if donor_patterns is not None:
+                        patched_weights[row, head, int(query_position)] = donor_patterns[
+                            layer_index - 1
+                        ][row, head, int(query_position)].to(patched_weights)
+                    if donor_values is not None:
+                        patched_value[row, head, int(source_position)] = donor_values[
+                            layer_index
+                        ][row, head, int(source_position)].to(patched_value)
+            return patched_value, patched_weights
+
+        attention.intervention = intervention
+    try:
+        yield
+    finally:
+        for layer_index, callback in previous.items():
+            model.layers[layer_index - 1].attention.intervention = callback
 
 
 def _attention_vectors(
@@ -725,6 +823,131 @@ def run_retrieval_patching(ctx: RunContext, options: PortOptions, ranking: list[
     return pd.DataFrame(rows)
 
 
+def run_localization_transport_patching(
+    ctx: RunContext,
+    options: PortOptions,
+    ranking: Sequence[Head],
+) -> pd.DataFrame:
+    """Separate retrieval localization (pattern) from identity transport (value).
+
+    Clean/corrupt pairs have identical length and positions.  The corrupt
+    sequence replaces the k-th prompt needle and the corresponding gold trace
+    marker with another target-set character.  At the trace-index query we then
+    intervene in one of three places: the attention pattern only, the value
+    vector at the k-th prompt source only, or the full post-layer residual.
+    """
+
+    eligible = [example for example in ctx.heldout_examples if int(example.count or 0) >= 3]
+    selected = eligible[: options.retrieval_reporting_examples]
+    ks = [max(2, int(example.count or 0) // 2) for example in selected]
+    pairs = [
+        _retrieval_corruption(example, ctx.vocab, k)
+        for example, k in zip(selected, ks, strict=True)
+    ]
+    clean_items = [pair[0] for pair in pairs]
+    corrupt_items = [pair[1] for pair in pairs]
+    target_ids = [pair[2] for pair in pairs]
+    alternative_ids = [pair[3] for pair in pairs]
+    query_positions = [
+        item.spans.trace_index_positions[k - 1]
+        for item, k in zip(clean_items, ks, strict=True)
+    ]
+    source_positions = [
+        item.prompt_needle_positions[k - 1]
+        for item, k in zip(clean_items, ks, strict=True)
+    ]
+    model = ctx.models["thinking"]
+    clean_output, clean_values = _capture_attention_internals(
+        model, clean_items, ctx.vocab, ctx.device
+    )
+    corrupt_output, _ = _capture_attention_internals(
+        model, corrupt_items, ctx.vocab, ctx.device
+    )
+    assert clean_output.attentions is not None
+    assert clean_output.hidden_states is not None
+    clean_margin = _marker_margin(
+        clean_output.logits, clean_items, ks, target_ids, alternative_ids
+    )
+    corrupt_margin = _marker_margin(
+        corrupt_output.logits, corrupt_items, ks, target_ids, alternative_ids
+    )
+
+    rows: list[dict[str, Any]] = []
+
+    def record(intervention: str, top_n: int, output: Any, layer: int | None = None) -> None:
+        patched_margin = _marker_margin(
+            output.logits, corrupt_items, ks, target_ids, alternative_ids
+        )
+        recovery = _normalized_recovery(clean_margin, corrupt_margin, patched_margin)
+        for index, example in enumerate(selected):
+            rows.append(
+                {
+                    "intervention": intervention,
+                    "top_n": int(top_n),
+                    "heads": ";".join(
+                        f"L{head_layer}H{head}" for head_layer, head in ranking[:top_n]
+                    ),
+                    "residual_layer": layer,
+                    "count": int(example.count or 0),
+                    "count_band": _count_band(int(example.count or 0)),
+                    "k": int(ks[index]),
+                    "clean_margin": clean_margin[index],
+                    "corrupt_margin": corrupt_margin[index],
+                    "patched_margin": patched_margin[index],
+                    "normalized_recovery": recovery[index],
+                    "clean_correct": float(clean_margin[index] > 0),
+                    "corrupt_correct": float(corrupt_margin[index] > 0),
+                    "patched_correct": float(patched_margin[index] > 0),
+                }
+            )
+
+    record("corrupt_baseline", 0, corrupt_output)
+    for top_n in (1, 2):
+        selected_heads = list(ranking[:top_n])
+        with _attention_pattern_value_patch(
+            model,
+            selected_heads,
+            query_positions,
+            source_positions,
+            donor_patterns=clean_output.attentions,
+        ):
+            output = _forward(model, corrupt_items, ctx.vocab, ctx.device)
+        record("attention_pattern_only", top_n, output)
+
+        with _attention_pattern_value_patch(
+            model,
+            selected_heads,
+            query_positions,
+            source_positions,
+            donor_values=clean_values,
+        ):
+            output = _forward(model, corrupt_items, ctx.vocab, ctx.device)
+        record("value_only_at_target_source", top_n, output)
+
+        with _attention_pattern_value_patch(
+            model,
+            selected_heads,
+            query_positions,
+            source_positions,
+            donor_patterns=clean_output.attentions,
+            donor_values=clean_values,
+        ):
+            output = _forward(model, corrupt_items, ctx.vocab, ctx.device)
+        record("pattern_plus_value", top_n, output)
+
+    residual_layer = int(ranking[0][0])
+    clean_residual = torch.stack(
+        [
+            clean_output.hidden_states[residual_layer][row, position]
+            for row, position in enumerate(query_positions)
+        ]
+    )
+    with _residual_patch(model, residual_layer, query_positions, clean_residual):
+        output = _forward(model, corrupt_items, ctx.vocab, ctx.device)
+    record("residual_stream", 0, output, layer=residual_layer)
+    return pd.DataFrame(rows)
+
+
 def _successor_pair(example: V20Example, vocab: V20Vocab, k: int) -> tuple[V20Rendered, V20Rendered]:
     clean_full = render_v20(example, vocab, "thinking")
     assert clean_full.spans is not None
@@ -909,46 +1132,112 @@ def run_geometry(ctx: RunContext, options: PortOptions) -> tuple[pd.DataFrame, p
     coordinate_rows: list[dict[str, Any]] = []
     geometry_rows: list[dict[str, Any]] = []
     centroids: dict[tuple[str, int, int], np.ndarray] = {}
+    phase_table_dir = ctx.run_dir / "analysis" / "phase_transition" / "tables"
+    phase_geometry_path = phase_table_dir / "dense_manifold_geometry.csv"
+    phase_cloud_path = phase_table_dir / "milestone_manifold_cloud_3d.csv"
+    phase_geometry = pd.read_csv(phase_geometry_path) if phase_geometry_path.exists() else pd.DataFrame()
+    phase_cloud = pd.read_csv(phase_cloud_path) if phase_cloud_path.exists() else pd.DataFrame()
     for mode in ("nonthinking", "thinking"):
         part = ctx.run_dir / "analysis" / "checkpoint_dynamics" / "parts" / f"rope_{mode}_step_{ctx.cfg.train_steps:06d}" / "heldout_states.npz"
-        archive = np.load(part)
         sites = ("final_answer",) if mode == "nonthinking" else ("final_answer", "trace_index", "trace_marker")
-        for site in sites:
-            for layer in range(0, 5):
-                values = archive[f"{site}__{layer}__x"].astype(np.float64)
-                labels = archive[f"{site}__{layer}__y"].astype(int)
-                unique = np.unique(labels)
-                means = np.stack([values[labels == label].mean(axis=0) for label in unique])
-                centered = means - means.mean(axis=0, keepdims=True)
-                _, singular, vt = np.linalg.svd(centered, full_matrices=False)
-                coordinates = centered @ vt[:6].T
-                variance = singular**2
-                ratio = variance / max(variance.sum(), 1e-12)
-                displacement = np.diff(means, axis=0)
-                norms = np.linalg.norm(displacement, axis=1)
-                adjacent_cosines = np.sum(displacement[:-1] * displacement[1:], axis=1) / np.maximum(norms[:-1] * norms[1:], 1e-12)
-                chord = float(np.linalg.norm(means[-1] - means[0]))
-                arc = float(norms.sum())
-                geometry_rows.append(
-                    {
-                        "mode": mode,
-                        "site": site,
-                        "layer": layer,
-                        "classes": len(unique),
-                        "pc1_variance": ratio[0],
-                        "pc1_to_pc2_variance": ratio[:2].sum(),
-                        "pc1_to_pc3_variance": ratio[:3].sum(),
-                        "pc1_to_pc6_variance": ratio[:6].sum(),
-                        "effective_dimension": float(1.0 / np.maximum(np.sum(ratio**2), 1e-12)),
-                        "mean_adjacent_distance": float(norms.mean()),
-                        "mean_adjacent_displacement_cosine": float(np.mean(adjacent_cosines)) if len(adjacent_cosines) else math.nan,
-                        "path_straightness_chord_over_arc": chord / max(arc, 1e-12),
-                    }
-                )
-                for label, point in zip(unique, coordinates, strict=True):
-                    row = {"mode": mode, "site": site, "layer": layer, "label": int(label)}
-                    row.update({f"pc{axis + 1}": float(point[axis]) for axis in range(min(6, point.shape[0]))})
-                    coordinate_rows.append(row)
+        if part.exists():
+            archive = np.load(part)
+            for site in sites:
+                for layer in range(0, ctx.cfg.n_layer + 1):
+                    values = archive[f"{site}__{layer}__x"].astype(np.float64)
+                    labels = archive[f"{site}__{layer}__y"].astype(int)
+                    unique = np.unique(labels)
+                    means = np.stack([values[labels == label].mean(axis=0) for label in unique])
+                    centered = means - means.mean(axis=0, keepdims=True)
+                    _, singular, vt = np.linalg.svd(centered, full_matrices=False)
+                    coordinates = centered @ vt[:6].T
+                    variance = singular**2
+                    ratio = variance / max(variance.sum(), 1e-12)
+                    displacement = np.diff(means, axis=0)
+                    norms = np.linalg.norm(displacement, axis=1)
+                    adjacent_cosines = np.sum(displacement[:-1] * displacement[1:], axis=1) / np.maximum(norms[:-1] * norms[1:], 1e-12)
+                    chord = float(np.linalg.norm(means[-1] - means[0]))
+                    arc = float(norms.sum())
+                    geometry_rows.append(
+                        {
+                            "mode": mode,
+                            "site": site,
+                            "layer": layer,
+                            "classes": len(unique),
+                            "pc1_variance": ratio[0],
+                            "pc1_to_pc2_variance": ratio[:2].sum(),
+                            "pc1_to_pc3_variance": ratio[:3].sum(),
+                            "pc1_to_pc6_variance": ratio[:6].sum(),
+                            "effective_dimension": float(1.0 / np.maximum(np.sum(ratio**2), 1e-12)),
+                            "mean_adjacent_distance": float(norms.mean()),
+                            "mean_adjacent_displacement_cosine": float(np.mean(adjacent_cosines)) if len(adjacent_cosines) else math.nan,
+                            "path_straightness_chord_over_arc": chord / max(arc, 1e-12),
+                        }
+                    )
+                    for label, point in zip(unique, coordinates, strict=True):
+                        row = {"mode": mode, "site": site, "layer": layer, "label": int(label)}
+                        row.update({f"pc{axis + 1}": float(point[axis]) for axis in range(min(6, point.shape[0]))})
+                        coordinate_rows.append(row)
+            archive.close()
+            continue
+
+        if phase_geometry.empty or phase_cloud.empty:
+            raise FileNotFoundError(
+                "representation geometry requires either the legacy heldout_states.npz "
+                "or the v20 phase-transition geometry tables"
+            )
+        final_geometry = phase_geometry[
+            (phase_geometry["step"] == ctx.cfg.train_steps)
+            & (phase_geometry["mode"] == mode)
+            & (phase_geometry["site"].isin(sites))
+        ]
+        final_cloud = phase_cloud[
+            (phase_cloud["step"] == ctx.cfg.train_steps)
+            & (phase_cloud["mode"] == mode)
+            & (phase_cloud["site"].isin(sites))
+        ]
+        expected = len(sites) * (ctx.cfg.n_layer + 1)
+        if len(final_geometry) != expected or final_cloud.empty:
+            raise ValueError(
+                f"incomplete phase geometry fallback for {mode}: "
+                f"expected {expected} metric rows and found {len(final_geometry)}"
+            )
+        for value in final_geometry.itertuples(index=False):
+            geometry_rows.append(
+                {
+                    "mode": mode,
+                    "site": value.site,
+                    "layer": int(value.layer),
+                    "classes": int(value.classes),
+                    "pc1_variance": float(value.centroid_pc1_variance_fraction),
+                    "pc1_to_pc2_variance": math.nan,
+                    "pc1_to_pc3_variance": float(value.centroid_pc1_to_pc3_variance_fraction),
+                    "pc1_to_pc6_variance": math.nan,
+                    "effective_dimension": float(value.centroid_effective_dimension),
+                    "mean_adjacent_distance": float(value.mean_adjacent_centroid_distance),
+                    "mean_adjacent_displacement_cosine": float(value.mean_adjacent_step_cosine),
+                    "path_straightness_chord_over_arc": float(value.path_straightness_chord_over_arc),
+                    "adjacent_between_over_within": float(value.adjacent_between_over_within),
+                    "geometry_source": "phase_transition_aggregate_fallback",
+                }
+            )
+        centroids_3d = final_cloud.groupby(["site", "layer", "k"], as_index=False)[["pc1", "pc2", "pc3"]].mean()
+        for value in centroids_3d.itertuples(index=False):
+            coordinate_rows.append(
+                {
+                    "mode": mode,
+                    "site": value.site,
+                    "layer": int(value.layer),
+                    "label": int(value.k),
+                    "pc1": float(value.pc1),
+                    "pc2": float(value.pc2),
+                    "pc3": float(value.pc3),
+                    "pc4": math.nan,
+                    "pc5": math.nan,
+                    "pc6": math.nan,
+                    "geometry_source": "phase_transition_cloud_centroid_fallback",
+                }
+            )
 
     # Train-region final-answer centroids are the only directions used causally.
     train_examples = _balanced(ctx.train_examples, options.centroid_train_per_count)
@@ -1193,7 +1482,17 @@ def run_trace_conflicts_and_bridge(ctx: RunContext) -> tuple[pd.DataFrame, pd.Da
 
 
 def run_state_to_head_routing(ctx: RunContext, targeted_heads: Sequence[Head]) -> pd.DataFrame:
-    """Patch trace-progress residuals before Layer 3 and measure routing redirection."""
+    """Patch trace-progress residuals before the selected retrieval layer."""
+
+    if not targeted_heads:
+        return pd.DataFrame()
+
+    # v10's targeted heads lived in Layer 3, whereas v20's selected retrieval
+    # heads live in Layer 4.  Hard-coding Layer 3 silently produced a zero-row
+    # table.  Use the layer selected on the disjoint head-selection split and
+    # compare only other ranked heads from that same layer.
+    layer = int(targeted_heads[0][0])
+    layer_heads = [(head_layer, head) for head_layer, head in targeted_heads if head_layer == layer][:4]
 
     fixed_total = min(15, ctx.cfg.count_max_threshold)
     examples = [
@@ -1204,7 +1503,6 @@ def run_state_to_head_routing(ctx: RunContext, targeted_heads: Sequence[Head]) -
         ctx.models["thinking"], items, ctx.vocab, ctx.device, output_hidden_states=True, output_attentions=True
     )
     assert output.hidden_states is not None and output.attentions is not None
-    layer = 3
     donor_vectors = []
     receiver_positions = []
     donor_prompt_positions = []
@@ -1227,9 +1525,7 @@ def run_state_to_head_routing(ctx: RunContext, targeted_heads: Sequence[Head]) -
         )
     assert patched.attentions is not None
     rows: list[dict[str, Any]] = []
-    for head_layer, head in targeted_heads[:4]:
-        if head_layer != layer:
-            continue
+    for head_layer, head in layer_heads:
         for row, item in enumerate(items):
             base = output.attentions[layer - 1][row, head, receiver_positions[row]]
             changed = patched.attentions[layer - 1][row, head, receiver_positions[row]]
@@ -1557,6 +1853,9 @@ def run_v10_port_analysis(
     geometry, coordinates, centroids = run_geometry(ctx, options)
     global_ablation, local_ablation = run_head_ablation(ctx, options, rankings)
     retrieval = run_retrieval_patching(ctx, options, rankings["thinking_targeted"])
+    localization_transport = run_localization_transport_patching(
+        ctx, options, rankings["thinking_targeted"]
+    )
     successor, successor_rankings, logit_lens, component_evidence = run_successor_patching(ctx, options)
     feature_concentration, feature_patching = run_successor_mlp_features(ctx, options)
     final_head_transport = run_final_head_transport(ctx, options, rankings)
@@ -1574,6 +1873,7 @@ def run_v10_port_analysis(
         "global_head_ablation.csv": global_ablation,
         "position_local_head_ablation.csv": local_ablation,
         "retrieval_head_patching.csv": retrieval,
+        "retrieval_localization_transport_patching.csv": localization_transport,
         "successor_head_rankings.csv": successor_rankings,
         "successor_head_patching.csv": successor,
         "successor_residual_logit_lens.csv": logit_lens,
@@ -1593,7 +1893,11 @@ def run_v10_port_analysis(
 
     manifest = {
         "analysis": "v10_port_for_v20",
-        "run_id": (ctx.run_dir / "source_run_id.txt").read_text(encoding="utf-8").strip(),
+        "run_id": (
+            (ctx.run_dir / "source_run_id.txt").read_text(encoding="utf-8").strip()
+            if (ctx.run_dir / "source_run_id.txt").exists()
+            else ctx.run_dir.name
+        ),
         "position_encoding": "rope",
         "checkpoint_step": ctx.cfg.train_steps,
         "device": ctx.device,
@@ -1610,6 +1914,7 @@ def run_v10_port_analysis(
             "head rankings use the disjoint head_selection split where available",
             "ablation and cumulative patching report deterministic random-path controls",
             "retrieval corruption swaps one target character for another target character, preserving total count and positions",
+            "pattern-only and value-only retrieval patches use the same clean/corrupt pair; the former changes routing weights and the latter changes only the target-source value vector",
             "trace conflicts preserve sequence length and final-answer position",
             "train-region centroids are fit independently from held-out intervention receivers",
             "same-k early-stop patching keeps the trace query position matched under RoPE",
@@ -1619,4 +1924,10 @@ def run_v10_port_analysis(
     return output_dir
 
 
-__all__ = ["PortOptions", "analysis_crosswalk", "load_context", "run_v10_port_analysis"]
+__all__ = [
+    "PortOptions",
+    "analysis_crosswalk",
+    "load_context",
+    "run_localization_transport_patching",
+    "run_v10_port_analysis",
+]

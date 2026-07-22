@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import random
 from pathlib import Path
 
 import pandas as pd
+import pytest
 import torch
+import synthetic_counting_v20.training as training_module
 
 from synthetic_counting_v20.config import config_from_dict, preset_config as preset_v20
 from synthetic_counting_v20.data import V20Example, V20Vocab, character_token, render_v20
@@ -14,6 +17,7 @@ from synthetic_counting_v20.phase_transition import build_training_token_exposur
 from synthetic_counting_v20.training import (
     DenseSnapshotWriter,
     _copy_if_changed,
+    _write_final_autoregressive_artifacts,
     checkpoint_steps,
     load_dense_snapshot_state,
 )
@@ -94,6 +98,110 @@ def test_shared_initialization_and_sdpa_manual_equivalence():
     fast = model20(ids, mask).logits
     manual = model20(ids, mask, output_attentions=True).logits
     torch.testing.assert_close(fast, manual, rtol=1e-5, atol=1e-6)
+
+
+def test_analysis_attention_intervention_disables_fast_path_and_is_local():
+    cfg = preset_v20("debug", device="cpu")
+    vocab = V20Vocab.build(cfg, "abc xyz\n")
+    model = build_model(cfg, vocab, device="cpu").eval()
+    ids = torch.tensor(
+        [[vocab.token_to_id["<BOS>"], vocab.token_to_id["<CountChar>"]]]
+    )
+    attention = model.layers[0].attention
+    calls = []
+
+    def zero_first_head(_query, _key, value, weights):
+        calls.append(True)
+        patched = weights.clone()
+        patched[:, 0] = 0
+        return value, patched
+
+    baseline = model(ids).logits
+    attention.intervention = zero_first_head
+    try:
+        changed = model(ids).logits
+    finally:
+        attention.intervention = None
+    assert calls == [True]
+    assert not torch.equal(baseline, changed)
+    assert all(layer.attention.intervention is None for layer in model.layers)
+
+
+def test_controlled_count_distribution_is_explicit_and_unambiguous():
+    uniform = preset_v20(
+        "debug",
+        device="cpu",
+        task_occurrence_ratio=1.0,
+        training_count_distribution="uniform",
+    )
+    assert uniform.training_count_distribution == "uniform"
+    assert config_from_dict(uniform.to_dict()) == uniform
+    with pytest.raises(ValueError, match="task_occurrence_ratio=1"):
+        preset_v20(
+            "debug",
+            device="cpu",
+            task_occurrence_ratio=0.5,
+            training_count_distribution="uniform",
+        )
+
+
+def test_uniform_training_batch_draws_targets_before_candidates(monkeypatch):
+    cfg = preset_v20(
+        "debug",
+        device="cpu",
+        batch_size=8,
+        task_occurrence_ratio=1.0,
+        training_count_distribution="uniform",
+    )
+    vocab = V20Vocab.build(cfg, "abc xyz\n")
+    stream = iter([_example(count) for count in (1, 2, 3, 4)] * 20)
+    monkeypatch.setattr(
+        training_module,
+        "make_training_example",
+        lambda *_args, **_kwargs: next(stream),
+    )
+    seed = 9
+    expected_rng = random.Random(seed)
+    expected = [
+        expected_rng.randint(cfg.count_min, cfg.count_max_threshold)
+        for _ in range(cfg.batch_size)
+    ]
+    examples, rendered = training_module._training_batch(
+        cfg,
+        vocab,
+        "abc xyz\n",
+        None,
+        None,
+        "thinking",
+        random.Random(seed),
+    )
+    assert [example.count for example in examples] == expected
+    assert len(rendered) == cfg.batch_size
+
+
+def test_final_ar_storage_keeps_numeric_rows_and_bounds_failure_text(tmp_path):
+    frame = pd.DataFrame(
+        [
+            {
+                "position_encoding": "rope",
+                "mode": "thinking",
+                "row_id": row,
+                "count": 1 + row // 6,
+                "ar_accuracy": 0.0,
+                "generated_tokens": "long trace " * 20,
+            }
+            for row in range(12)
+        ]
+    )
+    _write_final_autoregressive_artifacts(
+        frame, tmp_path, examples_per_count=6
+    )
+    detail = pd.read_csv(tmp_path / "tables/final_autoregressive_detail.csv")
+    failures = pd.read_csv(tmp_path / "tables/final_autoregressive_failures.csv")
+    assert len(detail) == 12
+    assert "generated_tokens" not in detail
+    assert failures.groupby("count").size().eq(5).all()
+    assert failures["generated_tokens"].str.startswith("long trace").all()
 
 
 def test_dense_snapshot_shard_roundtrip(tmp_path):

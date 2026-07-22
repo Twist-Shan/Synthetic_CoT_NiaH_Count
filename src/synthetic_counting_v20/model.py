@@ -52,6 +52,11 @@ class CausalSelfAttention(nn.Module):
         self.use_sdpa = bool(cfg.use_sdpa)
         self.qkv = nn.Linear(cfg.n_embd, 3 * cfg.n_embd)
         self.output = nn.Linear(cfg.n_embd, cfg.n_embd)
+        # Analysis-only callback used by causal mediation experiments.  The
+        # ordinary training path leaves this as ``None`` and therefore retains
+        # SDPA/Flash Attention.  A callback receives (query, key, value,
+        # weights) after softmax and returns replacement (value, weights).
+        self.intervention = None
 
     def forward(
         self,
@@ -67,7 +72,12 @@ class CausalSelfAttention(nn.Module):
         query = _apply_rope(query, base=self.rope_base)
         key = _apply_rope(key, base=self.rope_base)
 
-        fast_path = self.use_sdpa and not output_attentions and head_mask is None
+        fast_path = (
+            self.use_sdpa
+            and not output_attentions
+            and head_mask is None
+            and self.intervention is None
+        )
         if fast_path and (attention_mask is None or bool(attention_mask.bool().all())):
             context = F.scaled_dot_product_attention(
                 query, key, value, dropout_p=0.0, is_causal=True
@@ -89,6 +99,8 @@ class CausalSelfAttention(nn.Module):
                     attention_mask[:, None, None, :].eq(0), torch.finfo(scores.dtype).min
                 )
             weights = torch.softmax(scores.float(), dim=-1).to(query.dtype)
+            if self.intervention is not None:
+                value, weights = self.intervention(query, key, value, weights)
             if head_mask is not None:
                 weights = weights * head_mask[None, :, None, None].to(weights)
             context = weights @ value

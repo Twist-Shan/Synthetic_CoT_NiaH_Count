@@ -18,6 +18,7 @@ ALL_MODEL_VARIANTS = tuple(
 REFERENCE_MODEL_VARIANTS = ("rope/nonthinking", "rope/thinking")
 SUPPORTED_COUNT_TOKENIZATIONS = ("atomic", "digitwise")
 SUPPORTED_VERSIONS = ("v20", "v21")
+SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = ("natural", "uniform")
 
 
 def _float_tag(value: float) -> str:
@@ -44,6 +45,7 @@ class V20Config:
     needle_pool_seed: int | None = None
     count_max_threshold: int = 30
     task_occurrence_ratio: float = 1.0
+    training_count_distribution: str = "natural"
     corpus_train_fraction: float = 0.80
     corpus_validation_fraction: float = 0.10
     candidate_filter_max_attempts: int = 100_000
@@ -180,6 +182,16 @@ class V20Config:
             raise ValueError("count_max_threshold must satisfy 1 <= threshold <= seq_len")
         if not 0.0 <= self.task_occurrence_ratio <= 1.0:
             raise ValueError("task_occurrence_ratio must be in [0, 1]")
+        if self.training_count_distribution not in SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS:
+            raise ValueError(
+                "training_count_distribution must be one of "
+                f"{SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS}"
+            )
+        if self.training_count_distribution != "natural" and self.task_occurrence_ratio != 1.0:
+            raise ValueError(
+                "controlled count distributions require task_occurrence_ratio=1 so the "
+                "requested example distribution is unambiguous"
+            )
         if self.corpus_train_fraction <= 0 or self.corpus_validation_fraction <= 0:
             raise ValueError("corpus train and validation fractions must be positive")
         if self.corpus_train_fraction + self.corpus_validation_fraction >= 1:
@@ -439,6 +451,7 @@ def config_from_dict(values: dict[str, Any]) -> V20Config:
     data.setdefault("query_layout", "query_first")
     data.setdefault("count_tokenization", "atomic" if data.get("version", "v20") == "v20" else "digitwise")
     data.setdefault("use_sdpa", True)
+    data.setdefault("training_count_distribution", "natural")
     if legacy_loss_schedule:
         data["max_steps_for_language_pred"] = int(data["train_steps"])
     cfg = V20Config(**data)
@@ -461,6 +474,7 @@ def default_run_name(cfg: V20Config) -> str:
         f"{cfg.version}_{cfg.preset}_L{cfg.seq_len}_pool{cfg.needle_pool_size}x{cfg.needle_set_size}_"
         f"pf{_float_tag(cfg.needle_pool_frequency_threshold)}_count1-{cfg.count_max_threshold}{rpe_distance_tag}_"
         f"taskr{_float_tag(cfg.task_occurrence_ratio)}_wd{_float_tag(cfg.weight_decay)}_"
+        f"countdist-{cfg.training_count_distribution}_"
         f"fcw{_float_tag(cfg.final_count_loss_weight)}_"
         f"cotw{_float_tag(cfg.cot_trace_loss_weight)}_langsteps{cfg.max_steps_for_language_pred}_"
         f"steps{cfg.train_steps}_snap{cfg.checkpoint_every}_recover{cfg.recovery_every}_"

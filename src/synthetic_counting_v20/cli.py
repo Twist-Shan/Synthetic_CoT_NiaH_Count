@@ -13,7 +13,7 @@ def build_parser(version: str = "v20") -> argparse.ArgumentParser:
     parser.add_argument(
         "--stage",
         default="all",
-        help="all or comma-separated prepare,train,phase,causal,attention,state,plots",
+        help="all or comma-separated prepare,train,phase,causal,extended,attention,state,plots",
     )
     parser.add_argument("--device", default=None)
     parser.add_argument("--seed", type=int, default=None)
@@ -37,8 +37,14 @@ def build_parser(version: str = "v20") -> argparse.ArgumentParser:
     parser.add_argument("--final-count-loss-weight", type=float, default=None)
     parser.add_argument("--cot-trace-loss-weight", type=float, default=None)
     parser.add_argument("--seq-len", type=int, default=None)
+    parser.add_argument("--n-positions", type=int, default=None)
     parser.add_argument("--count-max-threshold", type=int, default=None)
     parser.add_argument("--task-occurrence-ratio", type=float, default=None)
+    parser.add_argument(
+        "--training-count-distribution",
+        choices=("natural", "uniform"),
+        default=None,
+    )
     parser.add_argument("--needle-pool-size", type=int, default=None)
     parser.add_argument("--needle-pool-frequency-threshold", type=float, default=None)
     parser.add_argument("--needle-pool-frequency-bins", type=int, default=None)
@@ -84,8 +90,10 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         "final_count_loss_weight",
         "cot_trace_loss_weight",
         "seq_len",
+        "n_positions",
         "count_max_threshold",
         "task_occurrence_ratio",
+        "training_count_distribution",
         "needle_pool_size",
         "needle_pool_frequency_threshold",
         "needle_pool_frequency_bins",
