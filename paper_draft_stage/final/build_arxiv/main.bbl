@@ -1,0 +1,96 @@
+\begin{thebibliography}{13}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Garcia(2026)]{garcia2026wrong}
+Gabriel Garcia.
+\newblock The right answer, the wrong direction: Why transformers fail at
+  counting and how to fix it, 2026.
+
+\bibitem[Hasani et~al.(2025)Hasani, Izadi, Askari, Bagherian, Mohammadian,
+  Izadi, and Baghshah]{hasani2025counting}
+Hosein Hasani, Amirmohammad Izadi, Fatemeh Askari, Mobin Bagherian, Sadegh
+  Mohammadian, Mohammad Izadi, and Mahdieh~Soleymani Baghshah.
+\newblock Understanding counting mechanisms in large language and
+  vision-language models, 2025.
+
+\bibitem[Hou et~al.(2025)Hou, Brandfonbrener, Kakade, Jelassi, and
+  Malach]{hou2025turing}
+Kaiying Hou, David Brandfonbrener, Sham~M. Kakade, Samy Jelassi, and Eran
+  Malach.
+\newblock Universal length generalization with turing programs.
+\newblock In \emph{Proceedings of the 42nd International Conference on Machine
+  Learning}, volume 267 of \emph{Proceedings of Machine Learning Research},
+  pages 23873--23893, 2025.
+
+\bibitem[Hsieh et~al.(2024)Hsieh, Sun, Kriman, Acharya, Rekesh, Jia, Zhang, and
+  Ginsburg]{hsieh2024ruler}
+Cheng-Ping Hsieh, Simeng Sun, Samuel Kriman, Shantanu Acharya, Dima Rekesh, Fei
+  Jia, Yang Zhang, and Boris Ginsburg.
+\newblock {RULER}: What's the real context size of your long-context language
+  models?, 2024.
+
+\bibitem[Liu et~al.(2024)Liu, Lin, Hewitt, Paranjape, Bevilacqua, Petroni, and
+  Liang]{liu2024lost}
+Nelson~F. Liu, Kevin Lin, John Hewitt, Ashwin Paranjape, Michele Bevilacqua,
+  Fabio Petroni, and Percy Liang.
+\newblock Lost in the middle: How language models use long contexts.
+\newblock \emph{Transactions of the Association for Computational Linguistics},
+  12:\penalty0 157--173, 2024.
+
+\bibitem[Merrill et~al.(2026)Merrill, Li, Romero, Svete, Costello, Dasigi,
+  Groeneveld, Heineman, Kuehl, Lambert, Morrison, Soldaini, Timbers, Walsh,
+  Smith, Hajishirzi, and Sabharwal]{merrill2026olmohybrid}
+William Merrill, Yanhong Li, Tyler Romero, Anej Svete, Caia Costello, Pradeep
+  Dasigi, Dirk Groeneveld, David Heineman, Bailey Kuehl, Nathan Lambert, Jacob
+  Morrison, Luca Soldaini, Finbarr Timbers, Pete Walsh, Noah~A. Smith, Hannaneh
+  Hajishirzi, and Ashish Sabharwal.
+\newblock Olmo hybrid: From theory to practice and back, 2026.
+
+\bibitem[Nye et~al.(2021)Nye, Andreassen, Gur-Ari, Michalewski, Austin, Bieber,
+  Dohan, Lewkowycz, Bosma, Luan, Sutton, and Odena]{nye2021scratchpads}
+Maxwell Nye, Anders~Johan Andreassen, Guy Gur-Ari, Henryk Michalewski, Jacob
+  Austin, David Bieber, David Dohan, Aitor Lewkowycz, Maarten Bosma, David
+  Luan, Charles Sutton, and Augustus Odena.
+\newblock Show your work: Scratchpads for intermediate computation with
+  language models, 2021.
+
+\bibitem[Ouellette et~al.(2023)Ouellette, Pfister, and
+  Jud]{ouellette2023counting}
+Simon Ouellette, Rolf Pfister, and Hansueli Jud.
+\newblock Counting and algorithmic generalization with transformers, 2023.
+
+\bibitem[Pfau et~al.(2024)Pfau, Merrill, and Bowman]{pfau2024dot}
+Jacob Pfau, William Merrill, and Samuel~R. Bowman.
+\newblock Let's think dot by dot: Hidden computation in transformer language
+  models, 2024.
+
+\bibitem[Wei et~al.(2022)Wei, Wang, Schuurmans, Bosma, Ichter, Xia, Chi, Le,
+  and Zhou]{wei2022cot}
+Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Brian Ichter, Fei Xia,
+  Ed~H. Chi, Quoc~V. Le, and Denny Zhou.
+\newblock Chain-of-thought prompting elicits reasoning in large language
+  models.
+\newblock In \emph{Advances in Neural Information Processing Systems},
+  volume~35, pages 24824--24837, 2022.
+
+\bibitem[Yang et~al.(2025)Yang, Li, Yang, Zhang, Hui, Zheng, Yu, Gao,
+  et~al.]{yang2025qwen3}
+An~Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo~Zheng, Bowen
+  Yu, Chang Gao, et~al.
+\newblock {Qwen3} technical report, 2025.
+
+\bibitem[Yehudai et~al.(2024)Yehudai, Kaplan, Ghandeharioun, Geva, and
+  Globerson]{yehudai2024count}
+Gilad Yehudai, Haim Kaplan, Asma Ghandeharioun, Mor Geva, and Amir Globerson.
+\newblock When can transformers count to $n$?, 2024.
+
+\bibitem[Zhang and Nanda(2024)]{zhang2024patching}
+Fred Zhang and Neel Nanda.
+\newblock Towards best practices of activation patching in language models:
+  Metrics and methods, 2024.
+
+\end{thebibliography}

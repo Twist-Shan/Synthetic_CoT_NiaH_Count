@@ -1,0 +1,2553 @@
+[
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "eyebrow"
+    },
+    "text": "Controlled query-order ablation · seed 1234 · RoPE"
+  },
+  {
+    "tag": "h1",
+    "attrs": {},
+    "text": "Query 放在 data 前还是后，如何改变计数学习？"
+  },
+  {
+    "tag": "p",
+    "attrs": {},
+    "text": "v16.2（query-first）与 v16.3（data-first / query-last）的行为、learning dynamics、attention route 与 hidden-state representation 对比。"
+  },
+  {
+    "tag": "p",
+    "attrs": {},
+    "text": "本报告只把证据支持到的层级写成结论；对尚未直接观测的 data→query 聚合明确标记为机制假说。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "wrap"
+    },
+    "text": "Controlled query-order ablation · seed 1234 · RoPEQuery 放在 data 前还是后，如何改变计数学习？v16.2（query-first）与 v16.3（data-first / query-last）的行为、learning dynamics、attention route 与 hidden-state representation 对比。本报告只把证据支持到的层级写成结论；对尚未直接观测的 data→query 聚合明确标记为机制假说。"
+  },
+  {
+    "tag": "h2",
+    "attrs": {},
+    "text": "1. 执行摘要"
+  },
+  {
+    "tag": "p",
+    "attrs": {
+      "class": "lead"
+    },
+    "text": "在同一 seed、相同初始权重、相同数据和相同输出绝对位置下，把 query 从 data 前移动到 data 后，主要改善了 Nonthinking：它更早学会、最终错误更少，并从“答案位置直接广泛扫描 data”转向“答案位置读取紧邻 query”的路由。Thinking 的最终答案已接近天花板，但 trace 生成明显更可靠。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "card"
+    },
+    "text": "+12.0 ppNonthinking final AR gain"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "card"
+    },
+    "text": "+15.8 ppNonthinking final TF gain"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "card orange"
+    },
+    "text": "+17.0 ppThinking trace-exact gain"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "card orange"
+    },
+    "text": "0.963v16.3 NT answer→query mass"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "cards"
+    },
+    "text": "+12.0 ppNonthinking final AR gain+15.8 ppNonthinking final TF gain+17.0 ppThinking trace-exact gain0.963v16.3 NT answer→query mass"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "callout success"
+    },
+    "text": "最重要的机制变化。v16.2 Nonthinking 的 fixed L4H2 对目标 occurrence 的 top-N recall 为 0.842；v16.3 对应最佳 fixed head 只有 0.074。反过来，v16.3 的 L2H2 在答案位置把 96.3% attention 放到五个 query tokens，而 v16.2 最强 answer→query head 为 64.6%。行为提升与 direct-data head 消失同时发生，说明 query-last 不是简单强化旧路线，而是重组了路线。"
+  },
+  {
+    "tag": "h3",
+    "attrs": {},
+    "text": "本节小结：目前结论与证据缺口"
+  },
+  {
+    "tag": "h4",
+    "attrs": {},
+    "text": "目前可以得到的结论"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "Query-last 对 Nonthinking 有大而一致的配对提升；Thinking 的答案提升很小，但 trace exact 大幅改善。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "输出起点始终是 position 262，因此差异不能归因于答案绝对位置变化。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-column supported"
+    },
+    "text": "目前可以得到的结论Query-last 对 Nonthinking 有大而一致的配对提升；Thinking 的答案提升很小，但 trace exact 大幅改善。输出起点始终是 position 262，因此差异不能归因于答案绝对位置变化。"
+  },
+  {
+    "tag": "h4",
+    "attrs": {},
+    "text": "欠缺的证据"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "只有一个训练 seed，尚无跨初始化效应分布。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "尚未直接 probe query-token state 或从 query token 出发的 attention；data→query→answer 目前是受多项间接证据支持的假说。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-column missing"
+    },
+    "text": "欠缺的证据只有一个训练 seed，尚无跨初始化效应分布。尚未直接 probe query-token state 或从 query token 出发的 attention；data→query→answer 目前是受多项间接证据支持的假说。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-grid"
+    },
+    "text": "目前可以得到的结论Query-last 对 Nonthinking 有大而一致的配对提升；Thinking 的答案提升很小，但 trace exact 大幅改善。输出起点始终是 position 262，因此差异不能归因于答案绝对位置变化。 欠缺的证据只有一个训练 seed，尚无跨初始化效应分布。尚未直接 probe query-token state 或从 query token 出发的 attention；data→query→answer 目前是受多项间接证据支持的假说。"
+  },
+  {
+    "tag": "h2",
+    "attrs": {},
+    "text": "2. 实验设定与真正改变的变量"
+  },
+  {
+    "tag": "h3",
+    "attrs": {},
+    "text": "v16.2 · query-first"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "token-block bos"
+    },
+    "text": "BOS0"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "token-block query"
+    },
+    "text": "Query1–5"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "token-block data"
+    },
+    "text": "Data6–261"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "token-block output"
+    },
+    "text": "Output262→"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "sequence-strip"
+    },
+    "text": "BOS0Query1–5Data6–261Output262→"
+  },
+  {
+    "tag": "p",
+    "attrs": {
+      "class": "arrow-note"
+    },
+    "text": "因果方向：query 在 data 之前，所以每个 data token 都可以读取目标字符集合；但最终输出离 query 257–261 个位置。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "layout-card"
+    },
+    "text": "v16.2 · query-firstBOS0Query1–5Data6–261Output262→因果方向：query 在 data 之前，所以每个 data token 都可以读取目标字符集合；但最终输出离 query 257–261 个位置。"
+  },
+  {
+    "tag": "h3",
+    "attrs": {},
+    "text": "v16.3 · query-last"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "token-block bos"
+    },
+    "text": "BOS0"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "token-block data"
+    },
+    "text": "Data1–256"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "token-block query"
+    },
+    "text": "Query257–261"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "token-block output"
+    },
+    "text": "Output262→"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "sequence-strip last"
+    },
+    "text": "BOS0Data1–256Query257–261Output262→"
+  },
+  {
+    "tag": "p",
+    "attrs": {
+      "class": "arrow-note"
+    },
+    "text": "因果方向：data token 看不到未来 query；五个 query tokens 可以回看完整 data，并紧邻输出。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "layout-card"
+    },
+    "text": "v16.3 · query-lastBOS0Data1–256Query257–261Output262→因果方向：data token 看不到未来 query；五个 query tokens 可以回看完整 data，并紧邻输出。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "layout-grid"
+    },
+    "text": "v16.2 · query-firstBOS0Query1–5Data6–261Output262→因果方向：query 在 data 之前，所以每个 data token 都可以读取目标字符集合；但最终输出离 query 257–261 个位置。v16.3 · query-lastBOS0Data1–256Query257–261Output262→因果方向：data token 看不到未来 query；五个 query tokens 可以回看完整 data，并紧邻输出。"
+  },
+  {
+    "tag": "th",
+    "attrs": {},
+    "text": "项目"
+  },
+  {
+    "tag": "th",
+    "attrs": {},
+    "text": "v16.2"
+  },
+  {
+    "tag": "th",
+    "attrs": {},
+    "text": "v16.3"
+  },
+  {
+    "tag": "th",
+    "attrs": {},
+    "text": "可比性解释"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "Sequence layout"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "query → data → output"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "data → query → output"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "唯一有意改变的训练接口"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "Token positions before output"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "query 1–5; data 6–261"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "data 1–256; query 257–261"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "output 均从 position 262 开始"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "Causal visibility"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "每个 data token 可看到 query"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "query token 可看到全部 data"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "计算方向发生反转"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "Query-to-output RoPE distance"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "257–261"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "1–5"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "query-last 大幅缩短 readout 距离"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "Data-to-output RoPE distance"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "1–256"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "6–261"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "data 整体远移 5 个位置"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "Architecture"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "4L × 4H, d=256, MLP=1024"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "4L × 4H, d=256, MLP=1024"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "3,180,800 parameters"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "Training"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "10,000 steps; batch 128; seed 1234"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "相同"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "AdamW, lr=3e-4, wd=0.01"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "Loss schedule"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "step≤1500 all-sequence; later task-output"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "相同"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "输出 token 数与权重相同"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "Data/noise"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "同一 Shakespeare split 与 needle pool"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "语义内容相同"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "split/pool 原始 hash 相同；sampling CSV 仅换行编码不同"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "Initial state"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "step-0 checkpoint"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "51 state entries 全部相等"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "两模式 max |Δ| = 0"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "table-wrap"
+    },
+    "text": "项目v16.2v16.3可比性解释Sequence layoutquery → data → outputdata → query → output唯一有意改变的训练接口Token positions before outputquery 1–5; data 6–261data 1–256; query 257–261output 均从 position 262 开始Causal visibility每个 data token 可看到 queryquery token 可看到全部 data计算方向发生反转Query-to-output RoPE distance257–2611–5query-last 大幅缩短 readout 距离Data-to-output RoPE distance1–2566–261data 整体远移 5 个位置Architecture4L × 4H, d=256, MLP=10244L × 4H, d=256, MLP=10243,180,800 parametersTraining10,000 steps; batch 128; seed 1234相同AdamW, lr=3e-4, wd=0.01Loss schedulestep≤1500 all-sequence; later task-output相同输出 token 数与权重相同Data/noise同一 Shakespeare split 与 needle pool语义内容相同split/pool 原始 hash 相同；sampling CSV 仅换行编码不同Initial statestep-0 checkpoint51 state entries 全部相等两模式 max |Δ| = 0"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "callout warning"
+    },
+    "text": "一次移动同时改变三件事。它反转了 query/data 的因果可见性，把 query-to-output 距离从 257–261 缩短到 1–5，并把全部 data-to-output 距离增加 5。现有两组实验能识别“整个 layout 变更”的效应，却不能把这三部分彼此分离。"
+  },
+  {
+    "tag": "h3",
+    "attrs": {},
+    "text": "本节小结：目前结论与证据缺口"
+  },
+  {
+    "tag": "h4",
+    "attrs": {},
+    "text": "目前可以得到的结论"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "corpus split 与 needle pool 的原始 SHA256 相同；training sampling 与 model specification 在统一换行后内容相同，原始 hash 差异只来自 CRLF/LF。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "两种模式的 step-0 checkpoint 均有 51 个 state entries，跨版本最大绝对差为 0，torch RNG state 也一致。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-column supported"
+    },
+    "text": "目前可以得到的结论corpus split 与 needle pool 的原始 SHA256 相同；training sampling 与 model specification 在统一换行后内容相同，原始 hash 差异只来自 CRLF/LF。两种模式的 step-0 checkpoint 均有 51 个 state entries，跨版本最大绝对差为 0，torch RNG state 也一致。"
+  },
+  {
+    "tag": "h4",
+    "attrs": {},
+    "text": "欠缺的证据"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "需要 padding/copy-query 等额外布局，才能拆分因果可见性、query recency 与 data 距离。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "GPU 训练的单次轨迹仍不能给出跨运行方差。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-column missing"
+    },
+    "text": "欠缺的证据需要 padding/copy-query 等额外布局，才能拆分因果可见性、query recency 与 data 距离。GPU 训练的单次轨迹仍不能给出跨运行方差。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-grid"
+    },
+    "text": "目前可以得到的结论corpus split 与 needle pool 的原始 SHA256 相同；training sampling 与 model specification 在统一换行后内容相同，原始 hash 差异只来自 CRLF/LF。两种模式的 step-0 checkpoint 均有 51 个 state entries，跨版本最大绝对差为 0，torch RNG state 也一致。 欠缺的证据需要 padding/copy-query 等额外布局，才能拆分因果可见性、query recency 与 data 距离。GPU 训练的单次轨迹仍不能给出跨运行方差。"
+  },
+  {
+    "tag": "h2",
+    "attrs": {},
+    "text": "3. 指标、样本配对与新定义"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "definition"
+    },
+    "text": "TF final-count accuracy。给定 gold prefix，在 <Ans> 后预测 count token 是否正确。最终测试每个 mode 有 500 个样本，即每个真实 count 50 个。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "definition"
+    },
+    "text": "AR final-count accuracy。从任务输出起点自行生成完整输出，再检查解析出的最终 count。最终测试每个 mode 有 100 个样本，即每个 count 10 个。TF 与 AR 的 16.2/16.3 行按 mode + row/example id + set_id + count + corpus_start 一一配对。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "definition"
+    },
+    "text": "Paired gain 与区间。对样本 i 定义 di=correct16.3,i−correct16.2,i，报告 Δ=mean(di)。95% 区间通过固定 seed 的 20,000 次样本对 bootstrap 得到；“修复/退化”分别统计 0→1 与 1→0。McNemar exact p 只检验两个方向的 discordant 数是否对称，不替代多 seed 复现。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "definition"
+    },
+    "text": "Accuracy AULC。AULC = ∫ accuracy(step) dstep / 10000，使用 500-step checkpoint 梯形积分；越大表示整个训练过程中更早、更持续地正确。Persistent threshold 是最早一个 checkpoint，使该点及之后所有被测 checkpoint 都不再低于阈值。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "definition"
+    },
+    "text": "Attention route 指标。query mass 是某 head 在指定 query position 的 softmax attention 对五个 query tokens 求和；top-N target recall 是从 256 个 data positions 取 attention 最高的 N 个位置（N 等于真实目标 occurrence 数），其中真实目标位置所占比例；ordered retrieval margin=correct-top1−1/N；trace readout mass 是最终答案 query 对全部 trace index/marker positions 的 attention 总和。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "definition"
+    },
+    "text": "Representation 指标。Ridge probe 在独立 train states 上拟合 count，并在 held-out states 上计算 R²=1−Σ(y−ŷ)²/Σ(y−ȳ)²；nearest-centroid accuracy 把 state 分到最近的十个训练 count centroids。图中的 best-layer 指同一 checkpoint 五个 residual depths 的最大值，只用于描述“信息最早在哪一层可读”，不等于该层被模型因果使用。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "definition"
+    },
+    "text": "Head map 与 centroid geometry。Head map 的每个格子是在 step 10,000、独立 heldout-reporting split 上，固定一个 layer/head 后对样本取均值；不再进行“每个样本挑最强 head”。对 hidden state，先按真实 count n=1…10 求十个 class centroids μn，再对这十个均值做 PCA（mean-first PCA）。若全部 centroid PCs 的方差占比为 rj，定义有效维度 d_eff=1/Σ r_j²；越接近 1 表示 centroid 变化集中在一条主轴，越大表示分散在更多方向。PC1 label R² 是用第一主成分坐标线性拟合 count label 的 R²；PC1–PC6 variance 是前六主成分解释的 centroid 方差总和。三个量只描述几何，不直接衡量模型是否因果使用该 state。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "definition"
+    },
+    "text": "3D centroid-PCA 图。每个 panel 都直接读取最终 checkpoint 保存的 held-out hidden states，按上式计算十个 count centroids，并在该 panel 自己拟合的 PC1/PC2/PC3 上展示；点旁数字是 count，连线按 1→10。因为不同 panel 的 PCA basis 与坐标尺度独立，图只能比较顺序、分离和弯曲结构，不能比较绝对朝向或坐标值。"
+  },
+  {
+    "tag": "h3",
+    "attrs": {},
+    "text": "本节小结：目前结论与证据缺口"
+  },
+  {
+    "tag": "h4",
+    "attrs": {},
+    "text": "目前可以得到的结论"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "最终 TF/AR 是严格的同样本配对比较；训练动态使用两边相同规模的固定 diagnostic suite。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "指标将行为、路由和可解码表征分开，避免用 attention mass 或 probe 单独代替机制。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-column supported"
+    },
+    "text": "目前可以得到的结论最终 TF/AR 是严格的同样本配对比较；训练动态使用两边相同规模的固定 diagnostic suite。指标将行为、路由和可解码表征分开，避免用 attention mass 或 probe 单独代替机制。"
+  },
+  {
+    "tag": "h4",
+    "attrs": {},
+    "text": "欠缺的证据"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "bootstrap 只反映有限测试样本的不确定性，不包含训练 seed 方差。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "best-layer 与 final-head selection 存在选择步骤；attention head 使用独立 head-selection / heldout-reporting split 降低双重使用。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-column missing"
+    },
+    "text": "欠缺的证据bootstrap 只反映有限测试样本的不确定性，不包含训练 seed 方差。best-layer 与 final-head selection 存在选择步骤；attention head 使用独立 head-selection / heldout-reporting split 降低双重使用。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-grid"
+    },
+    "text": "目前可以得到的结论最终 TF/AR 是严格的同样本配对比较；训练动态使用两边相同规模的固定 diagnostic suite。指标将行为、路由和可解码表征分开，避免用 attention mass 或 probe 单独代替机制。 欠缺的证据bootstrap 只反映有限测试样本的不确定性，不包含训练 seed 方差。best-layer 与 final-head selection 存在选择步骤；attention head 使用独立 head-selection / heldout-reporting split 降低双重使用。"
+  },
+  {
+    "tag": "h2",
+    "attrs": {},
+    "text": "4. 最终行为结果：主要收益集中在 Nonthinking"
+  },
+  {
+    "tag": "th",
+    "attrs": {},
+    "text": "模式 / 协议"
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "N"
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "v16.2"
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "v16.3"
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "配对增益"
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "95% paired bootstrap CI"
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "修复 / 退化"
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "McNemar p"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "Nonthinking / TF final count"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "500"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "79.4%"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "95.2%"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "+15.8 pp"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "[+12.4 pp, +19.2 pp]"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "83 / 4"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "3.02e-20"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "Nonthinking / AR final count"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "100"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "84.0%"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "96.0%"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "+12.0 pp"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "[+6.0 pp, +19.0 pp]"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "12 / 0"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.000488"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "Thinking / TF final count"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "500"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "100.0%"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "100.0%"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "+0.0 pp"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "[+0.0 pp, +0.0 pp]"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0 / 0"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "1"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "Thinking / AR final count"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "100"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "98.0%"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "99.0%"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "+1.0 pp"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "[+0.0 pp, +3.0 pp]"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "1 / 0"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "1"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "table-wrap"
+    },
+    "text": "模式 / 协议Nv16.2v16.3配对增益95% paired bootstrap CI修复 / 退化McNemar pNonthinking / TF final count50079.4%95.2%+15.8 pp[+12.4 pp, +19.2 pp]83 / 43.02e-20Nonthinking / AR final count10084.0%96.0%+12.0 pp[+6.0 pp, +19.0 pp]12 / 00.000488Thinking / TF final count500100.0%100.0%+0.0 pp[+0.0 pp, +0.0 pp]0 / 01Thinking / AR final count10098.0%99.0%+1.0 pp[+0.0 pp, +3.0 pp]1 / 01"
+  },
+  {
+    "tag": "h3",
+    "attrs": {},
+    "text": "行为准确率与训练进程"
+  },
+  {
+    "tag": "figcaption",
+    "attrs": {},
+    "text": "图 1。上排横轴是 training step（0–10,000），纵轴是 checkpoint diagnostic suite 的 AR final-count accuracy；黑色虚线为 step 1,500 loss-scope 切换。下排横轴是真实 count n=1…10，纵轴是最终独立 AR suite 中每个 count 的准确率，每个点有 10 个样本。左列 Nonthinking，右列 Thinking；蓝色 query-first，橙色 query-last。注意上排与最终表使用不同固定样本集，因此 v16.2 Nonthinking 在图末为 71%，而最终独立 AR 为 84%，二者不是同一估计量。"
+  },
+  {
+    "tag": "p",
+    "attrs": {},
+    "text": "Nonthinking 的 TF gain 为 +15.8 pp：83 个原错误被修复、4 个样本退化；AR gain 为 +12.0 pp：12 个错误全部被修复且无退化。Thinking TF 已经同为 100%；AR 只有 1 个样本由错变对，因此 +1 pp 不足以单凭单 seed 声称稳定改善。"
+  },
+  {
+    "tag": "h3",
+    "attrs": {},
+    "text": "本节小结：目前结论与证据缺口"
+  },
+  {
+    "tag": "h4",
+    "attrs": {},
+    "text": "目前可以得到的结论"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "Query-last 对 Nonthinking 的最终提升同时出现在 TF 和 AR，并且 AR 的 12 个 discordant 样本方向完全一致。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "Thinking final answer 已处于 98–100% 天花板，layout 对答案正确率的可见增益很小。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-column supported"
+    },
+    "text": "目前可以得到的结论Query-last 对 Nonthinking 的最终提升同时出现在 TF 和 AR，并且 AR 的 12 个 discordant 样本方向完全一致。Thinking final answer 已处于 98–100% 天花板，layout 对答案正确率的可见增益很小。"
+  },
+  {
+    "tag": "h4",
+    "attrs": {},
+    "text": "欠缺的证据"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "每个 count 的 AR 只有 10 个样本，不宜把单个 count 的 10 pp 波动解释为结构特异效应。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "需要更大独立 AR test set 与多 seed，尤其用于 Thinking 的 1 pp 差异。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-column missing"
+    },
+    "text": "欠缺的证据每个 count 的 AR 只有 10 个样本，不宜把单个 count 的 10 pp 波动解释为结构特异效应。需要更大独立 AR test set 与多 seed，尤其用于 Thinking 的 1 pp 差异。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-grid"
+    },
+    "text": "目前可以得到的结论Query-last 对 Nonthinking 的最终提升同时出现在 TF 和 AR，并且 AR 的 12 个 discordant 样本方向完全一致。Thinking final answer 已处于 98–100% 天花板，layout 对答案正确率的可见增益很小。 欠缺的证据每个 count 的 AR 只有 10 个样本，不宜把单个 count 的 10 pp 波动解释为结构特异效应。需要更大独立 AR test set 与多 seed，尤其用于 Thinking 的 1 pp 差异。"
+  },
+  {
+    "tag": "h2",
+    "attrs": {},
+    "text": "5. Learning dynamics 与输出 loss"
+  },
+  {
+    "tag": "th",
+    "attrs": {},
+    "text": "版本 / 模式"
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "diagnostic final"
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "accuracy AULC"
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "persistent 50%"
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "persistent 80%"
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "persistent 90%"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "v16.2 · query-first / Nonthinking"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "71.0%"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.361"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "7500"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "—"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "—"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "v16.3 · query-last / Nonthinking"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "94.0%"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.694"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "3000"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "4500"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "6500"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "v16.2 · query-first / Thinking"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "99.0%"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.624"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "4000"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "6500"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "7000"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "v16.3 · query-last / Thinking"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "99.0%"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.708"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "3000"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "4500"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "5500"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "table-wrap"
+    },
+    "text": "版本 / 模式diagnostic finalaccuracy AULCpersistent 50%persistent 80%persistent 90%v16.2 · query-first / Nonthinking71.0%0.3617500——v16.3 · query-last / Nonthinking94.0%0.694300045006500v16.2 · query-first / Thinking99.0%0.624400065007000v16.3 · query-last / Thinking99.0%0.708300045005500"
+  },
+  {
+    "tag": "h3",
+    "attrs": {},
+    "text": "输出损失、配对效应与 trace 质量"
+  },
+  {
+    "tag": "figcaption",
+    "attrs": {},
+    "text": "图 2。上排横轴是 training step，纵轴是 held-out task suite 中 final-count token 的 example-mean cross-entropy，并使用对数刻度；竖线为 step 1,500。左下横轴区分 Nonthinking/Thinking 与 TF/AR，纵轴是 v16.3−v16.2 的配对 accuracy，误差棒为 20,000 次 paired bootstrap 95% 区间。右下横轴是 Thinking trace 指标，纵轴是最终 100 条 AR 轨迹的均值。这里没有绘制 all-token task loss，因为 step 1,500 后 data/query token 不再属于训练目标，其 CE 上升不能解释为任务退化。"
+  },
+  {
+    "tag": "p",
+    "attrs": {},
+    "text": "在 checkpoint diagnostic suite 中，Nonthinking 的 query-last AULC 从 0.361 提高到 0.694；它的 80% persistent crossing 从 未达到 提前到 4500.0。Thinking 也更早到达高准确率，但最终答案受天花板限制。"
+  },
+  {
+    "tag": "h3",
+    "attrs": {},
+    "text": "本节小结：目前结论与证据缺口"
+  },
+  {
+    "tag": "h4",
+    "attrs": {},
+    "text": "目前可以得到的结论"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "Query-last 不只是最终更准：Nonthinking 的整个训练轨迹左移，AULC 更高、持久阈值更早。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "final-count CE 的下降与准确率提升一致；step 1,500 后 all-token CE 的上升主要是 loss scope 改变造成。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-column supported"
+    },
+    "text": "目前可以得到的结论Query-last 不只是最终更准：Nonthinking 的整个训练轨迹左移，AULC 更高、持久阈值更早。final-count CE 的下降与准确率提升一致；step 1,500 后 all-token CE 的上升主要是 loss scope 改变造成。"
+  },
+  {
+    "tag": "h4",
+    "attrs": {},
+    "text": "欠缺的证据"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "500-step checkpoint 间隔只能把机制 onset 定位到一个区间。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "AULC 仍受这一个 diagnostic suite 与单次训练轨迹影响。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-column missing"
+    },
+    "text": "欠缺的证据500-step checkpoint 间隔只能把机制 onset 定位到一个区间。AULC 仍受这一个 diagnostic suite 与单次训练轨迹影响。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-grid"
+    },
+    "text": "目前可以得到的结论Query-last 不只是最终更准：Nonthinking 的整个训练轨迹左移，AULC 更高、持久阈值更早。final-count CE 的下降与准确率提升一致；step 1,500 后 all-token CE 的上升主要是 loss scope 改变造成。 欠缺的证据500-step checkpoint 间隔只能把机制 onset 定位到一个区间。AULC 仍受这一个 diagnostic suite 与单次训练轨迹影响。"
+  },
+  {
+    "tag": "h2",
+    "attrs": {},
+    "text": "6. Attention route：Nonthinking 从 direct-data 转向 query bottleneck"
+  },
+  {
+    "tag": "th",
+    "attrs": {},
+    "text": "路由角色"
+  },
+  {
+    "tag": "th",
+    "attrs": {},
+    "text": "v16.2 head"
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "v16.2 heldout"
+  },
+  {
+    "tag": "th",
+    "attrs": {},
+    "text": "v16.3 head"
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "v16.3 heldout"
+  },
+  {
+    "tag": "th",
+    "attrs": {},
+    "text": "指标"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "NT direct data coverage"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "L4H2"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.842"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "L1H0"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.074"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "top-N recall"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "NT target enrichment"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "L4H2"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "21.058"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "L1H0"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "1.688"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "needle enrichment"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "NT answer → query"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "L3H0"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.646"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "L2H2"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.963"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "query attention mass"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "Thinking ordered retrieval"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "L4H2"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.467"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "L4H1"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.642"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "top1 − chance"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "Thinking trace readout"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "L2H2"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.873"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "L2H0"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.788"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "trace attention mass"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "table-wrap"
+    },
+    "text": "路由角色v16.2 headv16.2 heldoutv16.3 headv16.3 heldout指标NT direct data coverageL4H20.842L1H00.074top-N recallNT target enrichmentL4H221.058L1H01.688needle enrichmentNT answer → queryL3H00.646L2H20.963query attention massThinking ordered retrievalL4H20.467L4H10.642top1 − chanceThinking trace readoutL2H20.873L2H00.788trace attention mass"
+  },
+  {
+    "tag": "h3",
+    "attrs": {},
+    "text": "固定 heads 的 attention route learning dynamics"
+  },
+  {
+    "tag": "figcaption",
+    "attrs": {},
+    "text": "图 3。四个 panel 的横轴均为 training step，竖线为 loss-scope 切换。左上纵轴是答案 query 的 top-N target-occurrence recall；右上是答案 query 对五个 query tokens 的 attention mass；左下是 Thinking trace index 对正确第 k 个 occurrence 的 top1-minus-chance；右下是 Thinking 最终答案对完整 trace span 的 attention mass。每条曲线先在 step-10,000 head-selection split 选定一个 head，再在独立 heldout-reporting split 的全部 checkpoints 跟踪同一 head，避免逐 checkpoint 挑最大值。"
+  },
+  {
+    "tag": "h3",
+    "attrs": {},
+    "text": "最终 checkpoint 的逐层逐 head attention role map"
+  },
+  {
+    "tag": "figcaption",
+    "attrs": {},
+    "text": "图 4。每一行对应一个版本；每一列对应一种 role。每个 panel 的横轴是 head H0–H3，纵轴是 layer L1–L4，格内数字和颜色都是该 layer/head 在 step 10,000 heldout-reporting split 上的样本均值。第 1 列是答案位置落在五个 query tokens 上的 attention mass（v16.2 表中原字段为 task-prefix mass，v16.3 为 task-query mass，语义相同）；第 2 列是 Nonthinking top-N target-occurrence recall；第 3 列是 Thinking ordered retrieval 的 correct-top1−chance；第 4 列是 Thinking 最终答案对 trace span 的 attention mass。前三个 mass/recall 色标为 0–1；ordered retrieval 色标为 −0.10–0.70。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "callout success"
+    },
+    "text": "Nonthinking 路线重组。v16.2 的 L4H2 最终直接覆盖 84.2% 目标 occurrence，target enrichment=21.058；v16.3 的最佳 fixed direct-data head 只有 7.4% coverage、enrichment=1.688。与此同时，v16.3 L2H2 的答案→query mass 达 96.3%。因此更高准确率不是来自更强的 v16.2-style broad head。"
+  },
+  {
+    "tag": "p",
+    "attrs": {},
+    "text": "逐 head 热图表明这不是单一“最佳 head”造成的错觉：v16.2 有 5 个 heads 的 direct target recall 超过 0.50，而 v16.3 为 0；相反，答案→query mass 超过 0.80 的 heads 从 v16.2 的 0 个变为 v16.3 的 4 个。head identity 本身不应跨 run 硬对齐，但 role 在 4×4 head 集合中的分布发生了清楚变化。"
+  },
+  {
+    "tag": "p",
+    "attrs": {},
+    "text": "Thinking 的 ordered retrieval margin 从 0.467 升到 0.642，而 trace readout mass 从 0.873 降到 0.788。这再次说明 attention mass 不是“贡献大小”的同义词：较小 readout mass 可以与更准确的 trace 和答案共存。"
+  },
+  {
+    "tag": "h3",
+    "attrs": {},
+    "text": "本节小结：目前结论与证据缺口"
+  },
+  {
+    "tag": "h4",
+    "attrs": {},
+    "text": "目前可以得到的结论"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "direct-data 到 answer→query 的变化同时出现在 final-selected 曲线和全 16-head 热图中，不依赖只挑一个极值 head。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "Thinking query-last 的 k-to-k selectivity 更高，尽管最终 trace-readout mass 略低。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-column supported"
+    },
+    "text": "目前可以得到的结论direct-data 到 answer→query 的变化同时出现在 final-selected 曲线和全 16-head 热图中，不依赖只挑一个极值 head。Thinking query-last 的 k-to-k selectivity 更高，尽管最终 trace-readout mass 略低。"
+  },
+  {
+    "tag": "h4",
+    "attrs": {},
+    "text": "欠缺的证据"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "现有表没有测量五个 query tokens 自己如何 attend data，也没有对 query state 做 probe/patch；两跳聚合尚未闭环。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "attention weight 没有分解 V 与 W_O contribution，需要 Q/K/V 与 output patching；head role 也需要多 seed 的 permutation-invariant 对齐。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-column missing"
+    },
+    "text": "欠缺的证据现有表没有测量五个 query tokens 自己如何 attend data，也没有对 query state 做 probe/patch；两跳聚合尚未闭环。attention weight 没有分解 V 与 W_O contribution，需要 Q/K/V 与 output patching；head role 也需要多 seed 的 permutation-invariant 对齐。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-grid"
+    },
+    "text": "目前可以得到的结论direct-data 到 answer→query 的变化同时出现在 final-selected 曲线和全 16-head 热图中，不依赖只挑一个极值 head。Thinking query-last 的 k-to-k selectivity 更高，尽管最终 trace-readout mass 略低。 欠缺的证据现有表没有测量五个 query tokens 自己如何 attend data，也没有对 query state 做 probe/patch；两跳聚合尚未闭环。attention weight 没有分解 V 与 W_O contribution，需要 Q/K/V 与 output patching；head role 也需要多 seed 的 permutation-invariant 对齐。"
+  },
+  {
+    "tag": "h2",
+    "attrs": {},
+    "text": "7. Hidden-state representation：Nonthinking count 更早在 L2 成形"
+  },
+  {
+    "tag": "th",
+    "attrs": {},
+    "text": "位置 / 层"
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "v16.2 R²"
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "v16.2 centroid acc."
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "v16.3 R²"
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "v16.3 centroid acc."
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "NT answer / L2"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.550"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "14.0%"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.978"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "87.3%"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "NT answer / L4"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.957"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "73.3%"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.985"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "95.3%"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "table-wrap"
+    },
+    "text": "位置 / 层v16.2 R²v16.2 centroid acc.v16.3 R²v16.3 centroid acc.NT answer / L20.55014.0%0.97887.3%NT answer / L40.95773.3%0.98595.3%"
+  },
+  {
+    "tag": "h3",
+    "attrs": {},
+    "text": "Count representation 的出现时间与层级位置"
+  },
+  {
+    "tag": "figcaption",
+    "attrs": {},
+    "text": "图 5。上排只看 Nonthinking final-answer state：横轴是 training step，左纵轴是五个 residual depths 中最大的 held-out ridge R²，右纵轴是最大的 nearest-centroid accuracy。下排横轴是 residual depth（Emb 表示 embedding output，L1–L4 表示各层输出），纵轴是 step-10,000 final-answer ridge R²；左为 Nonthinking，右为 Thinking。best-layer 曲线是描述性上界，不应当解释为该层具有因果必要性。"
+  },
+  {
+    "tag": "p",
+    "attrs": {},
+    "text": "v16.2 Nonthinking 在 L2 只有 R²=0.550、centroid accuracy=14.0%，主要到 L4 才达到 R²=0.957。v16.3 在 L2 已达到 R²=0.978、centroid accuracy=87.3%，并在 L4 保持 R²=0.985。这与 L2 答案→query head 的出现相吻合。"
+  },
+  {
+    "tag": "th",
+    "attrs": {},
+    "text": "state / layer"
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "v16.2 PC1 label R²"
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "v16.2 d_eff"
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "v16.2 order violations"
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "v16.3 PC1 label R²"
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "v16.3 d_eff"
+  },
+  {
+    "tag": "th",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "v16.3 order violations"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "NT answer / L2"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.886"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "2.06"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "3"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.994"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "1.50"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "NT answer / L3"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.981"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "1.28"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.549"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "2.63"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "3"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "NT answer / L4"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.708"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "3.01"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "2"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.389"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "5.12"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "3"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "Thinking marker / L3"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.992"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "2.82"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.963"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "5.99"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "2"
+  },
+  {
+    "tag": "td",
+    "attrs": {},
+    "text": "Thinking marker / L4"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.436"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "5.85"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "4"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0.960"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "6.94"
+  },
+  {
+    "tag": "td",
+    "attrs": {
+      "class": "num"
+    },
+    "text": "0"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "table-wrap"
+    },
+    "text": "state / layerv16.2 PC1 label R²v16.2 d_effv16.2 order violationsv16.3 PC1 label R²v16.3 d_effv16.3 order violationsNT answer / L20.8862.0630.9941.500NT answer / L30.9811.2800.5492.633NT answer / L40.7083.0120.3895.123Thinking marker / L30.9922.8200.9635.992Thinking marker / L40.4365.8540.9606.940"
+  },
+  {
+    "tag": "h3",
+    "attrs": {},
+    "text": "逐层 count-centroid geometry 对比"
+  },
+  {
+    "tag": "figcaption",
+    "attrs": {},
+    "text": "图 6。三行分别是 Nonthinking final-answer、Thinking final-answer 与 Thinking trace-marker states；横轴统一为 residual depth L1–L4。左列纵轴是有效维度 d_eff；中列纵轴是 PC1 label R²；右列纵轴是前六个 centroid PCs 的累计解释方差。蓝线为 v16.2，橙线为 v16.3。d_eff 高低没有单调的好坏含义：它只表示十个 count centroids 的变化集中在少数方向还是分散在更多方向；PC1 label R² 衡量第一几何主轴与 count 顺序的一致程度，也不同于使用全部 256 维 state 的 ridge R²。"
+  },
+  {
+    "tag": "p",
+    "attrs": {},
+    "text": "几何量进一步区分了“可读”与“如何组织”。v16.2 的 Nonthinking count 在 L3 最接近一条有序主轴：PC1 label R²=0.981、d_eff=1.28；v16.3 则在 L2 已达到 PC1 label R²=0.994、d_eff=1.50，且 count-order violations 从 v16.2 L2 的 3 个降为 0 个。到 L4，v16.3 的全维 ridge R² 仍高，但 d_eff 升至 5.12、PC1 label R² 降至 0.389；这表示 count 信息被重新分布到多维几何，而不是“信息消失”。"
+  },
+  {
+    "tag": "h3",
+    "attrs": {},
+    "text": "真实 checkpoint hidden states 的 3D mean-first PCA"
+  },
+  {
+    "tag": "figcaption",
+    "attrs": {},
+    "text": "图 7。两行分别是 v16.2 与 v16.3；三列依次为 Nonthinking final-answer L2、Nonthinking final-answer L4、Thinking trace-marker L3。每个点是 held-out states 中一个真实 count（1–10）的 256 维 class centroid，点旁数字即 count，灰线按 1→10 连接。三个坐标轴是对该 panel 十个 centroids 独立拟合的 PC1、PC2、PC3，括号给出各自解释的 centroid 方差比例。因每个 panel 独立定向和缩放，只比较 count 顺序、相邻分离、弯曲与是否形成近一维轨迹；不要比较跨 panel 的绝对坐标或旋转方向。Thinking 选择 trace-marker 而不是 final-answer state，是为了减少 count-dependent answer position 的直接混淆。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "callout warning"
+    },
+    "text": "Thinking 的初始化基线。Thinking final-answer position 随 trace 长度、进而随 count 改变；随机初始化模型的 best-layer R² 已接近 1。因此本报告不把 Thinking answer-state 的高 R² 当作训练后算法证据，而主要使用 AR trace、ordered retrieval 和跨版本差异。要消除位置泄漏，需要固定答案位置或做 position-matched probe。"
+  },
+  {
+    "tag": "h3",
+    "attrs": {},
+    "text": "本节小结：目前结论与证据缺口"
+  },
+  {
+    "tag": "h4",
+    "attrs": {},
+    "text": "目前可以得到的结论"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "Query-last 把 Nonthinking 的高可解码性与近一维有序 centroid geometry 一起提前到 L2；这一点在 probe、几何指标和真实 state 的 3D centroids 中相互一致。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "v16.2 与 v16.3 都不是所有层都保持一条直线：后层会重组几何，因此 full-state ridge R² 与 PC1 geometry 必须分开解读。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-column supported"
+    },
+    "text": "目前可以得到的结论Query-last 把 Nonthinking 的高可解码性与近一维有序 centroid geometry 一起提前到 L2；这一点在 probe、几何指标和真实 state 的 3D centroids 中相互一致。v16.2 与 v16.3 都不是所有层都保持一条直线：后层会重组几何，因此 full-state ridge R² 与 PC1 geometry 必须分开解读。"
+  },
+  {
+    "tag": "h4",
+    "attrs": {},
+    "text": "欠缺的证据"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "线性可解码和 centroid geometry 都不等于模型因果使用；v16.3 尚未完成 centroid steering、state transplant 等与 v16.2 同规格的验证。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "各 3D panel 的 PCA basis 独立，不能做逐坐标对齐；Thinking answer-state 仍受 count-dependent position 混淆，需要固定位置重测。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-column missing"
+    },
+    "text": "欠缺的证据线性可解码和 centroid geometry 都不等于模型因果使用；v16.3 尚未完成 centroid steering、state transplant 等与 v16.2 同规格的验证。各 3D panel 的 PCA basis 独立，不能做逐坐标对齐；Thinking answer-state 仍受 count-dependent position 混淆，需要固定位置重测。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-grid"
+    },
+    "text": "目前可以得到的结论Query-last 把 Nonthinking 的高可解码性与近一维有序 centroid geometry 一起提前到 L2；这一点在 probe、几何指标和真实 state 的 3D centroids 中相互一致。v16.2 与 v16.3 都不是所有层都保持一条直线：后层会重组几何，因此 full-state ridge R² 与 PC1 geometry 必须分开解读。 欠缺的证据线性可解码和 centroid geometry 都不等于模型因果使用；v16.3 尚未完成 centroid steering、state transplant 等与 v16.2 同规格的验证。各 3D panel 的 PCA basis 独立，不能做逐坐标对齐；Thinking answer-state 仍受 count-dependent position 混淆，需要固定位置重测。"
+  },
+  {
+    "tag": "h2",
+    "attrs": {},
+    "text": "8. Thinking trace：答案近饱和，但轨迹更稳定"
+  },
+  {
+    "tag": "p",
+    "attrs": {},
+    "text": "最终独立 AR suite 中，trace exact 从 81.0% 升到 98.0%，marker recall 从 93.8% 升到 99.1%；最终答案则只从 98.0% 升到 99.0%。这说明 query-last 对 Thinking 的主要可见收益是减少中间 trace 错误，而不是突破已经饱和的 final count。"
+  },
+  {
+    "tag": "p",
+    "attrs": {},
+    "text": "删除最后一个 index/marker pair 的 counterfactual 在两边都把 L4 ridge count prediction 约降低 1：v16.2 为 -1.016，v16.3 为 -0.970；gold-vs-(n−1) logit margin 分别变化 -22.91 与 -22.46。因此两种 layout 都继续使用 trace span/边界来形成最终 count readout。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "callout warning"
+    },
+    "text": "counterfactual 的解释边界。remove-final-pair 同时缩短 trace、移动后续相对位置并删除 token identity；它能证明输出依赖这段结构，但不能单独证明“最后 marker state 携带 scalar count”。"
+  },
+  {
+    "tag": "h3",
+    "attrs": {},
+    "text": "本节小结：目前结论与证据缺口"
+  },
+  {
+    "tag": "h4",
+    "attrs": {},
+    "text": "目前可以得到的结论"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "Query-last 显著提高 Thinking trace exact 与 marker recall，并提高 ordered k-to-k selectivity。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "两种 layout 对 trace 缩短都表现出约 −1 的内部 count shift，说明核心 span-sensitive readout 仍保留。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-column supported"
+    },
+    "text": "目前可以得到的结论Query-last 显著提高 Thinking trace exact 与 marker recall，并提高 ordered k-to-k selectivity。两种 layout 对 trace 缩短都表现出约 −1 的内部 count shift，说明核心 span-sensitive readout 仍保留。"
+  },
+  {
+    "tag": "h4",
+    "attrs": {},
+    "text": "欠缺的证据"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "Thinking final answer 有天花板效应，需要更难 count range 或更长序列才能比较最终能力。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "v16.3 还没有完成与 v16.2 相同的 head ablation、clean-to-corrupt patch 和 residual steering 全套 causal battery。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-column missing"
+    },
+    "text": "欠缺的证据Thinking final answer 有天花板效应，需要更难 count range 或更长序列才能比较最终能力。v16.3 还没有完成与 v16.2 相同的 head ablation、clean-to-corrupt patch 和 residual steering 全套 causal battery。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-grid"
+    },
+    "text": "目前可以得到的结论Query-last 显著提高 Thinking trace exact 与 marker recall，并提高 ordered k-to-k selectivity。两种 layout 对 trace 缩短都表现出约 −1 的内部 count shift，说明核心 span-sensitive readout 仍保留。 欠缺的证据Thinking final answer 有天花板效应，需要更难 count range 或更长序列才能比较最终能力。v16.3 还没有完成与 v16.2 相同的 head ablation、clean-to-corrupt patch 和 residual steering 全套 causal battery。"
+  },
+  {
+    "tag": "h2",
+    "attrs": {},
+    "text": "9. 机制综合：为什么 query-last 尤其帮助 Nonthinking？"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "node"
+    },
+    "text": "v16.2 data tokens已知 query，可在线写入 target-specific features"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "edge"
+    },
+    "text": "→"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "node"
+    },
+    "text": "L4 broad head答案位置直接扫描目标 occurrence"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "edge"
+    },
+    "text": "→"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "node"
+    },
+    "text": "L4 count state较晚出现，AR 较慢"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "mechanism"
+    },
+    "text": "v16.2 data tokens已知 query，可在线写入 target-specific features→L4 broad head答案位置直接扫描目标 occurrence→L4 count state较晚出现，AR 较慢"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "node"
+    },
+    "text": "v16.3 data tokens不知道未来 query"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "edge"
+    },
+    "text": "→"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "node hypothesis"
+    },
+    "text": "Query-token aggregator（假说）query 回看 data 并压缩所需统计量"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "edge"
+    },
+    "text": "→"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "node"
+    },
+    "text": "L2 answer→query route96.3% query mass，早期 count state"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "mechanism"
+    },
+    "text": "v16.3 data tokens不知道未来 query→Query-token aggregator（假说）query 回看 data 并压缩所需统计量→L2 answer→query route96.3% query mass，早期 count state"
+  },
+  {
+    "tag": "p",
+    "attrs": {},
+    "text": "数据最支持的解释是“把一个困难的长距离直接 readout，改造成靠近输出的 bottleneck”。v16.3 的 query tokens 位于 data 之后，理论上可以针对自身字符回看完整窗口；答案随后只需从最近的五个 query tokens 读取汇总。这个解释同时预测：direct broad head 变弱、query mass 变强、count representation 提前、Nonthinking 学得更快——四项都被观察到。"
+  },
+  {
+    "tag": "p",
+    "attrs": {},
+    "text": "但中间的 Query-token aggregator 仍是虚线：目前没有直接从 query positions 提取 hidden states、attention maps 或做 patch。其他可能解释包括单纯的 RoPE recency 优势、五个 query token 作为短期 key/value cache，或 data 整体平移五位引起的优化变化。"
+  },
+  {
+    "tag": "h3",
+    "attrs": {},
+    "text": "本节小结：目前结论与证据缺口"
+  },
+  {
+    "tag": "h4",
+    "attrs": {},
+    "text": "目前可以得到的结论"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "四个相互独立的观测——行为、学习速度、fixed-head route、L2 state——共同支持 query bottleneck 解释。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "v16.3 不是把 v16.2 direct broad aggregation 做得更强，而是以不同路线达到更好结果。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-column supported"
+    },
+    "text": "目前可以得到的结论四个相互独立的观测——行为、学习速度、fixed-head route、L2 state——共同支持 query bottleneck 解释。v16.3 不是把 v16.2 direct broad aggregation 做得更强，而是以不同路线达到更好结果。"
+  },
+  {
+    "tag": "h4",
+    "attrs": {},
+    "text": "欠缺的证据"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "没有 query-site probe/patch，因此不能把 data→query 这一步写成已证实机制。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "当前二点对比无法区分 causal visibility reversal、query recency 和 RoPE distance 三个子因素。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-column missing"
+    },
+    "text": "欠缺的证据没有 query-site probe/patch，因此不能把 data→query 这一步写成已证实机制。当前二点对比无法区分 causal visibility reversal、query recency 和 RoPE distance 三个子因素。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-grid"
+    },
+    "text": "目前可以得到的结论四个相互独立的观测——行为、学习速度、fixed-head route、L2 state——共同支持 query bottleneck 解释。v16.3 不是把 v16.2 direct broad aggregation 做得更强，而是以不同路线达到更好结果。 欠缺的证据没有 query-site probe/patch，因此不能把 data→query 这一步写成已证实机制。当前二点对比无法区分 causal visibility reversal、query recency 和 RoPE distance 三个子因素。"
+  },
+  {
+    "tag": "h2",
+    "attrs": {},
+    "text": "10. 证据边界与下一组最有信息量的实验"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "至少 5 个 seeds。重复最终 TF/AR、AULC、final-selected head roles 与 L2/L4 state onset；head 比较应使用 permutation-invariant role/subspace 指标。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "直接测 query bottleneck。在 v16.3 的 <CountChar> 与三个字符 token 位置收集 attention/state，测试是否能分别解码三字符 occurrence count 与总 count；再做 query-state transplant 和 data→query head patch。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "拆分三个 layout 因素。增加 beginning+end 双 query、query-last 但用 padding 固定 RoPE 距离、query-first 加末端 query copy、data 平移但 query 不变等控制。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "补齐 v16.3 causal battery。复现 v16.2 的 query-local head ablation、Q/K/V patch、residual centroid steering、early-stop 与 head↔state 双向干预。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "提高 Thinking 难度。扩大 count range、窗口长度或 noise，使 final answer 不再 98–100% 饱和，才能比较最终能力而不只比较 trace 稳定性。"
+  },
+  {
+    "tag": "h3",
+    "attrs": {},
+    "text": "本节小结：目前结论与证据缺口"
+  },
+  {
+    "tag": "h4",
+    "attrs": {},
+    "text": "目前可以得到的结论"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "现有结果足以把“整体 query-order layout”识别为这个 matched seed 中的有效干预。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "报告已把直接观测、统计配对、机制推断和未验证中介分开。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-column supported"
+    },
+    "text": "目前可以得到的结论现有结果足以把“整体 query-order layout”识别为这个 matched seed 中的有效干预。报告已把直接观测、统计配对、机制推断和未验证中介分开。"
+  },
+  {
+    "tag": "h4",
+    "attrs": {},
+    "text": "欠缺的证据"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "尚不能给出跨训练随机性的平均处理效应。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "尚不能把 layout 总效应归因到某一个相对距离、位置或可见性因素。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-column missing"
+    },
+    "text": "欠缺的证据尚不能给出跨训练随机性的平均处理效应。尚不能把 layout 总效应归因到某一个相对距离、位置或可见性因素。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-grid"
+    },
+    "text": "目前可以得到的结论现有结果足以把“整体 query-order layout”识别为这个 matched seed 中的有效干预。报告已把直接观测、统计配对、机制推断和未验证中介分开。 欠缺的证据尚不能给出跨训练随机性的平均处理效应。尚不能把 layout 总效应归因到某一个相对距离、位置或可见性因素。"
+  },
+  {
+    "tag": "h2",
+    "attrs": {},
+    "text": "11. 产物、分析协议与复现"
+  },
+  {
+    "tag": "p",
+    "attrs": {},
+    "text": "报告由 scripts/build_v16_2_v16_3_comparison_report.py 从两个 run 的原始 CSV 与 step-0 checkpoints 重建。所有图嵌入 HTML，同时保存独立 PNG；全部派生表位于 analysis/v16_2_vs_v16_3/tables/。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "setting_and_identity_audit.csv：数据、模型规格与初始化审计。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "paired_final_behavior.csv：配对效应、bootstrap CI 与 McNemar 统计。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "checkpoint_learning_summary.csv：AULC 与 persistent crossings。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "attention_route_summary.csv：final-selected fixed-head 路由。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "attention_head_maps.csv：最终 4×4 heads 的四种 attention role。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "representation_summary.csv：逐层 final answer state probe。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "representation_geometry_final.csv：最终逐层 centroid geometry。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "hidden_state_centroid_pca.csv：3D 图的真实 state centroid 坐标与方差。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "manifest.json：输入与输出 SHA256。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "callout"
+    },
+    "text": "分析 provenance 差异。v16.2 checkpoint-dynamics manifest 设置 reuse_unaffected_legacy_artifacts=true，v16.3 为 false。两边的 checkpoint inventory、样本预算与共同表字段一致；本报告只比较共同定义，并对最终行为直接使用严格配对样本。若要做发表级复现，建议用当前统一代码对两边都 force 重算一次。"
+  },
+  {
+    "tag": "h3",
+    "attrs": {},
+    "text": "本节小结：目前结论与证据缺口"
+  },
+  {
+    "tag": "h4",
+    "attrs": {},
+    "text": "目前可以得到的结论"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "输入身份、step-0 tensor equality、样本配对和派生表均有机器可读审计。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "HTML 自包含图像，不依赖本机绝对图片路径。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-column supported"
+    },
+    "text": "目前可以得到的结论输入身份、step-0 tensor equality、样本配对和派生表均有机器可读审计。HTML 自包含图像，不依赖本机绝对图片路径。"
+  },
+  {
+    "tag": "h4",
+    "attrs": {},
+    "text": "欠缺的证据"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "尚未在第二台机器或冻结容器中执行完整重建。"
+  },
+  {
+    "tag": "li",
+    "attrs": {},
+    "text": "v16.2/v16.3 checkpoint dynamics 的缓存开关不同，发表前应统一强制重算。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-column missing"
+    },
+    "text": "欠缺的证据尚未在第二台机器或冻结容器中执行完整重建。v16.2/v16.3 checkpoint dynamics 的缓存开关不同，发表前应统一强制重算。"
+  },
+  {
+    "tag": "div",
+    "attrs": {
+      "class": "section-evidence-grid"
+    },
+    "text": "目前可以得到的结论输入身份、step-0 tensor equality、样本配对和派生表均有机器可读审计。HTML 自包含图像，不依赖本机绝对图片路径。 欠缺的证据尚未在第二台机器或冻结容器中执行完整重建。v16.2/v16.3 checkpoint dynamics 的缓存开关不同，发表前应统一强制重算。"
+  }
+]

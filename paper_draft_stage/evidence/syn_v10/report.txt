@@ -1,0 +1,3204 @@
+[H1] Trace Count v10：Count-30 分层学习动态与因果机制
+[P] 比较两个独立 Transformer 的直接计数与显式 CoT 检索路径，并把所有 head ablation、head-output patching、geometry steering 与 residual transplant 按 count 1–10、11–20、21–30 重新分析。
+[P] Run: v10_main_seed1234_20260712_172332 · seed 1234 · self-contained HTML · figures embedded as data URIs
+[LI] 研究对象与机制假设
+[LI] 数据、模型与 sequence
+[LI] 术语、指标与公式
+[LI] 学习动态
+[LI] 描述性 attention
+[LI] 描述性 hidden state
+[LI] Attention-head ablation
+[LI] Attention-head patching
+[LI] Hidden-state geometry steering
+[LI] Hidden-state patching
+[LI] Head 与 hidden state 的因果联系
+[LI] 综合结论与边界
+[H2] 1. 研究对象、目标与证据更新后的两个工作机制
+[P] 两个独立模型看到同一类 256-token prompt、同一套 marker tokens 和同一套 count tokens，模型规模完全相同；差别只在于被要求生成什么输出序列。Non-thinking 模型把 prompt 直接压缩成一个 count。CoT 模型则先生成逐项 indexed trace，再回答同一个 count。最初我们把它们分别假设为“并行集合聚合”和“逐项检索循环”；经过第 5–11 节的描述、ablation、clean-to-corrupt patch、MLP feature patch、geometry steering 与 residual transplant 后，现在可以把若干箭头升级为工作机制，同时保留尚未闭合的桥接。
+[H3] 工作机制 A · Non-thinking：broad set routing 写入后层 count state
+[P] 已支持：最终 <Ans> query 的 Layer-1 broad heads 并行覆盖多个 prompt needles。Position-local ablation 使 final accuracy 大幅下降；donor broad slices 能运输部分 count；mask broad group 又会同步破坏末层 count geometry 与输出。Layer-4 natural residual/centroid transplant 最终可以一比一搬运 donor count。
+[P] 当前解释：早期 attention 负责收集集合证据；held-out post-GELU feature patch 进一步证明低/中 count 的一部分 MLP features 能按 donor offset 运输数值，再由 residual/后层离散化为 30 个 count logits。高 count 的 state 成形更晚，且局部 centroid path 有效而全局直线 +1 轴不成立。
+[P] 仍缺：还没有一套跨 1–30 与跨层通用的稀疏 feature basis；高 count 的 sparse transport 较弱，也没有证据表明后期 count state 会反向控制早期 broad routing。
+[H3] 工作机制 B · CoT：targeted retrieval/progress loop，加上独立 final count state
+[P] 已支持的 trace loop：数字 <k> 的 targeted multi-head bundle 定位第 k 个 prompt needle并写出 M_k；marker 后 residual 保存可执行 progress/termination state；Layer-3 MLP 转换 routed evidence，Layer-4 的分布式 feature 子空间把它写成 <k+1> 或 </Think> logit。Progress transplant 还能反向改变下一步 targeted routing，形成当前最清楚的局部双向因果耦合。
+[P] 必须分开的 final state：最后一个 marker residual 能改变继续/关闭，却不能独立运输最终 scalar count。Source-conflict 显示最终答案跟 trace pair 数/extent，而非 prompt count、marker identity 或最后 trace 数字；clean Layer-1 MLP output 与 post-MLP residual 已能把 donor scalar 写入 conflict receiver。
+[P] 仍缺：trace pair 数每变化 1，<Ans> 绝对位置也变化 2。由于模型使用 learned absolute positions，当前实验还不能区分真正的 trace-length aggregation 与 position lookup；固定少数 trace-readout heads 也不足以解释这座桥。
+[H3] 互动机制图：同一个 prompt，两种证据更新后的工作模型
+[P] 实线步骤已有必要性或局部充分性实验支持；虚线桥接表示当前仍未定位完整 circuit。切换模式并逐步播放，可查看每一步读取什么、写入什么，以及证据边界。
+[FIGCAPTION] 实线表示已有多类因果证据共同支持的主路径，不表示由单一 head 独立完成；灰色虚线表示当前仍缺完整路径分解。Non-thinking 的 count state 是后层才完全可执行的前馈状态。CoT 的 trace progress state 能控制 retrieval/successor，但不等于最终 scalar-count state；从完整 trace/context 到 final state 的压缩 circuit 仍是开放问题。
+[H3] 两种工作机制的证据对账
+[TH] 机制问题
+[TH] Non-thinking：direct aggregation
+[TH] Thinking：retrieval/progress loop
+[TD] 已支持的主要路由
+[TD] Layer-1 broad-head bundle 在 并行访问 needle set，并把集合证据写入后续 count residual。
+[TD] progress residual 控制数字 的 targeted multi-head routing；retrieved marker 再进入 successor/close 更新。
+[TD] head-level 因果状态
+[TD] Broad top-n local ablation 破坏 final count；donor broad slices 可运输部分 count，且 head mask 同步破坏 count geometry 与输出。
+[TD] Targeted top-2/top-4 clean patch 恢复 M_k；successor bundle 双向运输 continue/close evidence；单头均可替代。
+[TD] hidden-state 因果状态
+[TD] Final count state 随 Layer 逐步成形；Layer-4 natural residual/centroid 对 donor count 近一比一充分。
+[TD] Trace marker residual 是 progress/termination state；final residual 是另一种 scalar-count state，二者不能互换。
+[TD] 最清楚的双向联系
+[TD] 未观察到对称反馈；更符合 broad heads → count state → logits 的前馈链。
+[TD] Targeted heads → marker-identity state，且 progress state → 下一步 targeted routing；这是当前最强的局部双向耦合。
+[TD] 仍未定位的桥接
+[TD] 低/中 count 已定位可运输 donor offset 的 post-GELU feature 子集；高 count 仍缺跨层、跨 1–30 通用的稀疏算术 basis。
+[TD] 最终答案行为跟 trace pair 数/extent，Layer-1 MLP output 可运输 donor scalar；但 trace extent 与 绝对位置仍共变。
+[TD] 被当前结果排除的纯版本
+[TD] 不支持一根跨 1–30 恒定的全局 +1 轴，也不支持后期 count state 反向重建早期 broad routing。
+[TD] 不支持唯一 retrieval head、final marker=scalar count register，或一组固定 readout heads 独立写出最终 count。
+[H2] 2. 模型、数据生成、训练目标与 sequence
+[TH] 项目
+[TH] 严格设置
+[TD] 研究对象
+[TD] 两个独立随机初始化、参数规模相同的 decoder-only GPT-2；分别训练 non-thinking 与 explicit-CoT，不共享参数。
+[TD] 模型
+[TD] 4 Layers × 4 heads，d_model=256，MLP=1024，learned absolute position embeddings，context=384。
+[TD] 数据
+[TD] prompt 固定 256 tokens；64 类 noise；每例从 10 类 marker 有放回采样 1–30 个 needle，位置均匀无放回；三个区间各含十个平衡 exact-count 类。
+[TD] non-thinking sequence
+[TD] prompt[256] ；只监督最终 count 与 EOS。
+[TD] CoT sequence
+[TD] prompt[256] <1> M1 ... Mn ；trace index 与答案共享同一套 number tokens。
+[TD] 训练
+[TD] 每个模型 10000 steps；batch=128；AdamW lr=0.0003；warmup=500；weight decay=0.01；seed=1234。
+[TD] 正式 ablation
+[TD] 每个 exact count 8 个新 prompts，共 240 个；16 个单头；top-1 至 top-16；与固定随机删除路径、逐步随机均值、min–max 和 random-4 mean 比较。
+[TD] 分层原则
+[TD] 所有 bin 统计直接从 gold/receiver count 属于该区间的逐样本行重新计算；all-count 不是三个区间均值的均值。
+[H2] 3. 新术语、数据列与计算公式
+[P] 本节固定后文所有图表和表格的计算口径。先定义单个 attention row，再定义跨 query/head 的汇总 score，最后定义输出与因果干预指标。除非特别注明，Layer 和 head 在数据表中使用 0-based 编号；报告标题显示 Layer 1–4。
+[H3] 3.1 Attention 记号、query 位置与 token 集合
+[H4] 单头 causal attention
+[P] 这里 q 是 query 位置，j≤q 是 causal mask 允许访问的 key 位置。因此每一行满足 Aqj≥0 且 ∑j≤qAqj=1；下文的 attention mass 都直接对这一概率行求和。
+[H4] 任意 token 类别的 attention mass
+[P] 例如 prompt_noise_mass 是 M(U|q)，bos_mass 是 Aq,BOS。类别 mass 只描述 attention 权重放在哪里，不直接等于该位置对输出的因果贡献。
+[H3] 3.2 本报告使用的 attention-head scores
+[P] 该 head 投向全部 prompt needle 位置的总 attention mass。只测“看了多少 needle”，不测是否均匀。
+[P] 条件在“attention 已落入 needle 子集”后，分布覆盖多个 needles 的均匀程度。n≤1 或 needle mass=0 时定义为 0。
+[P] 同时奖励“总 mass 在 needles 上”与“在多个 needles 间广泛分布”；范围 [0,1]，用于 direct_broad head 排名。
+[P] 从数字 query <k> 到 prompt 中按位置排序的第 k 个 needle 的 raw mass；这是 targeted_retrieval 排名真正使用的 score。
+[P] 只在 prompt needle 子集内判断最大 attention 是否落在 matching needle；不要求它是整个上下文的 top-1。
+[P] 条件在“投向 needle 的 mass”内部，有多大比例给了 matching needle。它可以接近 1，但 raw k-to-k mass 仍很低。
+[P] 最终答案 query 投向全部 trace marker tokens M1…Mn 的总 mass；不包括 trace 数字 tokens，用于 trace_readout head 排名。
+[P] 当前 marker query 对下一 prompt needle 的 raw mass；用于寻找可能参与 successor/next-retrieval 准备的 heads。
+[H3] 3.3 Logit、候选集合、margin 与概率
+[H4] Logit 与候选集合内的 softmax
+[P] zq,t 是 query 位置 q 对“下一 token 为 t”给出的未归一化分数。候选集合 C 由指标指定；改变 C 会改变概率与 margin 的解释。
+[H4] Target logit margin
+[P] margin>0 表示正确 token 胜过候选集合内所有竞争者；margin=0 是并列；margin<0 表示至少一个竞争者更高。它测相对证据强度，不是概率，也不自动等于 full-vocabulary accuracy。
+[H4] Expected count
+[P] 先把 logits 限制到 30 个 number tokens 并重新归一化。E[C] 是 logits 分布的连续位置，不保证是整数，也不是一次实际生成的 token。
+[H3] 3.4 Accuracy 与 sequence-level 指标
+[TH] 指标
+[TH] 平均单位
+[TH] 严格定义
+[TH] 阅读注意
+[TD] TF final-count accuracy
+[TD] 每个 example
+[TD] 给定完整 gold prefix，在 logits 中只取 30 个 number tokens 的 argmax；等于 gold count 记 1。
+[TD] CoT 的 gold trace 已给定，所以它测 final readout，不是端到端生成。
+[TD] TF trace-marker accuracy
+[TD] 每个 trace marker query
+[TD] 在数字 位置，用全词表 argmax 预测下一 token；恰为 gold M_k 记 1，再对全部 k queries 求平均。
+[TD] 高 count example 有更多 k，因此汇总值是 query-weighted。
+[TD] TF trace-index accuracy
+[TD] 每个 trace index query
+[TD] 在 或前一个 M_{k−1} 位置，用全词表 argmax 预测下一数字 k；正确记 1。
+[TD] 它测 successor/index emission，不测 matching needle retrieval。
+[TD] AR final-count accuracy
+[TD] 每个 example
+[TD] 只给 prompt 与格式起点，模型自由生成后续 token；解析最终 number token，等于 gold count 记 1。
+[TD] 会累积早期 trace 错误，是端到端指标。
+[TD] trace exact match
+[TD] 每个 CoT example
+[TD] 自由生成的完整 index-marker trace 与 gold trace 的 token 序列完全相同才记 1。
+[TD] 比 marker recall 更严格，任意一步错误都会使该例为 0。
+[H3] 3.5 Ablation、patching、steering 与 geometry 指标
+[P] >0 表示 mask 使性能下降；=0 表示该指标无变化；<0 表示干预后反而改善。
+[P] 0=没有恢复，1=恢复到 clean margin，>1=过度恢复，<0=比 corrupt 更差；分母近 0 时记 NaN。先逐 pair 计算，再平均。
+[P] 连续地测 logits 分布移动，比只看 argmax 是否翻转更敏感。
+[P] 用 OLS 拟合。b≈1 表示 donor state 一比一搬运 count；b≈0 表示输出不随 donor offset；负值表示反向移动。
+[P] 用 OLS 拟合。g 是每单位 alpha 的输出移动量；R² 是该剂量反应被直线解释的比例。理想统一 +1 轴应有 g≈1 且 R²≈1。
+[P] λ_r 是 exact-count centroid 矩阵第 r 个主成分的方差；这里只描述 count 类均值之间的几何。
+[P] participation ratio；接近 1 表示方差集中在一轴，越大表示 count-centroid geometry 越分散。
+[H4] Residual 与 count centroid
+[P] h 表示 query token 经过 Layer ℓ 后的 residual-stream 向量，μ 是独立样本上同一 exact count 的均值。Residual transplant 替换完整 h 或 μ 后只运行剩余 Layers；它不是统计学“预测残差”。
+[H4] Adjacent-count steering direction
+[P] 若 count manifold 弯曲，不同 δc 会不平行，单一方向 d 即使可读也未必能稳定 steering。
+[H2] 4. 学习动态：不同 count 区间何时达到 99%
+[P] 本节先把三条 accuracy 曲线的条件固定下来，再比较学习速度。v10 的 gold count 是 1–30；没有 count=0 样本。所有“区间 accuracy”都先在每个 exact count 内求准确率，再对区间包含的十个（或全范围三十个）exact counts 等权平均，因此不会让某个 count 因样本数较多而占更大权重。
+[P] 输入什么：给定完整正确前缀。Non-thinking 直接给到 <Ans>；thinking 还会给定完整正确的 indexed trace，再到 <Ans>。
+[P] 怎么算：读取 <Ans> 位置预测下一 token 的 logits，只在 30 个 count-number tokens 中取 argmax；等于 gold count 记 1。
+[P] 测量什么：最终答案 readout 是否已经学会。对 thinking 来说，它不要求模型自己生成 trace，因此不是端到端 CoT accuracy。
+[P] 输入什么：只提供 prompt 和该模型的格式起点，后续 token 全部由模型逐步生成。
+[P] 怎么算：解析自由生成结果中的最终 count token；它等于 gold count 记 1，否则记 0。
+[P] 测量什么：端到端最终答案。Thinking 模型的任何 trace 错误都可能传播到最终 count，因此它同时包含 trace generation 与 answer readout 两个环节。
+[P] 输入什么：与 AR final-count 相同，不提供 gold trace。
+[P] 怎么算：生成的完整 <1> M1 ... <n> Mn token 序列必须与 gold trace 逐 token 完全相同；任何 index、marker、长度或关闭位置错误都使整例记 0。
+[P] 测量什么：完整 CoT 路径是否无误。它比逐 token marker accuracy 严格得多；non-thinking 没有 trace，所以该指标不适用。
+[P] 对每个 gold count c，先计算该 count 内的样本准确率；随后对所选 count 集合中的这些准确率做算术平均。Figure 1 使用 1–30 三十个 count；Figure 2 分别使用 1–10、11–20、21–30。
+[P] TF 每 500 steps 评估；更昂贵的 AR 与 trace exact 每 1000 steps 评估。因此“首次达到 99%”只精确到对应评估网格，不能解释成连续时间中的精确 crossing。
+[H3] Figure 1A. 全 count 1–30：两个模型的 accuracy 与 loss 学习动态
+[FIGCAPTION] 左图：横轴是 training step，纵轴是对 gold count 1–30 等权平均的 exact-match accuracy；颜色区分模型（蓝=non-thinking，橙=thinking），实线是 TF final count，虚线是 AR final count，绿色点线是 thinking 的 AR trace exact，灰色虚线为 99%。右图：横轴仍是 step；纵轴是 held-out evaluation token cross-entropy，使用对数尺度。蓝/橙分别表示两个模型，实线 final count loss，虚线 total loss；绿色与紫色分别是 thinking trace 的 marker 与 index loss。右图比较的是不同被监督 token segment 的平均交叉熵，不是 accuracy。
+[H3] Figure 1B. 两个模型在 1–10、11–20、21–30 三个 count 区间的学习动态
+[FIGCAPTION] 三个 panel依次固定 gold count 1–10、11–20、21–30；每个 panel 都同时画两个模型，线型和颜色与 Figure 1 左图完全相同。横轴是 checkpoint step，纵轴是该区间十个 exact counts 的平衡 accuracy，灰色虚线为 99%。这张图用于判断总体 milestone 是否由简单 count 主导，以及高 count trace 是否构成更长时间的瓶颈。
+[H3] 4.1 首次达到 99% 的离散 checkpoint
+[TH] 模型
+[TH] gold count 范围
+[TH] TF final-count 首次 ≥99%
+[TH] AR final-count 首次 ≥99%
+[TH] AR trace exact 首次 ≥99%
+[TD] nonthinking
+[TD] 1-30（30 个 exact counts 平衡平均）
+[TD] 5500
+[TD] 6000
+[TD] 不适用
+[TD] nonthinking
+[TD] 1-10
+[TD] 2000
+[TD] 2000
+[TD] 不适用
+[TD] nonthinking
+[TD] 11-20
+[TD] 3500
+[TD] 6000
+[TD] 不适用
+[TD] nonthinking
+[TD] 21-30
+[TD] 5500
+[TD] 7000
+[TD] 不适用
+[TD] thinking
+[TD] 1-30（30 个 exact counts 平衡平均）
+[TD] 500
+[TD] 5000
+[TD] 5000
+[TD] thinking
+[TD] 1-10
+[TD] 500
+[TD] 5000
+[TD] 5000
+[TD] thinking
+[TD] 11-20
+[TD] 500
+[TD] 3000
+[TD] 5000
+[TD] thinking
+[TD] 21-30
+[TD] 500
+[TD] 5000
+[TD] 5000
+[H3] 4.2 为什么 thinking 的 final count 先学会，而完整 trace 更慢？
+[LI] Teacher forcing 把正确 trace 直接放在答案前面。Thinking 的 TF final-count 只需要把已经正确写出的 trace 汇总为一个 count token；它无需先解决第 k 个 needle 的检索、marker identity、successor index 和停止位置。因此这是较短的 readout 子问题。
+[LI] 最终答案只有一个监督 token，trace 却有 O(n) 个必须连续正确的 token。Count=30 时，indexed trace 包含 30 个 index 与 30 个 marker。即使单步正确率已经很高，sequence exact match 仍会把任一步错误放大为整例失败，所以 trace exact 天然晚于局部 token loss 和 TF final-count。
+[LI] 实际 loss 分解显示瓶颈在 trace marker，而不是最终 count。Step 500 时，thinking 的 final-count loss 已降到 0.0267，但 trace-marker loss 仍为 1.5503，trace-index loss 为 0.1389。也就是说模型已经能从 gold trace 读出 count，但还不能稳定完成每一步 k-to-k marker retrieval。
+[LI] AR final count 随 trace 一起改善，说明早期端到端瓶颈确实位于 trace。当 gold trace 不再提供时，错误会在自回归过程中累积；因此 thinking 的 AR final-count 曲线远晚于 TF 曲线，并与 trace-exact 曲线大体同步。两者后期可能略有分离，因为错误 trace 偶尔仍能产生正确最终 count，反之亦然。
+[LI] 这不等于 CoT “计算更慢”。这里比较的是优化样本复杂度与严格 sequence 指标：thinking 多学习了一个长度随 count 增长的结构化输出。后文的 attention、ablation 与 patching 才判断这段 trace 是否形成了不同的计算路径，而不是只增加了训练 token。
+[H2] 5. 描述性 attention：broad aggregation 与 targeted retrieval
+[P] 本节只问 attention 权重“放在哪里”，用于提出候选 heads；它不把 attention weight 直接解释成因果贡献。所有热图都从逐 example、逐 query、逐 Layer×head 的 attention row 重新按 gold count 分成 1–10、11–20、21–30。横轴始终是 head 0–3，纵轴始终是 Layer 1–4。
+[H3] 5.1 两个模型在最终答案 query 上的 broad prompt aggregation
+[H3] Figure 2A. Non-thinking 与 CoT 的 broad prompt-needle score
+[FIGCAPTION] 布局：上排 non-thinking，下排 thinking；三列依次为 gold count 1–10、11–20、21–30。单元格：该 Layer×head 在最终 <Ans> query 上的平均 broad score，范围 0–1；所有 panel 使用同一色标。高分表示 attention mass 同时较多地落在 prompt needles 上，并在该区间的多个 needles 间较均匀。它不包含 trace marker，也不证明这些 heads 对输出必要。
+[TH] 模型
+[TH] count 区间
+[TH] 该区间最高 broad-score head
+[TH] broad score
+[TH] prompt-needle mass
+[TH] needle entropy / log n
+[TH] effective # needles
+[TD] nonthinking
+[TD] 1-10
+[TD] L1H3
+[TD] 0.071
+[TD] 0.073
+[TD] 0.898
+[TD] 5.5
+[TD] nonthinking
+[TD] 11-20
+[TD] L1H3
+[TD] 0.189
+[TD] 0.189
+[TD] 0.999
+[TD] 15.4
+[TD] nonthinking
+[TD] 21-30
+[TD] L1H3
+[TD] 0.286
+[TD] 0.287
+[TD] 0.999
+[TD] 25.4
+[TD] thinking
+[TD] 1-10
+[TD] L3H1
+[TD] 0.302
+[TD] 0.563
+[TD] 0.466
+[TD] 2.0
+[TD] thinking
+[TD] 11-20
+[TD] L4H2
+[TD] 0.219
+[TD] 0.801
+[TD] 0.276
+[TD] 2.1
+[TD] thinking
+[TD] 21-30
+[TD] L4H2
+[TD] 0.226
+[TD] 0.919
+[TD] 0.248
+[TD] 2.3
+[H3] 5.2 Targeted k-to-k retrieval：为什么 non-thinking 不能直接套同一指标
+[H3] Figure 2B. CoT k-to-k retrieval、diagonal dominance 与 non-thinking concentration control
+[FIGCAPTION] 三列依次为 count 1–10、11–20、21–30。第一排是 non-thinking 最终 query 的 single-target concentration control；它越高，表示 needle mass 越集中，但没有 k 对齐。第二排是 CoT <k> query 给 matching 第 k 个 prompt needle 的 raw attention mass。第三排是 diagonal dominance：matching mass 除以投向全部 prompt needles 的总 mass。第四排是 correct top-1：只在 prompt-needle 子集内判断最大权重是否落在第 k 个 needle。四排均按有效 query 等权平均，count=n 的样本贡献 n 个 k queries；每个 count 区间单独汇总。
+[H3] 5.3 最强候选 head 的分区结果
+[TH] count 区间
+[TH] non-thinking 最集中 head
+[TH] concentration score
+[TH] prompt-needle mass
+[TH] needle entropy / log n
+[TH] effective # needles
+[TD] 1-10
+[TD] L2H0
+[TD] 0.017
+[TD] 0.034
+[TD] 0.507
+[TD] 2.9
+[TD] 11-20
+[TD] L3H1
+[TD] 0.042
+[TD] 0.103
+[TD] 0.591
+[TD] 6.6
+[TD] 21-30
+[TD] L3H1
+[TD] 0.089
+[TD] 0.184
+[TD] 0.514
+[TD] 9.2
+[TH] count 区间
+[TH] CoT 最高 raw k-to-k head
+[TH] raw k-to-k mass
+[TH] diagonal dominance
+[TH] correct top-1
+[TH] 该 head 的总 prompt-needle mass
+[TD] 1-10
+[TD] L4H2
+[TD] 0.842
+[TD] 0.845
+[TD] 97.1%
+[TD] 0.997
+[TD] 11-20
+[TD] L4H2
+[TD] 0.694
+[TD] 0.696
+[TD] 87.7%
+[TD] 0.998
+[TD] 21-30
+[TD] L4H2
+[TD] 0.547
+[TD] 0.564
+[TD] 71.3%
+[TD] 0.934
+[H2] 6. Hidden-state 描述性现象：count manifold 与 CoT trace 动态
+[P] Attention 描述 query 从哪些 token 读取；本节改看读取之后写入 residual stream 的 256 维状态。这里所有 PCA 都先按语义标签求 hidden-state 均值，再对这些均值做 PCA，因此展示的是 count/progress 类中心之间的几何，而不是单个样本云。它仍是描述性证据：连续轨迹表示 count 或 progress 可读，不等于模型必然沿该轨迹执行加法。
+[H3] 6.1 最终答案读取位置的 exact-count centroid manifold
+[P] 本实验在问：最终答案位置的 hidden state 为什么能区分 count？它可能真的从 prompt needles 得到了 cardinality，也可能只利用了自然 CoT 中“trace 有多长”或 <Ans> 的绝对位置。为拆开这两种来源，本节同时比较自然输入与一个明确的反事实固定-trace control。
+[TH] 语义位置 / 条件
+[TH] 实际送入模型的序列
+[TH] <Ans> 的 0-based 位置
+[TH] 哪些量会变化，以及为什么比较
+[TD] Non-thinking natural
+[TD] <BOS> prompt(n needles) <Ans> <n> <EOS>
+[TD] 257
+[TD] 自然 direct-count readout；prompt 与正确答案 n 随样本变化。
+[TD] CoT natural
+[TD] <BOS> prompt(n) <Think> <1>M1 ... <n>Mn </Think> <Ans> <n> <EOS>
+[TD] 259 + 2n
+[TD] 自然 CoT readout；trace 内容、trace 长度与 <Ans> 绝对位置都随 n 变化。
+[TD] CoT counterfactual fixed-15
+[TD] <BOS> prompt(n) <Think> <1>T1 ... <15>T15 </Think> <Ans> <n> <EOS>
+[TD] 289
+[TD] 反事实控制；prompt/答案仍为 n，但 15 步模板 trace 与 <Ans> 位置对所有 n 完全固定。
+[LI] 生成一个长度 256、真实 needle count 为 n∈[1,30] 的 held-out prompt。
+[LI] 分别渲染上表三种前缀；反事实条件对所有 n 都使用 15 步、30 个 trace tokens，并把 <Ans> 固定在位置 289。
+[LI] 做一次 teacher-forced forward，在每个 Layer 后提取 <Ans> residual。答案 token 位于其右侧，不能泄漏给该 state。
+[LI] 对同一 exact count 的样本先在 256 维空间求均值，得到每个 site×Layer 的 30×256 centroid 矩阵。这样图中的每个点是一类 count 的均值，不是一个单独样本。
+[LI] 每个 site×Layer 独立减去 30 个 centroids 的总均值，再做 SVD/PCA。图只描述 exact-count 类中心之间的几何；不同 panel 的 PC 轴不是同一坐标系。
+[H3] Figure 3A. Exact-count mean residual 的 PC1–PC2 渐变轨迹
+[FIGCAPTION] 每个点是一个 exact count 的 256 维 residual 均值；颜色从 count 1 连续渐变到 30，灰线连接相邻 count。三行分别为 non-thinking natural final、CoT natural final、CoT counterfactual fixed-15 final，四列为 Layer 1–4。横轴与纵轴是该 panel 独立拟合的 PC1/PC2，单位为投影坐标；只能在同一 panel 内判断相邻 count 是否有序、轨迹是否弯曲，不能跨 panel 把屏幕方向当成同一神经方向。
+[H4] PC1–PC6 explained variance 到底在做什么
+[LI] 输入不是单样本 hidden states。对每个 site×Layer，先把相同语义标签的 256 维 residual 求均值。final-answer site 按真实 count n=1,...,30 分组；trace site 按进度 k=1,...,30 分组。于是 final site 得到一个 30×256 的类中心矩阵。
+[LI] 只分析类中心之间的方差。从每个类中心减去 30 个类中心的总均值，对中心化矩阵做 SVD/PCA。若第 r 个主成分的特征值为 lambda_r，则 EVR_r = lambda_r / sum_s(lambda_s)；PC1–PC6 cumulative 是前六个 EVR 的和。
+[LI] 问题是什么。PC1 很高表示不同 count 的均值主要沿一条轴排列；PC1–PC6 很高表示六维子空间足以保留绝大多数 count-class geometry。它不测同一 count 内样本的离散程度，也不意味着每个 256 维 residual 真的只有六维。
+[LI] 每个 panel 独立拟合。不同 site 或不同 Layer 的 PC1 不是同一神经方向，因此可以比较 explained-variance ratio，却不能把两个 panel 的横轴直接视为同一向量。
+[H3] Figure 3B. PC1–PC6 explained variance 与累计覆盖
+[FIGCAPTION] 横轴：单独的 PC1–PC6；纵轴：Layer 1–4。前五个 panel 分别对应 non-thinking final、CoT natural final、CoT fixed-15 final、CoT trace index 与 CoT trace marker；单元格为该 PC 对类中心总方差的解释比例。最右 panel 的每个单元格是同一 site×Layer 下 PC1 到 PC6 的累计解释率。final-answer sites 的语义标签是 gold count，trace sites 的标签是 progress k。颜色越亮表示方差越集中在该轴或前六轴，但不衡量 256 维空间里的绝对半径。
+[TH] site
+[TH] Layer
+[TH] PC1 variance
+[TH] PC1–3 cumulative
+[TH] PC1–6 cumulative
+[TH] effective dimension
+[TH] mean adjacent turn
+[TD] non-thinking final
+[TD] Layer 1
+[TD] 83.1%
+[TD] 100.0%
+[TD] 100.0%
+[TD] 1.392
+[TD] 4.9°
+[TD] non-thinking final
+[TD] Layer 2
+[TD] 73.6%
+[TD] 92.6%
+[TD] 99.9%
+[TD] 1.768
+[TD] 25.1°
+[TD] non-thinking final
+[TD] Layer 3
+[TD] 33.3%
+[TD] 71.1%
+[TD] 90.8%
+[TD] 4.996
+[TD] 40.4°
+[TD] non-thinking final
+[TD] Layer 4
+[TD] 16.8%
+[TD] 44.2%
+[TD] 72.4%
+[TD] 9.580
+[TD] 82.3°
+[TD] CoT natural final
+[TD] Layer 1
+[TD] 70.6%
+[TD] 82.1%
+[TD] 87.9%
+[TD] 1.970
+[TD] 114.2°
+[TD] CoT natural final
+[TD] Layer 2
+[TD] 51.2%
+[TD] 83.5%
+[TD] 89.8%
+[TD] 2.915
+[TD] 109.6°
+[TD] CoT natural final
+[TD] Layer 3
+[TD] 31.9%
+[TD] 64.6%
+[TD] 78.5%
+[TD] 5.732
+[TD] 113.3°
+[TD] CoT natural final
+[TD] Layer 4
+[TD] 7.2%
+[TD] 20.4%
+[TD] 38.0%
+[TD] 21.607
+[TD] 121.8°
+[TD] CoT counterfactual fixed-15 final
+[TD] Layer 1
+[TD] 99.7%
+[TD] 100.0%
+[TD] 100.0%
+[TD] 1.007
+[TD] 25.5°
+[TD] CoT counterfactual fixed-15 final
+[TD] Layer 2
+[TD] 84.8%
+[TD] 99.5%
+[TD] 99.9%
+[TD] 1.365
+[TD] 31.5°
+[TD] CoT counterfactual fixed-15 final
+[TD] Layer 3
+[TD] 61.2%
+[TD] 90.2%
+[TD] 98.4%
+[TD] 2.354
+[TD] 55.3°
+[TD] CoT counterfactual fixed-15 final
+[TD] Layer 4
+[TD] 71.5%
+[TD] 93.3%
+[TD] 98.6%
+[TD] 1.856
+[TD] 58.7°
+[H4] 结果：Layer 1 近似低维，深层把 count geometry 分散到更多方向
+[TH] site
+[TH] Layer
+[TH] PC1 variance
+[TH] PC1–6 cumulative
+[TH] effective dimension
+[TH] 256D RMS centroid radius
+[TH] mean adjacent-count distance
+[TH] mean adjacent turn
+[TD] non-thinking final
+[TD] Layer 1
+[TD] 83.1%
+[TD] 100.0%
+[TD] 1.392
+[TD] 28.36
+[TD] 3.61
+[TD] 4.9°
+[TD] non-thinking final
+[TD] Layer 4
+[TD] 16.8%
+[TD] 72.4%
+[TD] 9.580
+[TD] 21.67
+[TD] 25.57
+[TD] 82.3°
+[TD] CoT natural final
+[TD] Layer 1
+[TD] 70.6%
+[TD] 87.9%
+[TD] 1.970
+[TD] 2.97
+[TD] 1.93
+[TD] 114.2°
+[TD] CoT natural final
+[TD] Layer 4
+[TD] 7.2%
+[TD] 38.0%
+[TD] 21.607
+[TD] 22.50
+[TD] 31.28
+[TD] 121.8°
+[TD] CoT counterfactual fixed-15 final
+[TD] Layer 1
+[TD] 99.7%
+[TD] 100.0%
+[TD] 1.007
+[TD] 2.38
+[TD] 0.28
+[TD] 25.5°
+[TD] CoT counterfactual fixed-15 final
+[TD] Layer 4
+[TD] 71.5%
+[TD] 98.6%
+[TD] 1.856
+[TD] 11.24
+[TD] 2.97
+[TD] 58.7°
+[LI] Non-thinking final：PC1 从 Layer 1 的 83.1% 降到 Layer 4 的 16.8%，PC1–PC6 从 100.0% 降到 72.4%，有效维数从 1.392 升到 9.580。原空间半径只从 28.36 降到 21.67，而相邻 count 距离反而从 3.61 增至 25.57。所以深层不是简单把所有 count 压成一点，而是把一条平滑轴折叠成更弯曲、更高维的决策几何。
+[LI] CoT natural final：PC1 从 70.6% 降到 7.2%，PC1–PC6 仅剩 38.0%；但原空间半径从 2.97 增至 22.50。这里“深层点在 PC1/PC2 图里紧缩”完全是低维投影遗漏了大量高阶方向，并非 256 维表示真的变小。
+[LI] CoT fixed-15 control：PC1 在 Layer 1 解释 99.7%，到 Layer 4 仍解释 71.5%；Layer 4 的 PC1–PC6 覆盖 98.6%，有效维数仅 1.856。固定 trace 内容、长度和 <Ans> 位置后，prompt-derived count 仍呈现近低维结构，说明自然 CoT 深层的高维化很大部分来自 count 与 trace/位置/readout 因素的混合。
+[H3] Interactive 3D count/progress-centroid manifold
+[FIGCAPTION] 操作：拖拽旋转，切换 semantic site、Layer、标签区间和三条 PC 轴。前三个 final-query site 的点编号是 prompt 的真实 count n；后两个 trace site 的点编号是 trace progress k。fixed-15 site 始终在同一条 15-step 反事实 trace 后的 <Ans> 位置读 hidden state，并按真实 prompt count n 分组；它不是“count=15”这一类。trace index 与 trace marker 则分别在 <k>、M_k token 位置读 residual，并按 k 分组。每个 site×Layer 的 PCA 独立拟合，因此切换下拉项时 PC 方向和尺度会变化，不能把不同选项的屏幕坐标当作同一全局基底。
+[LI] Non-thinking / CoT natural final-answer query：都在自然序列的 <Ans> token 读取 residual，并按真实 count n 求 centroid。
+[LI] CoT fixed-15 counterfactual <Ans> query：把所有样本左侧 trace 都固定成同一条 15-step 模板，使 trace 内容、trace 长度和 <Ans> 绝对位置不再随 n 改变；最终标签仍是 prompt 的真实 count。它用来排除“仅靠 trace 长度或答案位置编码 count”的解释，绝不表示模型要预测 15。
+[LI] CoT trace index-token state <k>：在 trace 数字 <k> 位置读取 residual；点标签是 progress k。
+[LI] CoT trace marker state Mk：在紧跟数字后的 marker M_k 位置读取 residual；点标签同样是 progress k，不是 marker identity。
+[H3] 6.2 CoT trace 内部：从 <k> 到 Mk、再到 <k+1> 的均值状态如何移动
+[TH] Layer
+[TH] PC1 variance
+[TH] PC1–3 cumulative
+[TH] PC1–6 cumulative
+[TH] effective dimension
+[TD] Layer 1
+[TD] 47.3%
+[TD] 87.3%
+[TD] 96.5%
+[TD] 3.086
+[TD] Layer 2
+[TD] 44.3%
+[TD] 88.2%
+[TD] 96.2%
+[TD] 3.141
+[TD] Layer 3
+[TD] 34.8%
+[TD] 76.8%
+[TD] 88.7%
+[TD] 4.495
+[TD] Layer 4
+[TD] 11.7%
+[TD] 23.5%
+[TD] 38.9%
+[TD] 21.146
+[H3] Interactive 3D CoT trace-token trajectory
+[FIGCAPTION] 每个点是什么：对所有包含第 k 步的 held-out examples，分别在 trace 数字 <k> 与紧随其后的 marker M_k 位置提取某一 Layer 后的 256 维 residual，再先按 token type×k 求均值。每个 Layer 把 60 个均值状态 <1>,M1,...,<30>,M30 放进同一个 PCA 基底，灰线按真实 token 顺序连接。圆点表示 index，方块表示 marker；颜色编码进度 k。该图展示的是均值轨迹，不显示同一步内部的样本方差，也不把不同 Layer 的 PC 轴视为同一方向。
+[H2] 7. Attention-head ablation：broad aggregation 与 targeted retrieval 是否因果必要
+[P] 第 5 节只根据 attention 权重提出候选机制。本节进行必要性检验：保持输入、参数、MLP 和其他 heads 不变，只移除指定 attention head 的贡献，再观察模型已经学会的行为是否下降。分析分成四个问题：non-thinking broad heads 是否支撑最终计数；CoT targeted heads 是否支撑逐步 marker retrieval；CoT trace-readout heads 是否支撑最终答案；描述性高分与因果必要性是否真的一致。
+[H3] 7.1 实验协议：删掉什么、在哪些 token 上测、accuracy 如何计算
+[LI] 评估样本。重新生成每个 exact count 8 个 held-out prompts，共 240 个。每个区间 1–10、11–20、21–30 各含 80 个样本，因此三栏的样本量与类别数完全相同。
+[LI] 全局 head mask。对 Layer l 的 head h，把 GPT-2 forward 中对应 head_mask[l,h] 设为 0。该 head 在整条 sequence 的所有 query positions都被关闭，而不是只在 <Ans> 或某一个 <k> 关闭；其他 heads、MLP、embedding 和模型参数不变。因而实验能判断“这个 head 是否整体必要”，但不能单独定位它在哪个 query 上发挥作用。
+[LI] 单头消融。16 个 Layer×head 分别单独 mask。报告 accuracy drop = baseline accuracy − masked accuracy；drop=1 表示从 100% 降到 0%，drop=0 表示离散 accuracy 没变。
+[LI] 累计消融。先按第 5 节定义的分数给 heads 排名，再依次 mask top-1、top-2、…、top-16。Non-thinking 使用 broad_attention_score；CoT 分别使用 k-to-k raw mass、trace_markers_mass 与 successor score。对照只使用预先固定的随机 head 删除路径，不再使用低分或倒序排名。
+[LI] 随机对照与 random-4 mean。淡灰细线逐条显示每个固定随机删除顺序；深灰线是在同一个 mask 数 n 上对所有随机路径取均值，灰色阴影是随机路径的 min–max。紫色水平虚线 random-4 mean 是随机路径在“恰好删 4 个 heads”时剩余 accuracy 的均值，并横向延伸作为易读参照；它不是一条随 n 变化的额外实验曲线。只有 ranked-top 曲线稳定早于随机路径分布下降，才能说明描述性排名含有超出随机删除的机制信息。
+[LI] Teacher-forced final-count accuracy。完整 gold prefix 已在输入中；在 <Ans> 位置读取 logits，若 argmax 数字 token 等于 gold count 则正确。CoT 中 gold trace 仍存在于左侧，所以该指标检验“给定正确 trace 后的最终 readout”，不是自由生成整条 trace 的端到端准确率。
+[LI] Teacher-forced trace-marker accuracy。对 CoT 的每个数字 <k> query，检查其 next-token argmax 是否为 gold marker M_k，再对所有有效 k queries 求平均。后一步仍看到数据中的 gold 早期 trace token；某一步预测错不会被写回上下文并污染后续步骤。
+[LI] Teacher-forced trace-index accuracy。在 <Think> 或前一个 marker M_(k-1) 的 query 上，检查 next-token argmax 是否为数字 <k>。它测 successor/index 生成，与 marker identity retrieval 是不同子任务。
+[P] 阅读顺序。下面每个小节都严格按照“实验 → 结果 → 分析”组织。实验段只说明干预和指标；结果段先给图表与观测数值；分析段才讨论这些结果支持或排除什么机制。
+[H3] 7.2 结果组织方式：每种机制独立报告
+[P] 为避免把不同 query、不同行为指标和不同机制排名混在同一张大图里，后续三节分别报告 non-thinking broad aggregation、CoT targeted retrieval 和 CoT trace readout。每节先给单头热图，再给对应的累计 top-n 剂量曲线；所有 panel 都显式标出 head/Layer 或 mask 数/accuracy 坐标。
+[H3] 7.3 Non-thinking：early broad heads 对直接 final count 具有强必要性
+[H4] 实验
+[P] Non-thinking 没有逐 k trace。我们按第 5 节定义的 broad_attention_score 排序 heads，先逐头 mask，再从 top-1 开始累计 mask；在每个 count 区间都以 non-thinking final-count accuracy 为结果变量，并与固定随机删除路径、随机均值和 random-4 mean 比较。
+[H4] 结果
+[H3] Figure 4A. Non-thinking 单头 broad-circuit 必要性
+[FIGCAPTION] 横轴是 head index 0–3；纵轴是 Layer 1–4；三栏分别是 count 1–10、11–20、21–30。颜色和格内数字都是 final-count accuracy drop = baseline accuracy − 单头 global mask 后 accuracy。
+[H3] Figure 4B. Non-thinking broad heads 的累计消融剂量曲线
+[FIGCAPTION] 横轴是累计 global mask 的 head 数，刻度为 1、2、4、8、12、16；纵轴是干预后剩余的绝对 final-count accuracy，范围 0–1。三栏对应三个 count 区间。蓝线按 broad score 从高到低删除；淡灰细线是各条固定随机路径，深灰线是逐步随机均值，灰色阴影是随机 min–max；紫色虚线是恰好随机删 4 个 heads 时的平均 accuracy（random-4 mean）；黑色虚线是无干预 baseline。
+[TH] count 区间
+[TH] 最强单头
+[TH] final-count drop
+[TD] 1-10
+[TD] L1H0
+[TD] 100.0%
+[TD] 11-20
+[TD] L1H3
+[TD] 86.7%
+[TD] 21-30
+[TD] L1H3
+[TD] 90.0%
+[TH] count 区间
+[TH] broad top-1 后 final accuracy
+[TH] broad top-2 后 final accuracy
+[TH] 随机删 4 heads 的平均 final accuracy
+[TD] 1-10
+[TD] 20.0%
+[TD] 0.0%
+[TD] 11.7%
+[TD] 11-20
+[TD] 13.3%
+[TD] 16.7%
+[TD] 73.9%
+[TD] 21-30
+[TD] 10.0%
+[TD] 0.0%
+[TD] 50.6%
+[H4] 分析
+[P] 结果支持 Layer 1 broad routing 是 direct counting 的必要入口：同一批早期 heads 既在描述性 attention 中广泛覆盖 prompt needles，又在删除后造成大幅 final-count 损伤。低 count 的最强单头与中高 count 略有差异，说明容易样本有更多可替代路径；但 top-2 累计删除后三段都接近崩溃，说明 broad circuit 整体不是可有可无的伴随现象。
+[H3] 7.4 CoT targeted retrieval：单头可替代，但成组删除破坏 marker trace
+[H4] 实验
+[P] 在 CoT 的数字 <k> query 上，以第 k 个 prompt needle 的 raw attention mass 排名 targeted heads。逐头或累计 mask 后，首先测 teacher-forced trace-marker accuracy；同时测最终 teacher-forced final-count accuracy，用于区分“局部 marker retrieval 已损坏”与“给定 gold trace 后的最终 readout 已损坏”。
+[H4] 结果
+[H3] Figure 4C. CoT 单头消融对 trace-marker retrieval 的影响
+[FIGCAPTION] 横轴是 head index 0–3；纵轴是 Layer 1–4；三栏为三个 count 区间。颜色和格内数字是 teacher-forced trace-marker accuracy drop。它衡量整枚 head 被关闭后，数字 <k> 后正确 marker M_k 的预测损失。
+[H3] Figure 4D. CoT targeted heads 的累计消融：局部 trace-marker accuracy
+[FIGCAPTION] 横轴是累计 global mask 的 targeted heads 数；纵轴是剩余 teacher-forced trace-marker accuracy。三栏为三个 count 区间。蓝线是 targeted-score ranked top；淡灰细线是各条固定随机删除路径，深灰线是逐步随机均值，灰色阴影是随机 min–max；紫色虚线是 random-4 mean，黑色虚线是无干预 baseline。
+[H3] Figure 4E. 同一 targeted-head 消融对最终 count readout 的影响
+[FIGCAPTION] 横轴仍是累计 global mask 的 targeted heads 数；纵轴改为给定 gold trace 后的 teacher-forced final-count accuracy。蓝线与随机对照的定义同 Figure 4D；紫色虚线是随机删 4 个 heads 时的平均 final accuracy。与 Figure 4D 对照可区分“trace marker 已生成失败”与“最终 readout 也失败”。
+[TH] count 区间
+[TH] 最强 trace 单头
+[TH] trace-marker drop
+[TD] 1-10
+[TD] L1H1
+[TD] 68.5%
+[TD] 11-20
+[TD] L1H1
+[TD] 76.3%
+[TD] 21-30
+[TD] L1H1
+[TD] 52.9%
+[TH] count 区间
+[TH] target top-1 后 trace
+[TH] top-4 后 trace
+[TH] top-8 后 trace
+[TH] 随机删 4 heads 的平均 trace
+[TH] 同一 top-8 后 final
+[TH] 随机删 4 heads 的平均 final
+[TD] 1-10
+[TD] 100.0%
+[TD] 75.2%
+[TD] 4.2%
+[TD] 56.1%
+[TD] 100.0%
+[TD] 79.4%
+[TD] 11-20
+[TD] 100.0%
+[TD] 57.8%
+[TD] 6.0%
+[TD] 57.6%
+[TD] 100.0%
+[TD] 93.9%
+[TD] 21-30
+[TD] 100.0%
+[TD] 53.3%
+[TD] 8.6%
+[TD] 49.3%
+[TD] 100.0%
+[TD] 98.3%
+[H4] 分析
+[P] “最尖锐地指向 matching needle”与“单独删除时最不可替代”不是同一性质。top-1 几乎无损、top-4 开始下降、top-8 接近崩溃，说明 targeted retrieval 由多枚可互补的 routing heads 共同实现，而不是一枚唯一的“第 k 个 needle head”。final count 仍稳定也不能解释为 trace 无用：teacher-forced 输入已经给出 gold marker tokens，最终 <Ans> 可以绕过被损坏的生成步骤直接读取正确 trace。检验自由生成中的级联失败仍需要 autoregressive ablation。
+[H3] 7.5 CoT trace readout：与 targeted retrieval 是不同候选组
+[H4] 实验
+[P] Targeted ranking 读取数字 <k> query；本实验改在最终 <Ans> query 上，以投向全部 trace marker positions 的 trace_markers_mass 排名 heads，再累计 mask top-n，并测 teacher-forced final-count accuracy。这样能检验“从已给定 trace 读出 count”的候选组，而不是再次检验 prompt retrieval。
+[H4] 结果
+[H3] Figure 4F. CoT 单头消融对最终 count readout 的影响
+[FIGCAPTION] 横轴是 head index 0–3；纵轴是 Layer 1–4；三栏为三个 count 区间。颜色和格内数字是给定 gold trace 时的 final-count accuracy drop。
+[H3] Figure 4G. CoT trace-readout heads 的累计消融剂量曲线
+[FIGCAPTION] 横轴是按 trace_markers_mass 排名后累计 global mask 的 head 数；纵轴是剩余 teacher-forced final-count accuracy。三栏为三个 count 区间。蓝线是 readout ranked top；淡灰细线、深灰均值线与灰色 min–max 阴影给出随机删除分布；紫色虚线是 random-4 mean，黑色虚线是无干预 baseline。
+[TH] count 区间
+[TH] 最强 final 单头
+[TH] final-count drop
+[TD] 1-10
+[TD] L1H1
+[TD] 13.3%
+[TD] 11-20
+[TD] L1H0
+[TD] 0.0%
+[TD] 21-30
+[TD] L1H0
+[TD] 0.0%
+[TH] count 区间
+[TH] readout top-4 后 final
+[TH] readout top-8 后 final
+[TH] 随机删 4 heads 的平均 final
+[TD] 1-10
+[TD] 100.0%
+[TD] 60.0%
+[TD] 79.4%
+[TD] 11-20
+[TD] 100.0%
+[TD] 96.7%
+[TD] 93.9%
+[TD] 21-30
+[TD] 100.0%
+[TD] 100.0%
+[TD] 98.3%
+[H4] 分析
+[P] Targeted retrieval 与 final trace readout 是两个不同阶段的候选 circuit。低 count 在 readout 删除下更早受损，中高 count 仍保留明显冗余；非单调曲线则说明 global mask 同时改变了多个相互补偿或竞争的通路，所以不能把“再增加一枚被 mask head”带来的边际差当作该 head 的独立贡献。第 8 节需要把 patch 限定在 <Ans> query，才能进一步确认 readout activation 是否足以搬运 count 信息。
+[H3] 7.6 Position-local ablation：把“哪个 head”与“在哪个 query 起作用”分开
+[H4] 实验
+[P] 前面的 global mask 会关闭一枚 head 在整条 sequence 的所有输出，因此任何累计顺序都可能混入 Layer 构成与非目标 token positions 上的上游作用。为把“哪个 head”与“在哪个 query 起作用”分开，本实验直接 hook 每层 attention 的 c_proj 输入；这个张量仍按四个 head slices 拼接。对选中的 head，只把指定语义 query 行对应的 64 维 slice 置零，其余 token positions、其余 heads、MLP 与参数全部保持原值。
+[LI] Non-thinking broad。只在最终 <Ans> query 屏蔽 selected head outputs，测 final-count accuracy；同一 heads 在 prompt token 上的作用不受影响。
+[LI] CoT targeted retrieval。只在所有 gold trace 数字 <k> queries 屏蔽 selected head outputs，测下一 token 是否为正确 M_k 的 trace-marker accuracy；marker、successor 和最终 <Ans> rows 不直接被 mask。
+[LI] CoT trace readout。只在最终 <Ans> query 屏蔽 selected head outputs，测给定 gold trace 后的 final-count accuracy；trace 生成 rows 不受影响。
+[LI] 严格同层随机对照。same-layer random 在累计第 t 步使用与 ranked-top 第 t 步相同的 Layer，只在该 Layer 内随机选择尚未删除的 head。因此每个 prefix 的 Layer 组成与 ranked-top 完全相同，差异不能再归因于“一个顺序先删 Layer 1、另一个先删 Layer 3/4”。图中逐条显示固定随机路径、逐步均值和 min–max；紫色 random-4 mean 表示同层随机路径在恰好删 4 个 heads 时的平均剩余 accuracy。
+[H4] 结果 A：Non-thinking broad heads，仅在 <Ans> 局部屏蔽
+[H3] Figure 4H. Position-local non-thinking broad-head ablation
+[FIGCAPTION] 横轴是累计只在 <Ans> query 屏蔽的 head 数；纵轴是剩余 teacher-forced final-count accuracy。三栏为 count 1–10、11–20、21–30。蓝线按 broad score 排名；淡灰细线是保持相同 Layer 序列的各条随机路径，深灰线是逐步随机均值，灰色阴影是随机 min–max；紫色虚线是同层 random-4 mean，黑色点线是无干预 baseline。
+[TH] count 区间
+[TH] 局部 mask 数
+[TH] broad ranked top
+[TH] 同层 random 均值
+[TH] 同层 random-4 mean
+[TD] 1-10
+[TD] 1
+[TD] 12.5%
+[TD] 2.7%
+[TD] 0.0%
+[TD] 1-10
+[TD] 4
+[TD] 0.0%
+[TD] 0.0%
+[TD] 0.0%
+[TD] 1-10
+[TD] 8
+[TD] 0.0%
+[TD] 0.0%
+[TD] 0.0%
+[TD] 11-20
+[TD] 1
+[TD] 11.2%
+[TD] 65.5%
+[TD] 10.0%
+[TD] 11-20
+[TD] 4
+[TD] 10.0%
+[TD] 10.0%
+[TD] 10.0%
+[TD] 11-20
+[TD] 8
+[TD] 10.0%
+[TD] 10.0%
+[TD] 10.0%
+[TD] 21-30
+[TD] 1
+[TD] 68.8%
+[TD] 99.5%
+[TD] 0.0%
+[TD] 21-30
+[TD] 4
+[TD] 0.0%
+[TD] 0.0%
+[TD] 0.0%
+[TD] 21-30
+[TD] 8
+[TD] 0.0%
+[TD] 0.0%
+[TD] 0.0%
+[H4] 分析 A
+[P] 局部结果显示 broad score 在最终答案 query 上的特异性随 count 难度变化。只屏蔽 broad top-1 后，1–10 / 11–20 / 21–30 的 final-count accuracy 分别只剩 12.5% / 11.3% / 68.8%；同层 random 均值为 2.7% / 65.5% / 99.5%。因此中高 count 下，ranked top 比同层随机删除更早造成损伤；低 count 下随机删除同层 Layer-1 head 也常导致崩溃，说明该区间存在广泛的早层脆弱性，不能把 top-1 差异解释成排名特异性。累计 top-2 后三段 accuracy 为 3.8% / 17.5% / 10.0%。应结合灰色随机分布和 random-4 mean 判断 ranked curve 是否异常，而不是与人为构造的低分顺序比较。
+[H4] 结果 B：CoT targeted heads，仅在 trace 数字 <k> 局部屏蔽
+[H3] Figure 4I. Position-local CoT targeted-retrieval ablation
+[FIGCAPTION] 横轴是累计在所有 trace 数字 <k> queries 局部屏蔽的 head 数；纵轴是剩余 teacher-forced trace-marker accuracy。颜色和随机对照定义与 Figure 4H 相同。它直接回答 matching-needle 高分 heads 在产生 M_k 的 query 上是否比相同 Layer 构成的随机 heads 更必要。
+[TH] count 区间
+[TH] 局部 mask 数
+[TH] targeted ranked top
+[TH] 同层 random 均值
+[TH] 同层 random-4 mean
+[TD] 1-10
+[TD] 1
+[TD] 100.0%
+[TD] 100.0%
+[TD] 96.4%
+[TD] 1-10
+[TD] 4
+[TD] 76.8%
+[TD] 96.4%
+[TD] 96.4%
+[TD] 1-10
+[TD] 8
+[TD] 1.4%
+[TD] 1.4%
+[TD] 96.4%
+[TD] 11-20
+[TD] 1
+[TD] 100.0%
+[TD] 100.0%
+[TD] 96.7%
+[TD] 11-20
+[TD] 4
+[TD] 65.9%
+[TD] 96.7%
+[TD] 96.7%
+[TD] 11-20
+[TD] 8
+[TD] 6.8%
+[TD] 6.8%
+[TD] 96.7%
+[TD] 21-30
+[TD] 1
+[TD] 100.0%
+[TD] 100.0%
+[TD] 94.0%
+[TD] 21-30
+[TD] 4
+[TD] 61.7%
+[TD] 94.0%
+[TD] 94.0%
+[TD] 21-30
+[TD] 8
+[TD] 7.6%
+[TD] 7.6%
+[TD] 94.0%
+[H4] 分析 B
+[P] Position-local + same-layer random control 让每个累计步拥有完全相同的 Layer 序列。局部屏蔽 ranked top-4 后，三个区间的 trace-marker accuracy 为 76.8% / 65.9% / 61.7%，而同层 random 均值为 96.4% / 96.7% / 94.0%。Top-1 后三个区间均保持 100%，top-2 后开始降至 96.1% / 92.1% / 90.6%。这支持 k-to-k mass 定位的是一组在数字 <k> query 上具有特异局部因果作用、但成员可相互补偿的 retrieval circuit，而不是唯一一枚“第 k 个 needle head”。屏蔽到 top-8 时不同路径覆盖的 head 集合高度重叠，端点不再适合比较排序优劣，重点应放在早期剂量相对随机分布的下降速度。
+[H4] 结果 C：CoT trace-readout heads，仅在 <Ans> 局部屏蔽
+[H3] Figure 4J. Position-local CoT trace-readout ablation
+[FIGCAPTION] 横轴是累计只在最终 <Ans> query 屏蔽的 head 数；纵轴是给定 gold trace 后的 teacher-forced final-count accuracy。蓝线按 trace_markers_mass 排名；淡灰随机路径、深灰均值、灰色 min–max 和紫色 random-4 mean 构成严格同层随机对照。
+[TH] count 区间
+[TH] 局部 mask 数
+[TH] readout ranked top
+[TH] 同层 random 均值
+[TH] 同层 random-4 mean
+[TD] 1-10
+[TD] 1
+[TD] 100.0%
+[TD] 100.0%
+[TD] 100.0%
+[TD] 1-10
+[TD] 4
+[TD] 100.0%
+[TD] 100.0%
+[TD] 100.0%
+[TD] 1-10
+[TD] 8
+[TD] 56.2%
+[TD] 70.8%
+[TD] 100.0%
+[TD] 11-20
+[TD] 1
+[TD] 100.0%
+[TD] 100.0%
+[TD] 99.7%
+[TD] 11-20
+[TD] 4
+[TD] 100.0%
+[TD] 99.7%
+[TD] 99.7%
+[TD] 11-20
+[TD] 8
+[TD] 90.0%
+[TD] 91.3%
+[TD] 99.7%
+[TD] 21-30
+[TD] 1
+[TD] 100.0%
+[TD] 100.0%
+[TD] 100.0%
+[TD] 21-30
+[TD] 4
+[TD] 100.0%
+[TD] 100.0%
+[TD] 100.0%
+[TD] 21-30
+[TD] 8
+[TD] 100.0%
+[TD] 100.0%
+[TD] 100.0%
+[H4] 分析 C
+[P] 该实验把 readout 干预限制到最终答案 row，因此不会直接破坏前面的 trace construction。结果显示 readout 的局部表示比 retrieval 更冗余：累计屏蔽 top-4 时三个区间仍全部为 100%；到 top-8 时才变为 56.2% / 90.0% / 100.0%，同层 random 在 top-8 的均值为 70.8% / 91.3% / 100.0%。这给出低 count 上有限的 readout-score 特异性，但中高 count 下尚不能证明前八枚 readout heads 的局部必要性。零消融仍只检验必要性，不检验某个 clean head output 是否足以恢复 corrupt count；充分性需要第 8 节的 query-local clean-to-corrupt patch。
+[H3] 7.7 描述性 attention score 与因果 drop 是否一致
+[H4] 实验
+[P] 对每个机制和 count 区间，把 16 枚 heads 的描述性 attention score 与对应单头 global-ablation accuracy drop 对齐，并计算 Spearman 秩相关。该检验不要求两者线性，只问“描述分数排名更高的 head，是否通常也造成更大因果损伤”。
+[H4] 结果
+[H3] Figure 4H. Non-thinking broad score 与 final-count drop
+[FIGCAPTION] 每个点是一枚 Layer×head；横轴是 broad attention score；纵轴是单头 mask 后 final-count accuracy drop。三栏为三个 count 区间，标题给出 16 枚 heads 的 Spearman ρ。
+[H3] Figure 4I. CoT k-to-k mass 与 trace-marker drop
+[FIGCAPTION] 横轴是 matching prompt needle 的 raw k-to-k attention mass；纵轴是单头 mask 后 trace-marker accuracy drop。每点是一枚 head，三栏为三个 count 区间。
+[H3] Figure 4J. CoT trace-readout mass 与 final-count drop
+[FIGCAPTION] 横轴是最终 <Ans> query 投向全部 trace markers 的 attention mass；纵轴是单头 mask 后 final-count accuracy drop。三栏为三个 count 区间。
+[TH] 比较
+[TH] count 区间
+[TH] Spearman ρ
+[TH] heads
+[TD] Non-thinking broad score vs final-count drop
+[TD] 1-10
+[TD] 0.559
+[TD] 16
+[TD] Non-thinking broad score vs final-count drop
+[TD] 11-20
+[TD] 0.619
+[TD] 16
+[TD] Non-thinking broad score vs final-count drop
+[TD] 21-30
+[TD] 0.534
+[TD] 16
+[TD] CoT k-to-k mass vs trace-marker drop
+[TD] 1-10
+[TD] -0.790
+[TD] 16
+[TD] CoT k-to-k mass vs trace-marker drop
+[TD] 11-20
+[TD] -0.567
+[TD] 16
+[TD] CoT k-to-k mass vs trace-marker drop
+[TD] 21-30
+[TD] -0.514
+[TD] 16
+[TD] CoT trace-readout mass vs final-count drop
+[TD] 1-10
+[TD] -0.128
+[TD] 16
+[TD] CoT trace-readout mass vs final-count drop
+[TD] 11-20
+[TD] n/a
+[TD] 16
+[TD] CoT trace-readout mass vs final-count drop
+[TD] 21-30
+[TD] n/a
+[TD] 16
+[H4] 分析
+[P] Non-thinking broad score 与必要性呈中等正相关，说明描述性 broad attention 对 direct-count circuit 有实际筛选价值。CoT k-to-k 的相关为负，进一步说明 raw matching mass 不能等同于单头不可替代性：尖锐 retrieval heads 可能被其他 routing heads 替代，而早期支持性 heads 的删除反而更伤性能。readout score 的相关接近 0，也说明 final readout 不能只靠单头 attention mass 概括。可靠结论必须同时报告描述排序、单头必要性和累计 top-n 剂量曲线。
+[H3] 7.8 本节结论与下一步
+[H3] Non-thinking
+[P] 当前支持：Layer 1 broad heads 既有描述性 prompt-wide attention，也有强单头/累计必要性；它们很可能是直接 set aggregation 的关键入口。
+[P] 仍缺：global mask 不能证明这些 heads 把“count 数值”写到了哪里。第 8 节需要在 <Ans> 局部 patch broad-head output，并测 hidden-state/count logits 是否随 donor count 搬运。
+[H3] CoT
+[P] 当前支持：k-to-k heads 作为一个组对 marker trace 必要，但单头可替代；targeted retrieval 与 final trace readout 是不同阶段、不同排名的多头 circuit。
+[P] 仍缺：teacher forcing 隔断了局部 trace 错误向最终答案的级联。第 8 节应分别在 <k> 和 <Ans> 做局部 activation patch，并使用 marker-identity margin、next-index margin 与 final-count margin 区分检索、successor 和 readout。
+[H2] 8. Attention-head patching：候选 head output 是否具有局部因果充分性
+[P] 第 7 节的 ablation 问的是“移除某个组件会不会坏”，属于必要性证据；本节反过来问“只把 clean/donor 的这个组件放进 corrupt/receiver run，能不能把缺失的信息带回来”，属于局部充分性与信息运输证据。所有 patch 都发生在 attention 的 c_proj 之前：四枚 head 的 value-weighted outputs 仍是四段独立的 64 维 slices；只替换指定 Layer×head、指定 semantic query 的 slice，其他 token rows、其他 heads、MLP、residual stream 和参数保持 receiver/corrupt 值。
+[H3] 8.1 共用实验定义：clean/corrupt、donor/receiver 与两种结果量
+[LI] Marker-identity clean-to-corrupt patch。clean 与 corrupt 的 256-token prompt、needle 位置、count、trace 数字和全部上下文长度相同；唯一变化是目标第 k 个 prompt needle 的 marker identity。clean run 需要预测原 marker，corrupt run 在同一位置改成另一 marker。我们在同一个 CoT 数字 <k> query，把 clean 的 selected head-output slices 放进 corrupt run。
+[LI] Clean-marker logit margin。在 <k> query 的 next-token logits 中，以 clean marker 的 logit 减去其余 marker token 中最大 logit。margin 为正表示 clean marker 胜过所有 marker competitors；为负表示模型更偏向某个错误 marker。
+[LI] Normalized recovery。(patched margin − corrupt margin) / (clean margin − corrupt margin)。0 表示 patch 没有把 corrupt 状态拉向 clean；1 表示恢复到 clean margin；大于 1 是过度恢复；小于 0 表示比 corrupt 更差。先对每个 clean/corrupt pair 计算，再在 count 区间内平均。
+[LI] Nested donor-to-receiver patch。receiver count 为 n，donor count 为 m；两者共享同一 noise sequence，且较小 count 的 needle 集合严格是较大 count 的子集。合法 offset 为 m−n ∈ ±{1,2,3,5,10}。在各自最终 <Ans> query，把 donor selected head slices 放进 receiver；CoT 因 trace 长度不同，绝对 position 可以不同，但 semantic query 都是最终 answer readout。
+[LI] Expected count 与 transport slope。只在 count-token logits 上做 softmax，计算 E[count]=Σ_c c·p(c)。每个 pair 的 causal shift 是 E[count]_patched − E[count]_receiver；在每个 count 区间拟合 shift = a + b(m−n)。纵轴 slope b=1 表示 donor offset 被一比一搬到输出，b=0 表示没有系统 count transport。
+[LI] 候选与随机对照。蓝线按目标机制的描述性 score 从高到低 patch：CoT retrieval 使用 k-to-k mass，non-thinking 使用 broad score，CoT final readout 使用 trace-marker mass。淡灰细线是三条固定随机 head 顺序；深灰是逐 top-n 随机均值，阴影是 min–max；紫色水平线只是 random top-4 mean 的易读参照。低分/bottom 排名不再作为对照。
+[LI] Successor/stop 的 nested pair。对每个 k=1,…,29，构造 short prompt（count=k）和 long prompt（count=k+1）。两者共享同一 noise sequence、前 k 个 needle 的位置与 marker identity；long 只在更晚位置多一个 needle。因此从 <Think> 到第 k 个 marker M_k 的 teacher-forced trace 完全相同，差异只在 prompt 是否还存在第 k+1 个 needle。
+[LI] Successor query 与双向 margin。patch row 是 marker M_k 本身：其 next-token decision 在 long prompt 应为 <k+1>，在 short prompt 应为 </Think>。Continue margin 定义为 z(<k+1>)−z(</Think>)；close margin 反向定义为 z(</Think>)−z(<k+1>)。两者均以 margin>0 记为目标决定正确。
+[LI] Successor controls。successor_top 按 marker query 指向下一 prompt needle 的 raw mass 排序；targeted_top 沿用数字 <k> 的 k-to-k retrieval 排名，检验两个阶段是否共用 heads；wrong donor row 使用相同 successor heads，却把 donor 前一行数字 <k> 的 slice 贴到 receiver 的 M_k row，检验结果是否真的依赖 marker-query activation；另有四条固定随机 head 顺序。
+[H3] 8.2 CoT targeted retrieval：在数字 <k> query 恢复正确 marker identity
+[H4] 实验
+[P] 每个 exact count 使用 2 个独立 prompts。对每个样本分别选择一个内部步骤（约位于 trace 中部的 k）与最后步骤（k=n）。在 clean/corrupt prompt 中只改对应第 k 个 needle 的 marker identity；随后按第 5 节 k-to-k mass 排名，依次 patch top-1、top-2、top-4、top-8、top-16 clean head slices 到 corrupt 的数字 <k> row。结果变量是 clean-marker normalized recovery，不是离散 accuracy。
+[H4] 结果 A：interior k
+[H3] Figure 5A. Interior &lt;k&gt; 的 marker-identity clean-to-corrupt recovery
+[FIGCAPTION] 横轴是被局部 patch 的 clean head-output slices 数；纵轴是 clean-marker logit margin 的 normalized recovery，黑实线 0 表示无恢复，黑虚线 1 表示完全恢复。三栏按 gold count 分区。蓝线按 k-to-k score patch top-n；灰线与灰带为随机路径；紫色虚线是随机 top-4 mean。
+[H4] 结果 B：final k=n
+[H3] Figure 5B. Final &lt;n&gt; 的 marker-identity clean-to-corrupt recovery
+[FIGCAPTION] 横纵轴与 Figure 5A 相同，但 query 是 trace 最后一个数字 <n>。它检验 retrieval circuit 是否在 close 之前的最后一次 marker retrieval 上仍工作，而不是 successor/close token 本身。
+[TH] query role
+[TH] gold count 区间
+[TH] patched top-n
+[TH] targeted recovery
+[TH] random mean
+[TH] random min–max
+[TD] interior k
+[TD] 1-10
+[TD] 1
+[TD] 0.031
+[TD] 0.106
+[TD] -5.41e-04 to 0.315
+[TD] interior k
+[TD] 1-10
+[TD] 2
+[TD] 0.707
+[TD] 0.117
+[TD] -9.51e-04 to 0.345
+[TD] interior k
+[TD] 1-10
+[TD] 4
+[TD] 0.937
+[TD] 0.233
+[TD] -0.002 to 0.693
+[TD] interior k
+[TD] 1-10
+[TD] 8
+[TD] 0.996
+[TD] 0.892
+[TD] 0.759 to 0.965
+[TD] interior k
+[TD] 11-20
+[TD] 1
+[TD] 0.022
+[TD] 0.164
+[TD] -4.31e-04 to 0.490
+[TD] interior k
+[TD] 11-20
+[TD] 2
+[TD] 0.831
+[TD] 0.171
+[TD] -5.90e-04 to 0.511
+[TD] interior k
+[TD] 11-20
+[TD] 4
+[TD] 0.978
+[TD] 0.249
+[TD] -9.93e-04 to 0.742
+[TD] interior k
+[TD] 11-20
+[TD] 8
+[TD] 0.998
+[TD] 0.947
+[TD] 0.893 to 0.978
+[TD] interior k
+[TD] 21-30
+[TD] 1
+[TD] 0.028
+[TD] 0.189
+[TD] -5.29e-04 to 0.562
+[TD] interior k
+[TD] 21-30
+[TD] 2
+[TD] 0.807
+[TD] 0.193
+[TD] -8.63e-04 to 0.572
+[TD] interior k
+[TD] 21-30
+[TD] 4
+[TD] 0.978
+[TD] 0.270
+[TD] -0.001 to 0.800
+[TD] interior k
+[TD] 21-30
+[TD] 8
+[TD] 0.999
+[TD] 0.954
+[TD] 0.895 to 0.987
+[TD] final k=n
+[TD] 1-10
+[TD] 1
+[TD] 0.039
+[TD] 0.119
+[TD] -5.85e-04 to 0.356
+[TD] final k=n
+[TD] 1-10
+[TD] 2
+[TD] 0.751
+[TD] 0.129
+[TD] -8.80e-04 to 0.383
+[TD] final k=n
+[TD] 1-10
+[TD] 4
+[TD] 0.939
+[TD] 0.231
+[TD] -8.57e-04 to 0.691
+[TD] final k=n
+[TD] 1-10
+[TD] 8
+[TD] 0.997
+[TD] 0.887
+[TD] 0.769 to 0.951
+[TD] final k=n
+[TD] 11-20
+[TD] 1
+[TD] 0.042
+[TD] 0.165
+[TD] -7.79e-04 to 0.495
+[TD] final k=n
+[TD] 11-20
+[TD] 2
+[TD] 0.852
+[TD] 0.168
+[TD] -0.001 to 0.501
+[TD] final k=n
+[TD] 11-20
+[TD] 4
+[TD] 0.981
+[TD] 0.219
+[TD] -0.002 to 0.655
+[TD] final k=n
+[TD] 11-20
+[TD] 8
+[TD] 0.998
+[TD] 0.929
+[TD] 0.882 to 0.958
+[TD] final k=n
+[TD] 21-30
+[TD] 1
+[TD] 0.010
+[TD] 0.205
+[TD] -0.001 to 0.613
+[TD] final k=n
+[TD] 21-30
+[TD] 2
+[TD] 0.741
+[TD] 0.207
+[TD] -0.002 to 0.619
+[TD] final k=n
+[TD] 21-30
+[TD] 4
+[TD] 0.974
+[TD] 0.263
+[TD] -0.004 to 0.790
+[TD] final k=n
+[TD] 21-30
+[TD] 8
+[TD] 0.999
+[TD] 0.974
+[TD] 0.940 to 0.993
+[H4] 分析
+[P] 单枚最高分 head 并不充分：interior top-1 在三个区间只恢复 0.031 / 0.022 / 0.028。但 top-2 立即升到 0.707 / 0.831 / 0.807，top-4 达 0.937 / 0.978 / 0.978。final k=n 呈现几乎相同的剂量响应，top-4 recovery 为 0.939 / 0.981 / 0.974。
+[P] 没有检验什么。本实验只在数字 <k> query 检验“下一个 marker identity 是什么”。它没有在 marker M_k query 上 patch，也没有测 <k+1> versus </Think> 的 next-index/close margin，因此不能回答模型如何从第 k 步推进到第 k+1 步。
+[H3] 8.3 CoT successor/stop：在 marker Mk query 运输“继续还是关闭”证据
+[H4] 实验
+[P] 本实验专门补上 Figure 5 没有覆盖的下一步：模型已经在数字 <k> 后检索并生成了 marker M_k，此时它如何决定再输出 <k+1>，还是用 </Think> 关闭 trace。对每个 k=1,…,29，我们构造一对严格 nested prompts：short receiver 含 k 个 needles，long donor 含 k+1 个 needles；二者共享全部 256 个 noise tokens、前 k 个 needle 的位置与 marker identity，long 只在更晚的一个空位置新增第 k+1 个 needle。因此两条 teacher-forced sequence 从 <Think> 到 M_k 完全相同，只有 prompt 中“是否还有下一个 needle”不同。
+[LI] Continue → close receiver。clean/donor 是 long prompt，正确 next token 为 <k+1>；corrupt/receiver 是 short prompt，正确 next token 为 </Think>。在 receiver 的 M_k query 局部贴入 donor head-output slices，读取 z(<k+1>)−z(</Think>)。若 patch 把短序列拉向“继续”，该 margin 与 target-decision accuracy 应上升。
+[LI] Close → continue receiver。clean/donor 改为 short prompt，corrupt/receiver 改为 long prompt；读取反向 margin z(</Think>)−z(<k+1>)。这是独立的反向检验，排除某组 heads 只会无条件增加 index logit 的解释。
+[LI] Patch 位置。只在 marker M_k 这一行、attention c_proj 之前替换选中 Layer×head 的 64 维 output slice；前面的数字 <k> row、其他 token rows、未选 heads、MLP 与 residual stream 均保持 receiver 值。
+[LI] 四组排序/对照。successor-score ranked 按 M_k query 指向第 k+1 个 prompt needle 的 attention mass 排序；k-to-k targeted ranked 使用上一阶段数字 <k> 到第 k 个 needle 的排名；wrong donor row 使用同一 successor heads，却把 donor 的数字 <k> row 贴到 receiver 的 M_k row；灰线为四条固定随机 head 顺序。
+[LI] 结果量。每个 pair 先计算 normalized recovery，再在 1–10、11–20、21–30 三个 receiver count 区间内平均。离散 target-decision accuracy 是 patch 后目标 margin 大于 0 的样本比例；它回答 patch 是否真的翻转了 continue/close 选择，而不只是让 margin 小幅移动。
+[H4] 结果 A：把 continue activation 贴进本应关闭的 short receiver
+[H3] Figure 5C. Continue → close receiver：next-index margin 的 normalized recovery
+[FIGCAPTION] 横轴是只在 M_k query 局部 patch 的 top-n head slices 数（1、2、4、8、12、16）；纵轴是 continue margin z(<k+1>)−z(</Think>) 的 normalized recovery。三栏按 short receiver count 分区。蓝线按 successor score，橙线沿用 k-to-k targeted 排名，绿线用 successor heads 但贴错 donor row；灰线、深灰均值与灰带为四条随机顺序。黑实线 0 表示无恢复，黑虚线 1 表示达到 clean long-prompt margin。
+[H3] Figure 5D. Continue → close receiver：patch 后继续决定的 accuracy
+[FIGCAPTION] 横轴与分组同 Figure 5C；纵轴是 patch 后 z(<k+1>)−z(</Think>)>0 的 pair 比例。它是严格的决定翻转率，不是 next-token 全词表 accuracy。虚线 1 表示所有 short receivers 都被 donor activation 推向继续。
+[P] 单头和 top-2 总体不足以稳定翻转决定，但 top-4 开始呈现清楚的高-count 效应。Successor-ranked top-4 在 1–10 / 11–20 / 21–30 的 recovery 为 0.342 / 0.808 / 0.875，对应 target-decision accuracy 为 35.0% / 90.0% / 94.4%。扩到 top-8 后 recovery 达 0.748 / 0.991 / 0.985，中高 count 已接近完全恢复。
+[H4] 结果 B：把 close activation 贴进本应继续的 long receiver
+[H3] Figure 5E. Close → continue receiver：close margin 的 normalized recovery
+[FIGCAPTION] 横轴是 patched top-n；纵轴改为 close margin z(</Think>)−z(<k+1>) 的 normalized recovery。receiver 是仍有第 k+1 个 needle 的 long prompt，donor 是在 k 处结束的 short prompt。正向恢复表示局部 activation 能把本应继续的状态拉向关闭。其余颜色、三段 count 区间和随机对照与 Figure 5C 相同。
+[H3] Figure 5F. Close → continue receiver：patch 后关闭决定的 accuracy
+[FIGCAPTION] 纵轴是 patch 后 z(</Think>)−z(<k+1>)>0 的 pair 比例；因此它测的是 donor close evidence 是否足以翻转 long receiver，而不是模型原本的自然 trace accuracy。
+[P] 反向结果排除了“patch 只会把数字 logits 普遍抬高”的单向解释。Successor-ranked top-4 在三个区间的 close recovery 为 0.196 / 0.489 / 0.698，target-decision accuracy 为 0.0% / 45.0% / 94.4%。Top-8 recovery 进一步达到 0.710 / 0.978 / 0.984。
+[H4] 结果 C：top-4 候选、阶段对照与错误-row 对照
+[TH] patch 方向
+[TH] receiver count 区间
+[TH] head/row 条件
+[TH] normalized recovery
+[TH] target-decision accuracy
+[TH] random recovery 均值
+[TH] random recovery min–max
+[TD] continue → close receiver
+[TD] 1-10
+[TD] successor-score ranked
+[TD] 0.342
+[TD] 35.0%
+[TD] 0.245
+[TD] 0.012 to 0.424
+[TD] continue → close receiver
+[TD] 1-10
+[TD] k-to-k targeted ranked
+[TD] 0.323
+[TD] 35.0%
+[TD] 0.245
+[TD] 0.012 to 0.424
+[TD] continue → close receiver
+[TD] 1-10
+[TD] successor heads / wrong donor row
+[TD] 0.013
+[TD] 0.0%
+[TD] 0.245
+[TD] 0.012 to 0.424
+[TD] continue → close receiver
+[TD] 11-20
+[TD] successor-score ranked
+[TD] 0.808
+[TD] 90.0%
+[TD] 0.168
+[TD] 0.010 to 0.317
+[TD] continue → close receiver
+[TD] 11-20
+[TD] k-to-k targeted ranked
+[TD] 0.118
+[TD] 0.0%
+[TD] 0.168
+[TD] 0.010 to 0.317
+[TD] continue → close receiver
+[TD] 11-20
+[TD] successor heads / wrong donor row
+[TD] 0.133
+[TD] 0.0%
+[TD] 0.168
+[TD] 0.010 to 0.317
+[TD] continue → close receiver
+[TD] 21-30
+[TD] successor-score ranked
+[TD] 0.875
+[TD] 94.4%
+[TD] 0.134
+[TD] 0.038 to 0.229
+[TD] continue → close receiver
+[TD] 21-30
+[TD] k-to-k targeted ranked
+[TD] 0.229
+[TD] 0.0%
+[TD] 0.134
+[TD] 0.038 to 0.229
+[TD] continue → close receiver
+[TD] 21-30
+[TD] successor heads / wrong donor row
+[TD] 0.576
+[TD] 77.8%
+[TD] 0.134
+[TD] 0.038 to 0.229
+[TD] close → continue receiver
+[TD] 1-10
+[TD] successor-score ranked
+[TD] 0.196
+[TD] 0.0%
+[TD] 0.237
+[TD] 0.019 to 0.423
+[TD] close → continue receiver
+[TD] 1-10
+[TD] k-to-k targeted ranked
+[TD] 0.309
+[TD] 0.0%
+[TD] 0.237
+[TD] 0.019 to 0.423
+[TD] close → continue receiver
+[TD] 1-10
+[TD] successor heads / wrong donor row
+[TD] 0.260
+[TD] 15.0%
+[TD] 0.237
+[TD] 0.019 to 0.423
+[TD] close → continue receiver
+[TD] 11-20
+[TD] successor-score ranked
+[TD] 0.489
+[TD] 45.0%
+[TD] 0.199
+[TD] 0.008 to 0.388
+[TD] close → continue receiver
+[TD] 11-20
+[TD] k-to-k targeted ranked
+[TD] 0.140
+[TD] 0.0%
+[TD] 0.199
+[TD] 0.008 to 0.388
+[TD] close → continue receiver
+[TD] 11-20
+[TD] successor heads / wrong donor row
+[TD] 0.358
+[TD] 10.0%
+[TD] 0.199
+[TD] 0.008 to 0.388
+[TD] close → continue receiver
+[TD] 21-30
+[TD] successor-score ranked
+[TD] 0.698
+[TD] 94.4%
+[TD] 0.092
+[TD] 0.013 to 0.171
+[TD] close → continue receiver
+[TD] 21-30
+[TD] k-to-k targeted ranked
+[TD] 0.173
+[TD] 5.6%
+[TD] 0.092
+[TD] 0.013 to 0.171
+[TD] close → continue receiver
+[TD] 21-30
+[TD] successor heads / wrong donor row
+[TD] 0.190
+[TD] 0.0%
+[TD] 0.092
+[TD] 0.013 to 0.171
+[H4] 分析
+[P] 第一，successor 是分布式局部 circuit，而不是单枚开关 head。单头几乎从不翻转 continue/close；top-4 在中高 count 已明显有效，top-8 才在两种方向上接近完整恢复。这与第 7 节的多头冗余一致，但这里的证据更强：它不是删除后性能下降，而是 selected clean activations 在同一 M_k row 足以把 receiver 的决定向 donor 搬运。
+[P] 第二，retrieval 与 successor 有重叠，但 top heads 并不相同。在中高 count 的 top-4，数字 <k> 上得到的 k-to-k ranking 明显弱于 successor ranking；到 top-8 后二者才共同接近完全恢复。这说明较大的 routing circuit 可能跨阶段复用，但“找到第 k 个 needle”与“在 Mk 后决定继续/关闭”不能由同一个 top-4 排名概括。
+[P] 第三，query row 有信息，但不是绝对隔离。同一 successor heads 若改贴 donor 的上一行数字 <k> activation，top-4 通常显著弱于正确 M_k row，尤其在反向 close patch 与高 count 条件下；然而某些 wrong-row top-8 仍能恢复，说明 continue/close 信息也可能已经分布在相邻 residual/attention rows，不能声称只存在于 marker row。
+[H3] 8.4 从 attention evidence 到具体 index logit：MLP 与 residual 的层内转换
+[H4] 实验
+[P] 本实验继续使用 8.3 节完全相同的 nested short/long pairs 与 marker M_k query，但不再只把整个 head bundle 当成黑箱。每个方向包含 58 对样本（k=1,…,29，每个 k 使用 2 个独立 base sequences），并保留 continue→close 与 close→continue 两个方向。实验仍是单步、teacher-forced 的局部因果分析；按照本节问题范围，没有运行 autoregressive rollout。
+[LI] Layer 内计算分解。对每一层，记进入该层的 residual 为 h_pre，attention 输出为 a，则 h_attn = h_pre + a；MLP 输出为 m = MLP(LN₂(h_attn))，层末 residual 为 h_post = h_attn + m。报告把它们依次称为 resid_pre、attn_out、post_attn、mlp_out、post_mlp。
+[LI] Residual logit lens。在每个 residual stage 上临时应用模型最终的 ln_f 与 tied unembedding，计算 target token 相对 competitor 的 margin：continue 方向为 z(<k+1>)−z(</Think>)。这回答“到这一 stage 时，目标决定是否已经可被最终读出头线性读取”，而不是声称模型在中间层真的提前退出。
+[LI] Component direct-unembedding diagnostic。对 additive component a 或 m 直接乘 unembedding，并计算 clean-minus-corrupt target-aligned margin。由于 component 本身没有经过最终 LayerNorm，这只是定位哪个 component 把证据写向目标 token 的描述性诊断；真正的因果结论来自下一项 patch。
+[LI] 关键 MLP mediation 对照。donor Attn; receiver MLP frozen 把 donor attention output 加进 receiver residual，但强制保留 receiver baseline MLP output；donor Attn; native MLP recomputed 使用同一 donor attention output，却让 MLP 对改变后的 h_attn 自然重算。二者 normalized recovery 之差，就是 donor attention evidence 经当前层 MLP 转换带来的局部 mediation gain。
+[LI] 其他干预。donor MLP output only 只把 donor MLP additive output 加到 receiver h_attn；donor Attn + donor MLP 同时替换两个 additive components；full donor post-attn state 替换 h_attn 后重算 MLP；full donor post-MLP state 替换整层输出，是该层完整状态充分性的上界/sanity check。
+[H4] 结果 A：continue/close margin 在 residual stream 的哪里出现
+[H3] Figure 5G. Marker M_k 处的 residual logit-lens 轨迹
+[FIGCAPTION] 横轴按计算顺序列出每层输入（Lx pre）、加完 attention 后（Lx +Attn）与再加完 MLP 后（Lx +MLP）的 residual；纵轴是经最终 ln_f + unembedding 读出的 continue target margin。蓝线是存在第 k+1 个 needle 的 long/clean prompt；橙线是 count=k 的 short/corrupt prompt，但也用同一个 continue target 读取。两线分离表示该 stage 已包含可线性读取的 continue-versus-close 证据。三栏为 receiver count 区间。
+[P] 低 count 的 clean−corrupt residual gap 在 Layer 3 post-attention 为 4.59，经 Layer 3 MLP 后扩大到 8.05；Layer 4 post-attention 与 post-MLP 分别进一步达到 15.35 和 32.47。11–20 的对应四个数是 7.14、10.79、17.72、30.64；21–30 则为 7.44、9.24、17.92、29.04。
+[H4] 结果 B：attention 与 MLP 各自把多少证据直接写向目标 token
+[H3] Figure 5H. Attention-output 与 MLP-output 的 target-aligned direct-unembedding evidence
+[FIGCAPTION] 横轴是产生 additive component 的 Layer 1–4；纵轴是该 component 对目标 margin 的 clean-minus-corrupt 差。蓝线为 attention output，橙线为 MLP output；正值表示该 component 在 long prompt 中比 short prompt 更偏向 <k+1>。这是没有最终 LayerNorm 的分量诊断，不单独作为因果证据。
+[TH] count 区间
+[TH] Layer
+[TH] attention component gap
+[TH] MLP component gap
+[TH] post-attn residual gap
+[TH] post-MLP residual gap
+[TD] 1-10
+[TD] Layer 3
+[TD] 0.639
+[TD] 1.536
+[TD] 4.593
+[TD] 8.045
+[TD] 1-10
+[TD] Layer 4
+[TD] 3.328
+[TD] 12.964
+[TD] 15.347
+[TD] 32.466
+[TD] 11-20
+[TD] Layer 3
+[TD] 2.704
+[TD] 2.116
+[TD] 7.141
+[TD] 10.788
+[TD] 11-20
+[TD] Layer 4
+[TD] 3.657
+[TD] 10.444
+[TD] 17.719
+[TD] 30.641
+[TD] 21-30
+[TD] Layer 3
+[TD] 3.004
+[TD] 1.948
+[TD] 7.436
+[TD] 9.235
+[TD] 21-30
+[TD] Layer 4
+[TD] 3.290
+[TD] 8.789
+[TD] 17.919
+[TD] 29.037
+[P] Layer 3 是证据第一次稳定变大的路由层；Layer 4 则表现出最强的 logit 写入。三个 count 区间中，Layer 4 attention component gap 分别为 3.33 / 3.66 / 3.29，而 Layer 4 MLP component gap 达 12.96 / 10.44 / 8.79。因此最终 index/close logit 的巨大分离并不是 attention output 独自线性写出的；MLP 是更强的目标-token amplifier。
+[H4] 结果 C：固定 receiver MLP 与允许 native MLP 重算的因果对照
+[H3] Figure 5I. Continue evidence → close receiver 的 sublayer conversion
+[FIGCAPTION] 横轴是被干预的 Layer 1–4；纵轴是 continue margin normalized recovery。蓝线只替换 donor attention output并冻结 receiver MLP output；绿线使用相同 donor attention，却让当前层 MLP 对新 residual 自然重算；橙线只替换 donor MLP output；灰线替换完整 donor post-MLP residual，作为 full-state 上界。三栏按 short receiver count 分区。
+[H3] Figure 5J. Close evidence → continue receiver 的 sublayer conversion
+[FIGCAPTION] 横纵轴及四种干预与 Figure 5I 相同，但 target margin 改为 z(</Think>)−z(<k+1>)，receiver 是本应继续的 long prompt。该反向实验检验 MLP mediation 是否同时支持关闭，而不是只普遍抬高数字 logits。
+[TH] patch 方向
+[TH] count 区间
+[TH] Layer
+[TH] Attn + frozen MLP recovery
+[TH] Attn + native MLP recovery
+[TH] MLP mediation gain
+[TH] MLP-only recovery
+[TH] full post-MLP recovery
+[TH] Attn-only target accuracy
+[TH] native-MLP target accuracy
+[TH] MLP-only target accuracy
+[TD] continue evidence → close receiver
+[TD] 1-10
+[TD] Layer 3
+[TD] 0.134
+[TD] 0.348
+[TD] 0.214
+[TD] 0.177
+[TD] 0.783
+[TD] 0.0%
+[TD] 25.0%
+[TD] 0.0%
+[TD] continue evidence → close receiver
+[TD] 1-10
+[TD] Layer 4
+[TD] 0.096
+[TD] 0.403
+[TD] 0.307
+[TD] 0.593
+[TD] 1.000
+[TD] 0.0%
+[TD] 35.0%
+[TD] 85.0%
+[TD] continue evidence → close receiver
+[TD] 11-20
+[TD] Layer 3
+[TD] 0.389
+[TD] 0.787
+[TD] 0.398
+[TD] 0.124
+[TD] 0.852
+[TD] 15.0%
+[TD] 100.0%
+[TD] 0.0%
+[TD] continue evidence → close receiver
+[TD] 11-20
+[TD] Layer 4
+[TD] 0.090
+[TD] 0.319
+[TD] 0.228
+[TD] 0.412
+[TD] 1.000
+[TD] 0.0%
+[TD] 15.0%
+[TD] 10.0%
+[TD] continue evidence → close receiver
+[TD] 21-30
+[TD] Layer 3
+[TD] 0.517
+[TD] 0.834
+[TD] 0.318
+[TD] 0.139
+[TD] 0.842
+[TD] 61.1%
+[TD] 94.4%
+[TD] 0.0%
+[TD] continue evidence → close receiver
+[TD] 21-30
+[TD] Layer 4
+[TD] 0.107
+[TD] 0.333
+[TD] 0.225
+[TD] 0.418
+[TD] 1.000
+[TD] 0.0%
+[TD] 0.0%
+[TD] 0.0%
+[TD] close evidence → continue receiver
+[TD] 1-10
+[TD] Layer 3
+[TD] 0.098
+[TD] 0.153
+[TD] 0.055
+[TD] 0.164
+[TD] 0.651
+[TD] 0.0%
+[TD] 0.0%
+[TD] 0.0%
+[TD] close evidence → continue receiver
+[TD] 1-10
+[TD] Layer 4
+[TD] 0.209
+[TD] 0.404
+[TD] 0.195
+[TD] 0.750
+[TD] 1.000
+[TD] 0.0%
+[TD] 5.0%
+[TD] 100.0%
+[TD] close evidence → continue receiver
+[TD] 11-20
+[TD] Layer 3
+[TD] 0.359
+[TD] 0.511
+[TD] 0.152
+[TD] 0.106
+[TD] 0.598
+[TD] 5.0%
+[TD] 50.0%
+[TD] 0.0%
+[TD] close evidence → continue receiver
+[TD] 11-20
+[TD] Layer 4
+[TD] 0.274
+[TD] 0.424
+[TD] 0.150
+[TD] 0.695
+[TD] 1.000
+[TD] 0.0%
+[TD] 30.0%
+[TD] 95.0%
+[TD] close evidence → continue receiver
+[TD] 21-30
+[TD] Layer 3
+[TD] 0.382
+[TD] 0.632
+[TD] 0.250
+[TD] 0.050
+[TD] 0.656
+[TD] 11.1%
+[TD] 94.4%
+[TD] 0.0%
+[TD] close evidence → continue receiver
+[TD] 21-30
+[TD] Layer 4
+[TD] 0.248
+[TD] 0.290
+[TD] 0.042
+[TD] 0.627
+[TD] 1.000
+[TD] 0.0%
+[TD] 11.1%
+[TD] 94.4%
+[H4] 分析
+[P] Layer 3 把 routed evidence 转成可执行决定。Continue 方向在 11–20 / 21–30 中，Layer 3 attention-direct recovery 为 0.389 / 0.517；允许同层 MLP 自然重算后升到 0.787 / 0.834，mediation gain 分别约 0.40 与 0.32。反向 close 方向同样从 0.359 / 0.382 升至 0.511 / 0.632。这说明 MLP 不是被动经过 donor evidence，而是在当前 residual 上做了实质的非线性转换。
+[P] Layer 4 MLP 更像最终 token-logit writer。仅替换 Layer 4 MLP output 的 recovery 在 continue 方向为 0.593 / 0.412 / 0.418，在 close 方向为 0.750 / 0.695 / 0.627。完整 Layer 4 post-MLP state 在六个方向×区间条件中 recovery 均为 1；但 MLP-only 并非总能独立达到 1，说明最终写入仍依赖 receiver residual、attention evidence 与 MLP output 的组合，而不是一个脱离上下文的标量加法神经元。
+[H3] 8.5 Layer 3–4 MLP intermediate：从 routed evidence 到 index/close logit 的 feature 级因果分解
+[H4] 实验
+[P] 这里的 MLP feature/neuron 是 GPT-2 MLP 中 c_fc → GELU 后、c_proj 前的一个标量坐标，不是生物神经元。模型的 residual width 为 256，而每层 MLP intermediate width 为 1024；实验只分析 0-based Layer 2–3，即报告中的 Layer 3–4。Query、clean/corrupt pair 和 continue/close margin 与 8.3–8.4 完全相同，仍位于 teacher-forced marker M_k。
+[LI] 严格分离 feature 排名与因果评估。对每个 k=1,…,29，使用 2 个 base sequences 拟合 feature 排名，再使用不重叠的 2 个 sequences 做 patch；因此每个方向各有 58 个 fit pairs 和 58 个 held-out eval pairs。
+[LI] Feature 排名。对第 i 个 post-GELU feature，先计算 fit pairs 上的 clean−corrupt activation 差，再乘它经 c_proj 与 tied unembedding 对 target-minus-alternative margin 的线性系数。这个乘积的均值是 projected evidence score。它只用于选坐标，不直接当作因果效应。
+[LI] Ranked feature replacement。对 support S 中的 feature，把 corrupt receiver 在同一 M_k row 的 activation 坐标替换成 clean donor 值；其他 1024−|S| 个坐标、attention、residual 与后续参数都保留 receiver 值。支持大小依次为 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024。
+[LI] Sparse mean-direction transport。在 fit pairs 上求平均 clean−corrupt feature 差方向，只保留 projected-evidence 绝对值最大的 S 个坐标；对 held-out pair，仅运输该 pair 在这个稀疏方向上的投影。它检验“共享低维方向”是否足以替代逐坐标 donor 值。
+[LI] 对照。每个 support 使用 4 组固定随机坐标做 size-matched replacement，并另测 random sparse direction。所有结果仍报告逐 pair normalized recovery 与 target-decision accuracy；没有 autoregressive rollout。
+[H4] 结果 A：转换证据是部分稀疏、总体分布式的
+[H3] Figure 5K. Layer 3–4 MLP projected evidence 的累积集中度
+[FIGCAPTION] 横轴是按 projected evidence 排名后保留的 feature 数，使用 log₂ 刻度；纵轴是这些 features 覆盖的证据比例。实线只累计方向正确的正 evidence，虚线累计绝对 evidence；颜色表示 receiver count 区间。上、下行分别为 continue evidence 与 close evidence，左、右列分别为 Layer 3 与 Layer 4。若由单一 neuron 执行，曲线会在 support=1 附近跃升到 1；实际需要数十到数百个坐标。
+[P] 以反向写入 close evidence 为例，Layer 4 的 top-64 features 已覆盖三个 count 区间约 59.7% / 66.5% / 71.8% 的正 projected evidence，top-256 覆盖约 90.1% / 91.3% / 93.6%。Continue 与 close 两行都显示 evidence 有明显集中度，但都不是单-neuron code；更准确的说法是分布式、部分稀疏的 decision-writing subspace。
+[H4] 结果 B：Continue evidence 的 held-out feature patch
+[H3] Figure 5L. Clean continue features → close receiver 的 normalized recovery
+[FIGCAPTION] 横轴是被替换或运输的 MLP feature support；纵轴是 continue margin normalized recovery。上排 Layer 3，下排 Layer 4；三列为 receiver count 1–10、11–20、21–30。蓝线替换 ranked clean coordinates，绿线运输 sparse mean direction，灰线和阴影是 matched random coordinates 的均值±标准差。虚线 1 表示达到 clean margin。
+[P] Layer 4 ranked top-64 的 recovery 为 0.341 / 0.239 / 0.273，而 matched random 仅为 0.024 / 0.018 / 0.020。Top-256 recovery 升至 0.618 / 0.432 / 0.450，但 target-decision accuracy 只有 100.0% / 35.0% / 5.6%。这一区分很重要：selected features 能连续搬运 continue margin，却未必足以让中高 count receiver 的 argmax 越过关闭边界。Layer 3 即使替换全部 1024 features，recovery 也只有 0.185 / 0.136 / 0.122。
+[H4] 结果 C：Close evidence 的反向 patch
+[H3] Figure 5M. Clean close features → continue receiver 的 normalized recovery
+[FIGCAPTION] 横纵轴、行列与对照同 Figure 5L，但 target margin 是 z(</Think>)−z(<k+1>)。这检验相同 feature-selection 方法是否能反向写入关闭 trace 的决定，而不是只普遍增强数字 token。
+[P] Layer 4 ranked top-64 的 close recovery 为 0.509 / 0.541 / 0.540，matched random 仅为 0.036 / 0.037 / 0.037；top-256 为 0.725 / 0.693 / 0.678。Close transport 明显弱于 continue transport，尤其高 count 的 argmax 翻转率仍低，说明没有一个上下文无关、正反完全对称的“继续/停止 neuron”。
+[TH] patch 方向
+[TH] count 区间
+[TH] Layer
+[TH] support
+[TH] ranked replacement recovery
+[TH] sparse direction recovery
+[TH] random replacement recovery
+[TH] ranked target accuracy
+[TD] continue evidence → close receiver
+[TD] 1-10
+[TD] Layer 3
+[TD] 64
+[TD] 0.062
+[TD] 0.043
+[TD] 0.008
+[TD] 0.0%
+[TD] continue evidence → close receiver
+[TD] 1-10
+[TD] Layer 3
+[TD] 256
+[TD] 0.127
+[TD] 0.077
+[TD] 0.028
+[TD] 0.0%
+[TD] continue evidence → close receiver
+[TD] 1-10
+[TD] Layer 4
+[TD] 64
+[TD] 0.341
+[TD] 0.248
+[TD] 0.024
+[TD] 20.0%
+[TD] continue evidence → close receiver
+[TD] 1-10
+[TD] Layer 4
+[TD] 256
+[TD] 0.618
+[TD] 0.337
+[TD] 0.116
+[TD] 100.0%
+[TD] continue evidence → close receiver
+[TD] 11-20
+[TD] Layer 3
+[TD] 64
+[TD] 0.082
+[TD] 0.077
+[TD] 0.005
+[TD] 0.0%
+[TD] continue evidence → close receiver
+[TD] 11-20
+[TD] Layer 3
+[TD] 256
+[TD] 0.125
+[TD] 0.106
+[TD] 0.022
+[TD] 0.0%
+[TD] continue evidence → close receiver
+[TD] 11-20
+[TD] Layer 4
+[TD] 64
+[TD] 0.239
+[TD] 0.218
+[TD] 0.018
+[TD] 0.0%
+[TD] continue evidence → close receiver
+[TD] 11-20
+[TD] Layer 4
+[TD] 256
+[TD] 0.432
+[TD] 0.269
+[TD] 0.076
+[TD] 35.0%
+[TD] continue evidence → close receiver
+[TD] 21-30
+[TD] Layer 3
+[TD] 64
+[TD] 0.068
+[TD] 0.063
+[TD] 0.006
+[TD] 0.0%
+[TD] continue evidence → close receiver
+[TD] 21-30
+[TD] Layer 3
+[TD] 256
+[TD] 0.100
+[TD] 0.076
+[TD] 0.024
+[TD] 0.0%
+[TD] continue evidence → close receiver
+[TD] 21-30
+[TD] Layer 4
+[TD] 64
+[TD] 0.273
+[TD] 0.217
+[TD] 0.020
+[TD] 0.0%
+[TD] continue evidence → close receiver
+[TD] 21-30
+[TD] Layer 4
+[TD] 256
+[TD] 0.450
+[TD] 0.225
+[TD] 0.084
+[TD] 5.6%
+[TD] close evidence → continue receiver
+[TD] 1-10
+[TD] Layer 3
+[TD] 64
+[TD] 0.044
+[TD] 0.035
+[TD] 0.005
+[TD] 0.0%
+[TD] close evidence → continue receiver
+[TD] 1-10
+[TD] Layer 3
+[TD] 256
+[TD] 0.101
+[TD] 0.063
+[TD] 0.023
+[TD] 0.0%
+[TD] close evidence → continue receiver
+[TD] 1-10
+[TD] Layer 4
+[TD] 64
+[TD] 0.509
+[TD] 0.454
+[TD] 0.036
+[TD] 20.0%
+[TD] close evidence → continue receiver
+[TD] 1-10
+[TD] Layer 4
+[TD] 256
+[TD] 0.725
+[TD] 0.513
+[TD] 0.164
+[TD] 100.0%
+[TD] close evidence → continue receiver
+[TD] 11-20
+[TD] Layer 3
+[TD] 64
+[TD] 0.061
+[TD] 0.063
+[TD] 0.003
+[TD] 0.0%
+[TD] close evidence → continue receiver
+[TD] 11-20
+[TD] Layer 3
+[TD] 256
+[TD] 0.089
+[TD] 0.089
+[TD] 0.013
+[TD] 0.0%
+[TD] close evidence → continue receiver
+[TD] 11-20
+[TD] Layer 4
+[TD] 64
+[TD] 0.541
+[TD] 0.526
+[TD] 0.037
+[TD] 65.0%
+[TD] close evidence → continue receiver
+[TD] 11-20
+[TD] Layer 4
+[TD] 256
+[TD] 0.693
+[TD] 0.567
+[TD] 0.179
+[TD] 100.0%
+[TD] close evidence → continue receiver
+[TD] 21-30
+[TD] Layer 3
+[TD] 64
+[TD] 0.077
+[TD] 0.064
+[TD] 3.11e-04
+[TD] 0.0%
+[TD] close evidence → continue receiver
+[TD] 21-30
+[TD] Layer 3
+[TD] 256
+[TD] 0.091
+[TD] 0.070
+[TD] 0.005
+[TD] 0.0%
+[TD] close evidence → continue receiver
+[TD] 21-30
+[TD] Layer 4
+[TD] 64
+[TD] 0.540
+[TD] 0.485
+[TD] 0.037
+[TD] 94.4%
+[TD] close evidence → continue receiver
+[TD] 21-30
+[TD] Layer 4
+[TD] 256
+[TD] 0.678
+[TD] 0.478
+[TD] 0.145
+[TD] 100.0%
+[H4] 分析
+[P] Layer 4 是主要的 feature-level decision writer。Ranked held-out patches 大幅超过 size-matched random controls，证明这些坐标不是仅在训练样本上相关，而是在新 pair 上因果运输 continue/close evidence。Layer 3 whole-MLP mediation 在 8.4 中很强，但 post-GELU 坐标替换本身较弱，说明 Layer 3 更像依赖 receiver residual、LayerNorm 与 attention-MLP 联合状态的中间转换，不能被一个固定 feature 子集独立搬走。
+[P] 共享稀疏方向只解释一部分机制。Layer 4 support-64 sparse direction 在 continue 方向达到 0.248 / 0.218 / 0.217 recovery，但 close 方向只有 0.454 / 0.526 / 0.485。扩大到 dense mean direction 不总是继续改善，说明不同 k 与上下文中的有效 feature 组合并不完全共线；这更像条件化的非线性子空间，而不是一根统一的 +1 轴。
+[H3] 8.6 Non-thinking broad heads：在最终 <Ans> 局部运输 donor count
+[H4] 实验
+[P] 对 nested receiver/donor pairs，在 non-thinking 模型最终 <Ans> query，仅 patch 按 broad score 排名的 donor head slices。Prompt token rows 不被替换，因此 donor count 若进入 receiver 输出，只能经由这些最终-query attention outputs 的局部变化发生。对每个 receiver count 区间、每个 top-n 独立拟合 expected-count transport slope。
+[H4] 结果
+[H3] Figure 6A. Non-thinking broad-head output 的 donor-count transport
+[FIGCAPTION] 横轴是最终 <Ans> query 被替换的 donor head slices 数；纵轴是 expected-count shift 对 donor offset m−n 的回归 slope。0 表示不运输，1 表示一比一运输。三栏按 receiver count 分区；蓝线按 broad score 排名，灰色为随机路径，紫色为 random top-4 mean。
+[TH] receiver count 区间
+[TH] patched top-n
+[TH] broad-ranked slope
+[TH] random mean
+[TH] random min–max
+[TD] 1-10
+[TD] 1
+[TD] 0.421
+[TD] -0.020
+[TD] -0.042 to -6.41e-06
+[TD] 1-10
+[TD] 2
+[TD] 0.638
+[TD] 0.097
+[TD] -0.019 to 0.181
+[TD] 1-10
+[TD] 4
+[TD] 0.982
+[TD] 0.120
+[TD] -0.048 to 0.250
+[TD] 1-10
+[TD] 8
+[TD] 0.982
+[TD] 0.489
+[TD] 0.429 to 0.575
+[TD] 11-20
+[TD] 1
+[TD] 0.291
+[TD] 0.003
+[TD] -9.20e-09 to 0.008
+[TD] 11-20
+[TD] 2
+[TD] 0.474
+[TD] 0.118
+[TD] 4.74e-04 to 0.212
+[TD] 11-20
+[TD] 4
+[TD] 0.753
+[TD] 0.165
+[TD] 0.003 to 0.345
+[TD] 11-20
+[TD] 8
+[TD] 0.798
+[TD] 0.512
+[TD] 0.468 to 0.544
+[TD] 21-30
+[TD] 1
+[TD] 0.028
+[TD] 8.54e-04
+[TD] -3.82e-08 to 0.002
+[TD] 21-30
+[TD] 2
+[TD] 0.079
+[TD] 0.043
+[TD] 0.004 to 0.120
+[TD] 21-30
+[TD] 4
+[TD] 0.529
+[TD] 0.204
+[TD] 0.046 to 0.438
+[TD] 21-30
+[TD] 8
+[TD] 0.536
+[TD] 0.379
+[TD] 0.185 to 0.544
+[H4] 分析
+[P] Broad-ranked top-1 已产生区间依赖的正 transport：1–10 / 11–20 / 21–30 的 slope 为 0.421 / 0.291 / 0.028。Top-4 后升至 0.982 / 0.753 / 0.529，而随机 top-4 均值仅为 0.120 / 0.165 / 0.204。
+[H3] 8.7 Non-thinking MLP intermediate：集合证据如何变成具体 count
+[H4] 实验
+[P] 这一实验把第 8.6 节的链条再向后推进一步。Receiver prompt 含 n 个 needles，donor prompt 含 m=n±3 个 needles；两者使用 nested prompt，使 receiver 的 needle 集合严格包含于 donor 或反之。我们在最终 <Ans> query、每个 Layer 的 MLP 中间层读取经过激活函数后的 1024 维 post-GELU activation，而不是读取完整 residual。
+[LI] Fit split。对每个 feature i 计算 (a_i(m)−a_i(n)) × w_i(m versus n)。其中 a_i 是 post-GELU activation；w_i 是该 feature 经 c_proj 与 tied unembedding 后，对 donor-count logit 相对 receiver-count logit 的线性系数。按跨 fit pairs 的平均 signed evidence 从大到小排序。
+[LI] Held-out causal split。Fit 与 evaluation 使用不相交的随机 seeds。在 receiver forward 中，只把排名 top-8 / 32 / 128 / 512 / 1024 个 post-GELU features 替换成 donor 值；其余 features、attention、residual 和后续 Layers 都保留 receiver 值。每个 support size 另采样 4 组等大小 random features。
+[LI] Transport slope。对 held-out pairs 回归 ΔE[C] = a + b(m−n)。b=1 表示 patched output 一比一跟随 donor offset；b=0 表示没有数值运输。另报告 R²、donor-vs-receiver logit-margin recovery，以及 argmax 是否真正翻转到 donor count。
+[H4] 结果
+[H3] Figure 6B. Non-thinking post-GELU feature transplant 的 count transport
+[FIGCAPTION] 横轴是被 donor 值替换的 post-GELU features 数量；纵轴是 expected-count transport slope。三栏为 receiver count 1–10、11–20、21–30；每条彩线是一层的 ranked features，灰色虚线是理想的一比一 transport。完整 1024-feature replacement 是整层 MLP intermediate transplant 的充分性 sanity check，而不是稀疏选择优势。
+[TH] receiver count 区间
+[TH] 选择
+[TH] Layer
+[TH] features
+[TH] ranked slope
+[TH] matched random slope
+[TH] slope gain
+[TH] ranked R²
+[TH] margin recovery
+[TH] argmax follows donor
+[TD] 1-10
+[TD] Layer 1 top-128
+[TD] Layer 1
+[TD] 128
+[TD] 0.629
+[TD] 0.127
+[TD] 0.501
+[TD] 0.980
+[TD] 0.697
+[TD] 0.0%
+[TD] 1-10
+[TD] Layer 1 full MLP
+[TD] Layer 1
+[TD] 1024
+[TD] 1.000
+[TD] 1.000
+[TD] -9.77e-15
+[TD] 1.000
+[TD] 0.986
+[TD] 100.0%
+[TD] 11-20
+[TD] Layer 1 top-128
+[TD] Layer 1
+[TD] 128
+[TD] 0.010
+[TD] 0.034
+[TD] -0.025
+[TD] 0.039
+[TD] -0.007
+[TD] 0.0%
+[TD] 11-20
+[TD] Layer 1 full MLP
+[TD] Layer 1
+[TD] 1024
+[TD] 0.824
+[TD] 0.824
+[TD] 7.00e-09
+[TD] 0.937
+[TD] 0.870
+[TD] 56.7%
+[TD] 11-20
+[TD] best sparse gain
+[TD] Layer 4
+[TD] 512
+[TD] 0.475
+[TD] -0.643
+[TD] 1.117
+[TD] 0.353
+[TD] 0.647
+[TD] 36.7%
+[TD] 21-30
+[TD] Layer 1 top-128
+[TD] Layer 1
+[TD] 128
+[TD] 1.31e-05
+[TD] 7.81e-07
+[TD] 1.23e-05
+[TD] 0.397
+[TD] 0.009
+[TD] 0.0%
+[TD] 21-30
+[TD] Layer 1 full MLP
+[TD] Layer 1
+[TD] 1024
+[TD] 9.42e-05
+[TD] 9.42e-05
+[TD] -7.02e-10
+[TD] 0.186
+[TD] 0.019
+[TD] 0.0%
+[TD] 21-30
+[TD] best sparse gain
+[TD] Layer 4
+[TD] 32
+[TD] 0.092
+[TD] -5.53e-07
+[TD] 0.092
+[TD] 0.062
+[TD] 0.150
+[TD] 0.0%
+[H4] 分析
+[P] 低 count 的 Layer-1 top-128 已达到 slope 0.629、R² 0.980，明显高于 matched-random slope 0.127；替换完整 Layer-1 1024 features 时 slope 为 1.000、R² 为 1.000，输出完整翻到 donor。
+[P] 11–20 中最强稀疏优势出现在 Layer 4 top-512：ranked slope 0.475，matched-random slope −0.643；Layer 3 top-512 的 ranked slope 更高，达到 0.721。21–30 的稀疏运输则整体很弱，最佳 sparse slope 仅约 0.092，完整 Layer-4 MLP transplant 也只有约 0.264。这与高 count state 更分布式、更依赖跨层 residual 的结论一致。
+[H3] 8.8 CoT trace-readout heads：最终 <Ans> 的 attention slices 单独不足以搬运 count
+[H4] 实验
+[P] 使用同一 nested donor/receiver protocol，但换成 thinking 模型，并按最终 <Ans> query 对全部 trace markers 的 attention mass 排名。Donor 与 receiver 的 gold trace 长度分别为 m 与 n，所以 semantic anchor 相同而绝对 position 不同。只替换 attention head-output slices；receiver 的 residual stream、MLP 输入与其余上下文仍保留 receiver 状态。
+[H4] 结果
+[H3] Figure 6B. CoT trace-readout head slices 的 donor-count transport
+[FIGCAPTION] 横轴是最终 <Ans> query 被替换的 donor slices 数；纵轴仍是 expected-count transport slope。三栏为 receiver count 区间。若 trace-readout heads 自身携带完整标量 count，蓝线应随 top-n 靠近 1；实际曲线大多接近 0。
+[TH] receiver count 区间
+[TH] patched top-n
+[TH] readout-ranked slope
+[TH] random mean
+[TH] random min–max
+[TD] 1-10
+[TD] 1
+[TD] -0.005
+[TD] -5.76e-04
+[TD] -0.002 to 2.89e-07
+[TD] 1-10
+[TD] 2
+[TD] 0.037
+[TD] -0.022
+[TD] -0.074 to 0.007
+[TD] 1-10
+[TD] 4
+[TD] 0.036
+[TD] 0.010
+[TD] -0.002 to 0.034
+[TD] 1-10
+[TD] 8
+[TD] 0.088
+[TD] -0.089
+[TD] -0.212 to 0.010
+[TD] 11-20
+[TD] 1
+[TD] 0.001
+[TD] -2.21e-05
+[TD] -6.63e-05 to 2.33e-07
+[TD] 11-20
+[TD] 2
+[TD] 0.069
+[TD] 6.88e-04
+[TD] -6.43e-04 to 0.003
+[TD] 11-20
+[TD] 4
+[TD] 0.055
+[TD] 0.020
+[TD] -0.001 to 0.062
+[TD] 11-20
+[TD] 8
+[TD] 0.265
+[TD] 0.007
+[TD] 0.003 to 0.010
+[TD] 21-30
+[TD] 1
+[TD] 5.40e-04
+[TD] 6.55e-06
+[TD] -7.15e-08 to 1.94e-05
+[TD] 21-30
+[TD] 2
+[TD] 0.009
+[TD] 3.32e-05
+[TD] 1.11e-06 to 7.22e-05
+[TD] 21-30
+[TD] 4
+[TD] 0.013
+[TD] 0.003
+[TD] 1.75e-06 to 0.008
+[TD] 21-30
+[TD] 8
+[TD] 0.016
+[TD] 0.002
+[TD] 5.53e-04 to 0.005
+[H4] 分析
+[P] CoT top-4 readout slices 的 slope 只有 0.036 / 0.055 / 0.013；即使 top-8 也只有 0.088 / 0.265 / 0.016，而且剂量曲线非单调。
+[H3] 8.9 CoT source-conflict：最终答案跟 prompt、trace，还是最后一个 trace 数字？
+[H4] 实验
+[P] 我们构造 receiver count n 与 donor count m=n±3 的冲突序列，并保持模型权重不变。以 n=5, m=8 为例，四个条件分别是：
+[LI] prompt=m, trace=n。Prompt 里有 8 个 needles，但 teacher-forced trace 只有 5 组 <k>, M_k；检验最终答案是重读 prompt 还是跟 trace。
+[LI] prompt=n, trace=m。Prompt 里有 5 个 needles，trace 却有 8 组；检验 trace extent 是否能覆盖 prompt evidence。
+[LI] final trace index=m only。Prompt、trace marker 数量与 trace 总长度都对应 5，只把最后一个 trace 数字改成 <8>；检验模型是否简单复制最后一个数字。
+[LI] marker-identity control。保持 prompt count、trace pair 数和数字不变，只循环置换 trace 中的 marker identities；检验 final count 是否依赖具体 marker 内容。
+[P] 每个 count 区间使用两个有向 count pairs（5↔8、15↔18、25↔28），每个 pair 有 6 个 prompts，因此每个 condition×bin 有 12 个 held-out conflict examples。follows receiver/donor 表示 30-way count argmax 等于哪一个 count；target margin 是预注册 target count logit 减去其余 29 个 count logits 的最大值。
+[H4] 结果
+[H3] Figure 6C. CoT final answer 的信息源冲突
+[FIGCAPTION] 横轴是三种真正改变候选 count 来源的 conflict；纵轴是最终 count argmax 跟随 receiver 或 donor 的比例。每栏是一个 count 区间。Marker-identity control 不改变目标 count，故列入下表而不混入二选一图。
+[TH] 冲突条件
+[TH] count 区间
+[TH] follows receiver
+[TH] follows donor
+[TH] target correct
+[TH] target logit margin
+[TH] mean |Ans-position shift|
+[TD] prompt=m, trace=n
+[TD] 1-10
+[TD] 100.0%
+[TD] 0.0%
+[TD] 0.0%
+[TD] -15.23
+[TD] 6.0
+[TD] prompt=m, trace=n
+[TD] 11-20
+[TD] 100.0%
+[TD] 0.0%
+[TD] 0.0%
+[TD] -15.23
+[TD] 6.0
+[TD] prompt=m, trace=n
+[TD] 21-30
+[TD] 100.0%
+[TD] 0.0%
+[TD] 0.0%
+[TD] -13.20
+[TD] 6.0
+[TD] prompt=n, trace=m
+[TD] 1-10
+[TD] 0.0%
+[TD] 100.0%
+[TD] 100.0%
+[TD] 15.97
+[TD] 0.0
+[TD] prompt=n, trace=m
+[TD] 11-20
+[TD] 0.0%
+[TD] 100.0%
+[TD] 100.0%
+[TD] 15.55
+[TD] 0.0
+[TD] prompt=n, trace=m
+[TD] 21-30
+[TD] 0.0%
+[TD] 100.0%
+[TD] 100.0%
+[TD] 13.64
+[TD] 0.0
+[TD] prompt/trace=n, final index=m
+[TD] 1-10
+[TD] 100.0%
+[TD] 0.0%
+[TD] 0.0%
+[TD] -18.70
+[TD] 6.0
+[TD] prompt/trace=n, final index=m
+[TD] 11-20
+[TD] 100.0%
+[TD] 0.0%
+[TD] 0.0%
+[TD] -17.80
+[TD] 6.0
+[TD] prompt/trace=n, final index=m
+[TD] 21-30
+[TD] 100.0%
+[TD] 0.0%
+[TD] 0.0%
+[TD] -13.46
+[TD] 6.0
+[TD] trace marker identities rotated
+[TD] 1-10
+[TD] 100.0%
+[TD] 0.0%
+[TD] 100.0%
+[TD] 19.19
+[TD] 0.0
+[TD] trace marker identities rotated
+[TD] 11-20
+[TD] 100.0%
+[TD] 0.0%
+[TD] 100.0%
+[TD] 17.45
+[TD] 0.0
+[TD] trace marker identities rotated
+[TD] 21-30
+[TD] 100.0%
+[TD] 0.0%
+[TD] 100.0%
+[TD] 13.70
+[TD] 0.0
+[H4] 分析
+[P] 三个区间的行为完全一致：prompt=m, trace=n 时模型 100% 输出 n；prompt=n, trace=m 时 100% 输出 m；只改最后 trace 数字时仍 100% 输出 n；置换 marker identity 也不改变答案。因而当前模型的最终答案不靠重新统计 prompt，也不是复制最后一个 trace 数字或读取 marker identity；最强行为证据指向完整 trace 的 pair 数/extent。
+[H3] 8.10 CoT final scalar bridge：哪一层把 trace/position evidence 写成可执行 count state？
+[H4] 实验
+[P] 对同一个 prompt=m, trace=n conflict，先运行 clean donor（prompt 与 trace 都为 m）并缓存最终 <Ans> row 的 activation；再运行 conflict receiver（prompt=m、trace=n，基线输出 n）。我们只在 receiver 的语义 <Ans> row 替换 clean donor activation，测 donor count m 的 logit-margin recovery。由于 donor 与 receiver 的 <Ans> 绝对位置不同，这个 patch 同时问：clean component 是否足以把 donor 的 trace/position-derived count evidence带到 receiver。
+[LI] Attention output。替换某一 Layer 完整 attention sublayer 的输出，但保留 receiver MLP 与 residual。
+[LI] MLP output。替换该 Layer MLP 投回 residual 的输出；attention 与 MLP 输入仍来自 receiver。
+[LI] Post-MLP residual。替换该 Layer 完成 attention、MLP 与 residual additions 后的整条 256 维 state；后续 Layers 继续在 receiver context 中运行。
+[LI] Normalized recovery。(patched donor-margin − conflict margin) / (clean donor-margin − conflict margin)。1 表示完全恢复 clean donor margin；另报告 argmax 是否真正翻到 donor target。
+[H4] 结果
+[H3] Figure 6D. CoT final &lt;Ans&gt; 的 sublayer/residual clean-to-conflict recovery
+[FIGCAPTION] 横轴是 Layer 1–4；纵轴是 donor-count normalized recovery。三种线分别替换完整 attention output、MLP output 与 post-MLP residual；三栏为 count 区间。虚线 1 表示恢复到 clean donor margin。
+[TH] count 区间
+[TH] Layer-1 component
+[TH] normalized recovery
+[TH] argmax follows donor
+[TD] 1-10
+[TD] Layer 1 attention output
+[TD] -5.97e-04
+[TD] 0.0%
+[TD] 1-10
+[TD] Layer 1 MLP output
+[TD] 0.875
+[TD] 100.0%
+[TD] 1-10
+[TD] Layer 1 post-MLP residual
+[TD] 0.933
+[TD] 100.0%
+[TD] 11-20
+[TD] Layer 1 attention output
+[TD] 0.004
+[TD] 0.0%
+[TD] 11-20
+[TD] Layer 1 MLP output
+[TD] 0.957
+[TD] 100.0%
+[TD] 11-20
+[TD] Layer 1 post-MLP residual
+[TD] 0.987
+[TD] 100.0%
+[TD] 21-30
+[TD] Layer 1 attention output
+[TD] 0.109
+[TD] 0.0%
+[TD] 21-30
+[TD] Layer 1 MLP output
+[TD] 0.914
+[TD] 100.0%
+[TD] 21-30
+[TD] Layer 1 post-MLP residual
+[TD] 0.999
+[TD] 100.0%
+[H4] 分析
+[P] Layer-1 attention output 的 recovery 在 1–10 / 11–20 / 21–30 仅为 -5.97e-04 / 0.004 / 0.109，从不把 argmax 翻到 donor。相反，Layer-1 MLP output 已恢复 0.875 / 0.957 / 0.914，三个区间的 argmax 都 100% 跟随 donor；Layer-1 post-MLP residual 进一步达到 0.933 / 0.987 / 0.999。
+[P] 固定的 prompt-broad、trace-index 或 trace-marker head bundles 在同一位置的 recovery 很弱，而且没有翻转 target；这与 8.8 的 readout-slice 结果一致：最终 scalar state 不是由少数固定 attention slices 单独携带。
+[H3] 8.11 本节结论与证据边界
+[H3] Non-thinking
+[P] 当前支持：early broad heads 既表现出必要性，也能在最终 <Ans> 局部 patch 中运输 donor count；held-out post-GELU feature transplant 又证明低/中 count 的一部分 numeric state 可由特定 MLP feature 子集搬运。因此“broad set aggregation → MLP count conversion → answer state”已有连续的局部因果证据。
+[P] 边界：高 count 的 fixed-head 与 sparse-feature transport 都明显变弱，说明 state 分布到更多 heads、Layers 与 residual；尚未得到一套跨 1–30 通用的算术 feature basis。
+[H3] CoT
+[P] 当前支持：数字 <k> row 的 targeted bundle 恢复 marker identity；marker M_k row 的 successor bundle 运输 next-step evidence；MLP features 写入 continue/close logits。最终答案在冲突中跟 trace pair count/extent，而不是 prompt count、marker identity或最后 trace 数字；clean Layer-1 MLP output 和 post-MLP residual 足以把 donor scalar count 写入 conflict receiver。
+[P] 仍缺：trace pair 数与 <Ans> 绝对位置共变，尚未区分语义 trace-length counting 与 learned-position shortcut；也没有把 final scalar bridge 压缩为固定少数 heads 或一根统一 count direction。
+[H2] 9. Hidden-state geometry steering：相邻 transplant、非相邻直线与 centroid 曲线
+[H3] 9.1 共同设置、状态分解与结果量
+[H4] 实验
+[P] Centroids 来自独立的 direction-train split，不使用本节干预样本。对 semantic site s、Layer l 和 exact count c，先平均 256 维 residual，得到 mu[s,l,c] = E[h | s,l,count=c]。本节使用 2 个 held-out prompts / exact count，即每个 site 有 60 个 receiver prompts；在三个 sites、四层和所有合法 donor offsets 上共记录 41,184 条真实 patched-forward 行。
+[LI] 三个 sites。nonthinking_final_answer 与 thinking_final_answer 都在自然序列的最终 <Ans> query 取 residual。thinking_fixed_trace_answer 则强制所有 prompt 使用同一条 15-step gold-format trace，只有 prompt needle count 与答案标签变化；它用于区分“prompt-derived count geometry 可读”与“该 geometry 真正控制最终答案”。
+[LI] Receiver 分解。把 receiver state 写成 h_r = mu_r + epsilon，其中 epsilon 包含该具体 prompt 相对 exact-count 均值的残差。Full transplant 使用 h' = mu_t；delta transport 使用 h' = h_r + (mu_t - mu_r) = mu_t + epsilon。二者若结果相同，说明保留 prompt-specific residual 不妨碍 count 搬运。
+[LI] 连续输出。从 count-token logits 计算 E[C] = sum_c c * softmax(z_count)[c]。对每个 panel 回归 Delta E[C] = a + b * Delta c_path；b=1 表示输出一比一跟随指定路径坐标。path-tracking MAE = mean |E_patch[C] - c_path|，越接近 0 越好。
+[LI] Layer 含义。“after Layer 1–4”表示替换该 Transformer Layer 输出的 residual。较早层后仍有后续 Layers 可修正或抵消干预；after Layer 4 后只剩最终 LayerNorm 与 tied unembedding，因此更直接检验该 residual 是否已是可执行 count state。
+[H3] 9.2 相邻 count：完整 centroid transplant 与 residual-preserving delta
+[H4] 实验
+[P] 对 receiver count r，分别选择相邻 donor t=r-1 或 r+1。Full transplant 删除 receiver 的 epsilon，直接写入 mu_t；delta transport 只增加局部 centroid 差 mu_t-mu_r，保留 receiver prompt 的其余状态。每个 count 区间独立拟合 transport slope。
+[H4] 结果
+[H3] Figure 7A. 相邻 exact-count centroid 的 full transplant 与 delta transport
+[FIGCAPTION] 横轴是 residual 被干预在 Layer 1–4 之后；纵轴是 Delta E[C] 对目标相邻 count shift（±1）的回归 slope。蓝色实线=直接写入目标 centroid；橙色虚线=保留 receiver residual 的 centroid delta。灰虚线 1 是理想一比一搬运。三行是 non-thinking natural、CoT natural、CoT fixed-15 control；三列是 receiver count 1–10、11–20、21–30。
+[TH] semantic site
+[TH] receiver count 区间
+[TH] Layer 4 full-transplant slope
+[TH] Layer 4 delta slope
+[TH] Layer 4 delta R²
+[TH] Layer 4 path MAE
+[TD] non-thinking natural final
+[TD] 1-10
+[TD] 1.000
+[TD] 1.000
+[TD] 1.000
+[TD] 4.97e-07
+[TD] non-thinking natural final
+[TD] 11-20
+[TD] 1.000
+[TD] 1.000
+[TD] 1.000
+[TD] 1.41e-06
+[TD] non-thinking natural final
+[TD] 21-30
+[TD] 1.000
+[TD] 1.000
+[TD] 1.000
+[TD] 7.45e-06
+[TD] CoT natural final
+[TD] 1-10
+[TD] 1.000
+[TD] 1.000
+[TD] 1.000
+[TD] 1.03e-05
+[TD] CoT natural final
+[TD] 11-20
+[TD] 1.000
+[TD] 1.000
+[TD] 1.000
+[TD] 4.30e-06
+[TD] CoT natural final
+[TD] 21-30
+[TD] 1.000
+[TD] 1.000
+[TD] 1.000
+[TD] 2.98e-05
+[TD] CoT counterfactual fixed-15 final
+[TD] 1-10
+[TD] 2.50e-04
+[TD] 1.63e-04
+[TD] 0.048
+[TD] 9.210
+[TD] CoT counterfactual fixed-15 final
+[TD] 11-20
+[TD] 9.80e-05
+[TD] 1.53e-04
+[TD] 0.079
+[TD] 2.600
+[TD] CoT counterfactual fixed-15 final
+[TD] 21-30
+[TD] 0.484
+[TD] 0.428
+[TD] 0.408
+[TD] 8.520
+[H4] 分析
+[P] 自然 CoT 的 final-answer state 在所有深度都已强因果化。三个 count 区间、四个 Layers 的相邻 delta slope 均为 1.000，tracking MAE 为 0；既可以把 state 完整换成相邻 centroid，也可以只加局部差向量，模型都会把 count 输出精确移动一格。
+[P] Non-thinking 是逐层形成的。在 21–30，Layer 1 后的 delta slope 只有 3.23e-05，Layer 3 后为 0.331，到 Layer 4 后才达到 1.000。这与“early broad heads 收集集合证据、后层 residual/MLP 才写成明确 count state”的机制相容。
+[P] Fixed-15 是关键负对照。低/中 count 的 Layer 4 delta slope 都为 0.000；即使 hidden state 在第 6 节仍能按 prompt count 分类，该方向也不能改写由固定 trace 主导的最终 logits。可读 geometry 因此不自动等于被模型用作答案控制变量。
+[H3] 9.3 非相邻 count：直接沿端点连线移动
+[H4] 实验
+[P] 对合法 offset t-r in {±2,±3,±5,±10}，定义端点 chord：p_chord(alpha) = (1-alpha) mu_r + alpha mu_t，并写入 h' = h_r + p_chord(alpha) - mu_r。alpha 取 0.25、0.5、0.75、1；它检验“把两个非相邻 count centroid 直接连成一条直线”是否仍留在模型可执行的 count manifold 上。
+[H4] 结果
+[H3] Figure 7B. 非相邻 count 的端点直线（chord）transport
+[FIGCAPTION] 横轴是干预 Layer；纵轴是在所有 donor offsets 上拟合的 transport slope。颜色表示 chord 进度 alpha；虚线 1 为理想路径跟随。上行为 non-thinking natural，下行为 CoT natural；三列为 receiver count 区间。alpha=1 只测试终点，alpha<1 才测试直线内部。
+[H4] 分析
+[P] 端点通常可以到达，但中间 chord 点并不稳定对应线性 count。以 Layer 4、alpha=0.5 为例，non-thinking 三段 tracking MAE 为 1.376 / 1.410 / 0.987；CoT 为 1.094 / 1.120 / 0.842。这说明 exact-count endpoints 之间的欧氏捷径会穿过非自然区域。
+[H3] 9.4 非相邻 count：沿相邻 centroids 的 piecewise curve 移动
+[H4] 实验
+[P] 把 mu_r, mu_(r±1), ..., mu_t 依 count 顺序连接成折线，并按 residual-space arc length 归一化。p_curve(alpha) 是走过总弧长 alpha 比例时的点；干预仍为 h' = h_r + p_curve(alpha) - mu_r。因此 curve 与 chord 在 alpha=0、alpha=1 完全相同，只在中间路径不同。
+[H4] 结果
+[H3] Figure 7C. 沿相邻 centroid 折线的非相邻 count transport
+[FIGCAPTION] 横纵轴、行列与 alpha 颜色同 Figure 7B，但 intervention point 改为沿相邻 exact-count centroids 的归一化弧长路径。若 count geometry 是弯曲 manifold，该方法应比端点直线更接近 slope=1。
+[TH] natural site
+[TH] receiver count 区间
+[TH] Layer 4 chord slope (alpha=.5)
+[TH] chord R²
+[TH] chord MAE
+[TH] Layer 4 curve slope (alpha=.5)
+[TH] curve R²
+[TH] curve MAE
+[TD] non-thinking natural final
+[TD] 1-10
+[TD] 0.650
+[TD] 0.461
+[TD] 1.376
+[TD] 0.985
+[TD] 0.994
+[TD] 0.135
+[TD] non-thinking natural final
+[TD] 11-20
+[TD] 1.072
+[TD] 0.748
+[TD] 1.410
+[TD] 1.005
+[TD] 0.996
+[TD] 0.139
+[TD] non-thinking natural final
+[TD] 21-30
+[TD] 1.181
+[TD] 0.799
+[TD] 0.987
+[TD] 1.007
+[TD] 0.994
+[TD] 0.109
+[TD] CoT natural final
+[TD] 1-10
+[TD] 0.782
+[TD] 0.686
+[TD] 1.094
+[TD] 0.997
+[TD] 0.995
+[TD] 0.120
+[TD] CoT natural final
+[TD] 11-20
+[TD] 1.118
+[TD] 0.862
+[TD] 1.120
+[TD] 1.000
+[TD] 0.996
+[TD] 0.133
+[TD] CoT natural final
+[TD] 21-30
+[TD] 1.125
+[TD] 0.839
+[TD] 0.842
+[TD] 1.001
+[TD] 0.993
+[TD] 0.130
+[H4] 分析
+[P] Layer 4 的 curve 在六个 natural site×count-bin panels 中，alpha=0.5 slope 都接近 1（范围约 0.985–1.007），tracking MAE 只有 0.109–0.139；对应 chord MAE 为 0.842–1.410。也就是说，模型不只接受目标 centroid，连相邻 centroids 所定义的中间路径也映射到正确的中间 count；直接端点连线则显著偏离。
+[H3] 9.5 曲线是否真的优于直线，以及终点 sanity check
+[H4] 结果
+[H3] Figure 7D. Curve 与 chord 在中间 alpha 的 path-tracking error
+[FIGCAPTION] 横轴是干预 Layer；纵轴是 alpha<1、所有合法非相邻 offsets 上的平均绝对 path-tracking error。橙虚线=端点 chord，绿实线=相邻-centroid curve；越低越好。上行为 non-thinking，下行为 CoT；三列为 count 区间。
+[P] 代码级终点检查覆盖 4,800 条 alpha=1 curve/chord 对：两种路径的预测 count 一致率为 100.0%，expected-count 最大绝对差仅 2.64e-05。因此 curve 的优势不是终点或实现不一致造成，而来自中间路径本身。
+[H4] 分析
+[H2] 10. Hidden-state patching：跨 sequence 搬运 count state 与 trace progress
+[H3] 10.1 表示空间、配对方式与结果量
+[H4] 实验
+[LI] 替换的是同一种表示。Donor 与 receiver 都在同一个 Transformer Layer 的 block-output hook 捕获 post-Layer residual，即该 Layer attention、MLP 与两次 residual addition 完成后的 256 维向量；替换后只运行后续 Layers。它不是 embedding、attention value 或 MLP intermediate。
+[LI] 跨 sequence pair。每个合法有序 count pair m→n 使用 2 个独立 nested prompt pair；donor 与 receiver 共享 noise base，count 较小者的 needle 集合是较大者的子集。结果仍按 receiver count 1–10、11–20、21–30 分栏。
+[LI] 连续结果量。从 30 个 count-token logits 算 E[C]，回归 ΔE[C]=a+b(m−n)。Transport slope b=1 表示 patched 输出一比一随 donor count 移动，b=0 表示没有 count transport；follows donor 则要求 argmax count 恰好等于 m。
+[LI] 为什么还保留 centroid transplant。Figure 8A 的 centroid intervention 平均掉 donor prompt identity；后续自然-state patch 则保留一条具体 donor sequence 的全部内容。两者一致时，才能更有把握地说 transported signal 是 count state，而不是某个平均化人工方向。
+[H3] 10.2 先验基线：exact-count centroid transplant
+[H4] 实验设定
+[P] 这个基线先问一个最宽松的问题：同一 count 类别的平均 residual 几何，是否已经足以控制最终 count logits？对每个模型、semantic site、Layer 与 count c，我们用独立 direction split 的样本计算 256 维均值 mu(layer, site, c)。均值样本不包含被测试 receiver，因此 intervention 不会复制同一条 prompt 的内容。
+[LI] 正常运行 count=8 的 receiver，并定位它的最终 <Ans> query。
+[LI] 若测试 after Layer 2，就把 receiver 在该 token 经过 Layer 2 后的 residual h2(receiver, Ans) 整体替换成 mu(2, Ans, 18)。
+[LI] 从 Layer 3 继续运行到 LM head；输入中尚未出现答案 count token，因此输出只能由 patched state 与后续 Layers 决定。
+[LI] 从 30 个 count-token logits 计算 argmax count 与 expected count，并对多个 receiver n ← donor m pair 拟合 transport slope。
+[P] 图中的 natural donor residual 是更严格的比较：不用类均值，而把一条独立 count=18 donor 在同一 semantic site 的完整 residual 放进 count=8 receiver。Centroid 成功只说明“平均 count geometry 可执行”；natural residual 也成功，才说明单样本状态同样可运输。
+[H4] 结果
+[H3] Figure 8A. Count centroid 与单 donor residual 的分层 transport slope
+[FIGCAPTION] 横轴是 residual 被替换在 Layer 1–4 哪一层之后；纵轴是 expected-count transport slope。蓝线写入独立 direction split 的 exact-count centroid；橙虚线写入一条 donor sequence 的 final-query residual。每行一个 semantic site，每列一个 receiver count 区间。虚线 1 表示理想的一比一 donor-count transport。
+[H4] 分析
+[P] Centroid 与自然 donor residual 在后层趋于一致，说明 final-query residual 中确实存在足以控制 count logits 的状态。不过这张旧图混合了不同 patch protocol；下面的三个实验使用统一 block-output hook、明确的 donor/receiver token anchor，并将自然 sequence patch 单独报告。
+[H3] 10.3 Final <Ans> patch：Non-thinking 与 CoT 的最终 count state
+[H4] 实验设定
+[P] 这里不再使用 centroid，而是做单 donor sequence 到单 receiver sequence的 natural-state patch。Donor 与 receiver 是独立样本，但由 nested construction 共享 noise base；较小 count 的 needle 集合是较大 count 的子集。这样 count 差异明确，又不会把完全不同的 prompt 当作同一干预对。
+[LI] Non-thinking receiver 输入停在 <BOS> prompt(count=8) <Ans>；donor 是 <BOS> prompt(count=18) <Ans>。
+[LI] CoT receiver 输入停在 ... <Think> <1> M1 ... <8> M8 </Think> <Ans>；donor 对应地停在 ... <18> M18 </Think> <Ans>。
+[LI] 在 donor 与 receiver 各自的 <Ans> token，缓存 after Layer L 的完整 256 维 residual；把 donor residual 替换进 receiver，再运行 Layer L+1 到 LM head。
+[LI] 答案 token没有作为输入。我们只读取 receiver <Ans> 后下一 token 的 30 个 count logits。CoT 两条 trace 长度不同，所以 patch 对齐的是 semantic anchor，而不是相同绝对数组下标。
+[P] 每个 Layer 都分别重做 patch；baseline 是同一个 receiver 未干预时的 logits。结果量包括 expected-count shift、transport slope、argmax 是否等于 donor count，以及是否仍等于 receiver count。
+[H4] 结果
+[H3] Figure 8B. 跨 sequence 的 final-<Ans> natural residual transplant
+[FIGCAPTION] 横轴是 patch 后继续运行前已经完成的 Layer；纵轴是 expected-count transport slope。三栏按 receiver count 分区；蓝线为 non-thinking，橙线为 CoT。虚线 1 表示 patched 输出一比一跟随 donor count。
+[TH] 模型
+[TH] receiver count 区间
+[TH] after Layer 1 slope
+[TH] after Layer 3 slope
+[TH] after Layer 4 slope
+[TH] after Layer 4 argmax=donor
+[TD] Non-thinking
+[TD] 1-10
+[TD] 0.983
+[TD] 1.012
+[TD] 1.000
+[TD] 100.0%
+[TD] Non-thinking
+[TD] 11-20
+[TD] 0.763
+[TD] 0.991
+[TD] 1.000
+[TD] 100.0%
+[TD] Non-thinking
+[TD] 21-30
+[TD] 0.525
+[TD] 0.800
+[TD] 1.000
+[TD] 100.0%
+[TD] CoT
+[TD] 1-10
+[TD] 0.293
+[TD] 1.000
+[TD] 1.000
+[TD] 100.0%
+[TD] CoT
+[TD] 11-20
+[TD] 0.807
+[TD] 1.000
+[TD] 1.000
+[TD] 100.0%
+[TD] CoT
+[TD] 21-30
+[TD] 0.993
+[TD] 1.000
+[TD] 1.000
+[TD] 100.0%
+[H4] 分析
+[P] After Layer 4 的 final-query residual 对两个模型都具有近乎完全的因果充分性。六个 mode×count-bin 条件的 slope 均约为 1，且 argmax 100% 等于 donor count。Non-thinking 的状态随深度逐步成形：21–30 的 slope 从 Layer 1 后的 0.525、Layer 3 后的 0.800 增至 Layer 4 后的 1.000。CoT 则更早形成可执行 count state：11–30 在 Layer 1 后已达 0.807–0.993，Layer 2 后即约为 1。
+[H3] 10.4 CoT final marker patch：最后一个 marker state 不是最终答案 count state
+[H4] 实验设定
+[P] 本实验只把 patch anchor 从最终 <Ans> 提前到 CoT trace 的最后一个 marker，检验“完成第 n 次 retrieval 后的 marker state”是否已经等于可执行的 scalar count state。
+[LI] Receiver 的 anchor 是 trace 尾部 <8> M8 中的 M8；donor anchor 是 <18> M18 中的 M18。
+[LI] 在 after Layer L，把 hL(donor, M18) 替换到 hL(receiver, M8)，再继续运行 receiver 的剩余 Layers。
+[LI] Receiver 后缀仍是自己的 </Think> <Ans>；答案 count token不作为输入。最终在 <Ans> 后读取 count logits。
+[P] 因此 10.3 与 10.4 的 donor/receiver pair 和结果量相同，唯一关键差别是 patch site：前者直接 patch final-answer query，后者 patch 更早的 final trace marker。两者的差异定位了 scalar readout 在哪一步才形成。
+[H4] 结果
+[H3] Figure 8C. CoT final-marker m→n patch 对最终 count 的 transport
+[FIGCAPTION] 横轴是 final marker residual 被替换在 Layer 1–4 哪一层之后；纵轴是最终 <Ans> expected-count transport slope。三栏为 receiver count 区间；虚线 1 表示理想 donor-count transport。曲线贴近 0 表示最终答案继续跟随 receiver。
+[TH] receiver count 区间
+[TH] after Layer 1 slope
+[TH] after Layer 4 slope
+[TH] after Layer 4 argmax=receiver
+[TD] 1-10
+[TD] 6.12e-07
+[TD] 0.000
+[TD] 100.0%
+[TD] 11-20
+[TD] 1.20e-06
+[TD] 0.000
+[TD] 100.0%
+[TD] 21-30
+[TD] 3.34e-08
+[TD] 0.000
+[TD] 100.0%
+[H4] 分析
+[P] 三个区间、四层的 transport slope 都近似 0；after Layer 4 的最终 count 仍 100% 跟随 receiver。因而“final marker residual”与“final <Ans> count residual”不是同一个状态。关闭 trace 后的 token、位置与后续计算仍会重新构造答案 readout；不能因为最后 marker 与 count 同步出现，就把它当作已经完成的标量 count register。
+[H3] 10.5 只看 donor count > receiver count：较大的 scalar 能否向上搬运
+[H4] 实验设定
+[P] 这不是另一种 patch，而是对 10.3 与 10.4 的逐 pair 记录做有方向的子集分析。原 transport slope 同时混合 8←18 与 18←8；如果模型只容易把大数向下拉，却不能把小 receiver 向更大的 donor 推动，双向平均可能掩盖这种不对称。
+[P] 由于 patch 本身与 10.3/10.4 完全相同，这一节检验的是结论的方向稳定性，而不是引入新 intervention。
+[H4] 结果
+[H3] Figure 8D. 仅 donor count > receiver count 的上行 scalar transport
+[FIGCAPTION] 列按 receiver count 1–10、11–20、21–30 分区；横轴是 residual patch 在 Layer 1–4 哪层之后发生；纵轴是只用 donor>receiver pairs 拟合的 expected-count transport slope。上两行分别在 non-thinking 与 CoT 的最终 <Ans> patch；第三行在 CoT 最后 trace marker patch。绿虚线 1 为理想的一比一上行搬运，灰点线 0 为无搬运。
+[TH] patch site
+[TH] receiver count 区间
+[TH] after Layer 1
+[TH] after Layer 2
+[TH] after Layer 3
+[TH] after Layer 4
+[TD] Non-thinking final
+[TD] 1-10
+[TD] 0.932
+[TD] 0.932
+[TD] 0.996
+[TD] 1.000
+[TD] Non-thinking final
+[TD] 11-20
+[TD] 0.442
+[TD] 0.860
+[TD] 1.023
+[TD] 1.000
+[TD] Non-thinking final
+[TD] 21-30
+[TD] 0.002
+[TD] 0.254
+[TD] 0.304
+[TD] 1.000
+[TD] CoT final
+[TD] 1-10
+[TD] -0.228
+[TD] 0.998
+[TD] 1.000
+[TD] 1.000
+[TD] CoT final
+[TD] 11-20
+[TD] 0.412
+[TD] 1.000
+[TD] 1.000
+[TD] 1.000
+[TD] CoT final
+[TD] 21-30
+[TD] 1.000
+[TD] 1.000
+[TD] 1.000
+[TD] 1.000
+[TD] CoT final trace marker
+[TD] 1-10
+[TD] 1.17e-06
+[TD] 6.59e-08
+[TD] 2.05e-06
+[TD] 0.000
+[TD] CoT final trace marker
+[TD] 11-20
+[TD] 2.68e-06
+[TD] -0.009
+[TD] 7.16e-07
+[TD] 0.000
+[TD] CoT final trace marker
+[TD] 21-30
+[TD] -2.95e-07
+[TD] -2.13e-06
+[TD] 2.02e-07
+[TD] 0.000
+[H4] 分析
+[P] 最终 <Ans> residual 的上行搬运在后层仍然成立：Non-thinking 到 Layer 4、CoT 通常从 Layer 2 起，slope 都约为 1。高 count 的 non-thinking 形成最慢，21–30 区间在 Layer 1/2/3 后仅约 0.002/0.254/0.304，到 Layer 4 才跃升到 1。相反，CoT 最后 trace-marker residual 的 slope 在所有区间和 Layer 都约为 0。这个方向性分析排除了“原结论只是较大 receiver 被较小 donor 向下拉容易”的解释：真正能向上运输较大 scalar 的是 final-answer state，不是最后 marker state。
+[H3] 10.6 CoT trace 内部 early-stop patch：短 trace 的终止状态能否关闭长 trace
+[H4] 实验设定
+[P] 这里把 total count 与当前 trace progress 故意拆开。构造短 donor count=m 与长 receiver count=n>m，并让两者共享前 m 个 needle 及对应 marker identity。于是同一个 marker M_m 在 donor 是终点，在 receiver 只是中间点。
+[LI] Donor 局部上下文为 ... <5> M5，正确下一 token 是 </Think>。
+[LI] Receiver 局部上下文也到 ... <5> M5，但 prompt 里还有 5 个 needles，正确下一 token 是 <6>。
+[LI] 在 after Layer L，把 donor 的 M5 residual 替换到 receiver 的 M5，再读取 receiver 下一 token logits。局部结果量是 close margin = logit(</Think>) − logit(<6>)。
+[P] 最终 count 使用第二个、独立的 forward。输入只保留 receiver prompt 与前 5 组 trace，然后人为接上 </Think><Ans>；不提供 I6–I10/M6–M10，也不提供答案 count token。我们再次在相同 marker site patch，再从 <Ans> 后读取 count logits。这样“局部关闭决定”与“截断 trace 后的 count readout”不会被 gold trace tail 混在一起。
+[H4] 结果 A：局部关闭决定
+[H3] Figure 8E. Donor final-marker state 是否使 receiver interior marker 提前关闭
+[FIGCAPTION] 横轴是 patch 所在 Layer；纵轴是 patched receiver 下一 token 预测为 </Think> 的样本比例。三栏按长 receiver 的 count 分区。1 表示所有 pair 都被 donor 的“现在结束”状态关闭。
+[TH] receiver count 区间
+[TH] after Layer 3 close rate
+[TH] after Layer 4 close rate
+[TH] after Layer 4 close-margin shift
+[TH] forced-close count slope
+[TD] 1-10
+[TD] 69.0%
+[TD] 100.0%
+[TD] 32.835
+[TD] 0.000
+[TD] 11-20
+[TD] 28.0%
+[TD] 100.0%
+[TD] 30.969
+[TD] 0.000
+[TD] 21-30
+[TD] 26.0%
+[TD] 100.0%
+[TD] 29.762
+[TD] 0.000
+[H4] 分析 A
+[P] After Layer 4 patch 在三个区间都令 close rate 达到 100%，平均 close-margin 分别增加 32.84 / 30.97 / 29.76；Layer 3 的 close rate 为 69.0% / 28.0% / 26.0%。因此 trace marker residual 在后层确实携带强的局部 progress/termination state，而且该状态可以从“短 trace 的最后一步”因果搬到“长 trace 的内部步骤”。
+[H4] 结果 B：强制关闭后的最终 count
+[H3] Figure 8F. 截断 trace 强制关闭后，最终答案是否额外运输 donor count
+[FIGCAPTION] 横轴是 donor final-marker residual 的 patch Layer；纵轴是截断输入最终 <Ans> expected-count 对 donor offset 的 transport slope。三栏为 receiver count 区间。接近 0 表示 patch 本身没有在截断 readout 中增加额外 donor-count 位移。
+[H4] 分析 B
+[P] 三个区间、四层的 forced-close count transport slope 都约为 0。这里不能把“最终预测常等于 m”当作 donor-state 运输，因为截断 receiver 本身就只展示了 m 个 trace markers；即使不 patch，模型也可以仅凭可见 trace 长度读出 m。最稳健的结论是：final-marker residual 足以搬运局部结束决定，但没有证据表明它还能独立于截断 trace 内容搬运最终 scalar count。
+[H3] 10.7 不提供 gold tail 的 12 场景自由生成：拆开 total count 与 trace progress
+[H4] 实验设定
+[P] 单个 R5@I4 ← D10@I7 只能说明一个方向。这里使用 12 个预注册场景覆盖低、中、高 count，并把 donor 的总 needle 数与当前 trace progress做近似 2×2 因子拆分。记号 Ra@Ii ← Db@Ij 表示：receiver prompt 总数为 a，输入 trace 只给到 <i> Mi；donor prompt 总数为 b，residual 取自 <j> Mj。
+[LI] total 与 progress 同向上移：R5@I4←D10@I7、R10@I7←D20@I14、R20@I14←D30@I24。
+[LI] total 与 progress 同向下移：R10@I4←D5@I2、R20@I9←D10@I5、R30@I18←D20@I10。这些 progress 特意满足 receiver 当前 I 仍存在于较小 donor 中，因此“同 progress、只换 total”的自然 donor 控制有定义。
+[LI] 只改 progress：R10@I4←D10@I7 与 R20@I14←D20@I7，total 相同。
+[LI] 只改 total：R10@I7←D20@I7 与 R20@I7←D10@I7，progress 相同。
+[LI] total 与 progress 反向冲突：R10@I7←D20@I4 与 R20@I7←D10@I9。
+[P] 每条 receiver 输入都严格停在当前 marker；后面不提供 gold trace tail，不强制 </Think>、<Ans>，也不提供答案 token。Patch 后 greedy rollout 最多 40 tokens。每个场景使用 8 个独立 prompt pairs。正式实验只在 after Layer 4 做一次 one-shot patch；下一 token 生成后 hook 即失效，所以结果不能归因于持续重复注入。
+[LI] baseline：不 patch，receiver 通常应从 I8 继续并在 I10 附近结束，最终答 C10。
+[LI] natural total-only：使用另一条 total=20、但同样位于 I7 的 donor residual，测试只换 prompt total evidence。
+[LI] natural total+progress：使用 total=20、位于 I14 的 donor residual，同时改 total 与 progress。
+[LI] centroid total delta：在 receiver state 上加 mu(20,I7)−mu(10,I7)。
+[LI] centroid progress delta：加 mu(20,I14)−mu(20,I7)，只沿 donor total 条件下的 progress 方向移动。
+[LI] centroid combined delta：加 mu(20,I14)−mu(10,I7)。
+[LI] 另有 self-state 与 same-semantics cross-prompt controls，用来估计 hook 本身和无关 prompt identity 的影响。
+[P] 我们记录三个彼此不同的结果量：first index 是 patch 后第一个生成的 index，主要反映局部 progress；stop index 是生成 </Think> 前最后一个 index；final count 是 <Ans> 后生成的 scalar count。对于每个结果，还拟合 outcome shift = a + b_total(donor total−receiver total) + b_progress(donor progress−receiver progress)，用偏回归区分两种 offset 的独立作用。
+[H4] 结果 A：patch 后的第一个 trace index
+[H3] Figure 8G. 12 个 total/progress 场景的第一个自由生成 index
+[FIGCAPTION] 纵轴是场景 receiver←donor；横轴是 after Layer 4 one-shot intervention。单元格为跨样本平均的第一个 index。每行应同时对照 receiver progress+1 与 donor progress+1：靠近前者表示未运输，靠近后者表示 donor progress 被运输。
+[H4] 结果 B：trace 最终停止 index
+[H3] Figure 8H. 12 个场景自由生成 trace 的停止 index
+[FIGCAPTION] 纵轴与横轴同 Figure 8G；单元格是生成 </Think> 前最后一个 index。应分别比较 receiver total、donor total、receiver progress 与 donor progress，不能只把某一个数预设为正确答案。
+[P] 停止位置没有同样干净的一维搬运。Progress intervention 后只有 72.9% 的 rollout 在 40-token 预算内自然产生 </Think>。典型边界是 R10@I7←D20@I14：模型先生成 I15，但没有在预算内恢复成一条合法、可关闭的 receiver trace；而 R20@I9←D10@I5 会从 I6 重新开始，随后仍在 I20 左右关闭。说明 one-shot residual 足以设定“下一步在哪里”，却不总是足以把后续状态机稳定接到 donor 或 receiver 的完整终止轨迹上。
+[H4] 结果 C：关闭 trace 后的最终 scalar count
+[H3] Figure 8I. 12 个场景自由生成的最终 count
+[FIGCAPTION] 纵轴与横轴同 Figure 8G；单元格是 <Ans> 后 count token 的均值。若 marker state 独立携带 scalar，final count 应随 donor total offset 系统移动；若 scalar 被 receiver prompt/readout 重建，则应留在 receiver total。
+[P] 最终 scalar 没有随 donor total 搬运。在 donor/receiver total 不同且成功生成答案的样本中，94.7% 的 final count 等于 receiver total，0.0% 等于 donor total；少数偏差只多出 1（C10→C11 或 C20→C21）。相反，两个 total-only intervention 共 192 条记录全部自然关闭（100.0%），并且 100.0% 保持 receiver count。也就是说，在这个 marker site 单独注入“donor 总数”既不改变下一 index，也不改变最终答案。
+[H4] 结果 D：跨场景 total/progress 偏回归
+[H3] Figure 8J. Donor total offset 与 progress offset 对三个 rollout 结果的独立系数
+[FIGCAPTION] 横轴是 intervention；每个 outcome 分别显示 b_total 与 b_progress。系数 1 表示 donor offset 每增加 1，结果同向移动 1；0 表示在控制另一个 offset 后没有独立线性作用。仅使用 after Layer 4 one-shot 的 12 个场景均值。
+[TH] intervention
+[TH] 结果量
+[TH] b_total
+[TH] b_progress
+[TH] R²
+[TH] 场景数
+[TD] centroid delta：total + progress
+[TD] first_index_shift
+[TD] 2.22e-16
+[TD] 1.000
+[TD] 1.000
+[TD] 12
+[TD] centroid delta：total + progress
+[TD] stop_index_shift
+[TD] 0.136
+[TD] 0.065
+[TD] 0.219
+[TD] 12
+[TD] centroid delta：total + progress
+[TD] final_count_shift
+[TD] 0.006
+[TD] -0.012
+[TD] 0.253
+[TD] 10
+[TD] 自然 donor：total 与 progress 一起改
+[TD] first_index_shift
+[TD] 2.22e-16
+[TD] 1.000
+[TD] 1.000
+[TD] 12
+[TD] 自然 donor：total 与 progress 一起改
+[TD] stop_index_shift
+[TD] 0.136
+[TD] 0.065
+[TD] 0.219
+[TD] 12
+[TD] 自然 donor：total 与 progress 一起改
+[TD] final_count_shift
+[TD] 0.006
+[TD] -0.012
+[TD] 0.253
+[TD] 10
+[TD] centroid delta：只改 progress
+[TD] first_index_shift
+[TD] 2.22e-16
+[TD] 1.000
+[TD] 1.000
+[TD] 12
+[TD] centroid delta：只改 progress
+[TD] stop_index_shift
+[TD] 0.136
+[TD] 0.065
+[TD] 0.219
+[TD] 12
+[TD] centroid delta：只改 progress
+[TD] final_count_shift
+[TD] 0.006
+[TD] -0.012
+[TD] 0.253
+[TD] 10
+[TD] centroid delta：只改 total
+[TD] first_index_shift
+[TD] 0.000
+[TD] 0.000
+[TD] n/a
+[TD] 12
+[TD] centroid delta：只改 total
+[TD] stop_index_shift
+[TD] 0.000
+[TD] 0.000
+[TD] n/a
+[TD] 12
+[TD] centroid delta：只改 total
+[TD] final_count_shift
+[TD] 0.000
+[TD] 0.000
+[TD] n/a
+[TD] 12
+[H4] 代表性场景的原始均值
+[TH] 场景类别
+[TH] receiver ← donor
+[TH] 第一个 index
+[TH] 停止 index
+[TH] 最终 count
+[TH] receiver 参照：next / stop / count
+[TH] donor 参照：next / stop / count
+[TD] both_down
+[TD] R30@I18 ← D20@I10
+[TD] 11.000
+[TD] 30.000
+[TD] 30.000
+[TD] I19 / I30 / C30
+[TD] I11 / I20 / C20
+[TD] both_down
+[TD] R20@I9 ← D10@I5
+[TD] 6.000
+[TD] 20.125
+[TD] 20.125
+[TD] I10 / I20 / C20
+[TD] I6 / I10 / C10
+[TD] both_down
+[TD] R10@I4 ← D5@I2
+[TD] 3.000
+[TD] 3.000
+[TD] n/a
+[TD] I5 / I10 / C10
+[TD] I3 / I5 / C5
+[TD] both_up
+[TD] R20@I14 ← D30@I24
+[TD] 25.000
+[TD] 20.750
+[TD] 20.143
+[TD] I15 / I20 / C20
+[TD] I25 / I30 / C30
+[TD] both_up
+[TD] R10@I7 ← D20@I14
+[TD] 15.000
+[TD] 15.000
+[TD] n/a
+[TD] I8 / I10 / C10
+[TD] I15 / I20 / C20
+[TD] both_up
+[TD] R5@I4 ← D10@I7
+[TD] 8.000
+[TD] 8.000
+[TD] 5.000
+[TD] I5 / I5 / C5
+[TD] I8 / I10 / C10
+[TD] opposed
+[TD] R20@I7 ← D10@I9
+[TD] 10.000
+[TD] 16.250
+[TD] 20.000
+[TD] I8 / I20 / C20
+[TD] I10 / I10 / C10
+[TD] opposed
+[TD] R10@I7 ← D20@I4
+[TD] 5.000
+[TD] 8.875
+[TD] 10.167
+[TD] I8 / I10 / C10
+[TD] I5 / I20 / C20
+[TD] progress_only
+[TD] R20@I14 ← D20@I7
+[TD] 8.000
+[TD] 20.375
+[TD] 20.375
+[TD] I15 / I20 / C20
+[TD] I8 / I20 / C20
+[TD] progress_only
+[TD] R10@I4 ← D10@I7
+[TD] 8.000
+[TD] 9.250
+[TD] 10.000
+[TD] I5 / I10 / C10
+[TD] I8 / I10 / C10
+[TD] total_only
+[TD] R20@I7 ← D10@I7
+[TD] 8.000
+[TD] 20.000
+[TD] 20.000
+[TD] I8 / I20 / C20
+[TD] I8 / I10 / C10
+[TD] total_only
+[TD] R10@I7 ← D20@I7
+[TD] 8.000
+[TD] 10.000
+[TD] 10.000
+[TD] I8 / I10 / C10
+[TD] I8 / I20 / C20
+[H4] 综合分析
+[P] 五类场景共同给出一个稳定分离：marker residual 中可执行的是局部 trace progress，而不是独立的 prompt-total scalar。Natural donor、progress-centroid 与 combined-centroid 三种 intervention 产生相同的第一 index 行为；total-only natural state 与 total-only centroid delta 则完全不动。这使结论不依赖某一个 5→10 例子，也不依赖 donor total 与 progress 恰好同向。
+[P] 偏回归也支持同一结论。第一 index 的 b_progress=1、b_total≈0 且 R²=1；final count 的两个系数都接近 0（b_total=0.006、b_progress=-0.012），但其 R²=0.253 较低，因为 27.1% 的 progress-intervention rollout 未自然关闭，线性 final-count 回归只能覆盖成功产生答案的子集。因此 final-count 的更可靠证据是上面的条件命中率与 total-only 零效应，而不是低 R² 回归本身。
+[H3] 10.8 本节结论
+[H3] Non-thinking
+[P] Final <Ans> count state 从早层到后层逐步变得充分，高 count 最慢；after Layer 4 natural residual 能一比一把 donor count 搬到 receiver。
+[H3] CoT
+[P] 最终 <Ans> 很早就含有可执行 count state；trace final marker 本身不直接等于答案 state，但 marker residual 的后层表示能控制“继续还是结束”。这支持 trace progress/termination 与 final answer count 是相关但不同的 causal states。
+[H2] 11. Attention head 与 hidden state 的双向因果联系
+[P] 第 5–6 节只描述 head signature 与 count/marker geometry，第 7–10 节分别证明了若干组件的必要性或可控性。本节把两类干预放到同一批样本上，直接检验两条方向：head → downstream state 与 state → downstream head routing。双向不意味着循环反馈；它只要求两个方向都由实际 intervention 支持。
+[H3] 11.1 共同实验设计与三个机制链
+[H4] 方向 A：head → state
+[P] 在语义 query 位置，把指定 attention head 的 c_proj 输入切片置零，只影响该 token 的该 head output；随后在每个 Layer 后读取 residual。Direct/readout 用 exact-count centroid，k-to-k 链用 marker-identity centroid。对照包括 clean、候选 top-1/top-4、同层 control-1 与严格不属于候选 top-4 的 control-4。
+[H4] 方向 B：state → head
+[P] 先缓存 donor 在某 token 的 residual，再替换 receiver 进入指定 Layer 前的 residual，并读取该层及后续所有 heads 的 attention。Direct/readout 使用不同 count 的 donor→receiver；k-to-k 保持总 count 不变，只改变 trace progress。same-state donor 来自与 receiver 同一语义状态的另一条样本。
+[LI] Non-thinking broad chain：<Ans> query 的 Layer-1 broad heads → 后续 scalar-count state。
+[LI] CoT targeted chain：trace 数字 <k> query 的 k-to-k heads → 当前 marker-identity state。
+[LI] CoT readout chain：最终 <Ans> query 的 trace-readout heads → final scalar-count state。
+[H3] 11.2 方向 A：head intervention 是否损伤下游语义 state
+[H4] 实验
+[P] 对上述三个 query 分别做局部 per-head output mask，并在最终 Layer 后同时测 nearest-centroid accuracy、centroid margin、局部输出 accuracy 与 logit margin。candidate_top4 是按对应描述性 score 排名前四的 heads；noncandidate4_control 与这四头严格不重叠。
+[H4] 结果
+[TH] 因果链
+[TH] count 区间
+[TH] 局部 head-output intervention
+[TH] 末层 state 分类准确率
+[TH] 局部输出准确率
+[TH] state centroid margin
+[TH] output logit margin
+[TD] Non-thinking broad → count state
+[TD] 1-10
+[TD] clean
+[TD] 100.0%
+[TD] 100.0%
+[TD] 0.626
+[TD] 15.487
+[TD] Non-thinking broad → count state
+[TD] 1-10
+[TD] 候选 top-1
+[TD] 16.7%
+[TD] 13.3%
+[TD] -0.505
+[TD] -21.210
+[TD] Non-thinking broad → count state
+[TD] 1-10
+[TD] 候选 top-4
+[TD] 0.0%
+[TD] 0.0%
+[TD] -0.821
+[TD] -21.215
+[TD] Non-thinking broad → count state
+[TD] 1-10
+[TD] 候选外 control-4
+[TD] 100.0%
+[TD] 100.0%
+[TD] 0.571
+[TD] 13.275
+[TD] Non-thinking broad → count state
+[TD] 11-20
+[TD] clean
+[TD] 100.0%
+[TD] 100.0%
+[TD] 1.079
+[TD] 14.411
+[TD] Non-thinking broad → count state
+[TD] 11-20
+[TD] 候选 top-1
+[TD] 6.7%
+[TD] 6.7%
+[TD] -1.176
+[TD] -21.035
+[TD] Non-thinking broad → count state
+[TD] 11-20
+[TD] 候选 top-4
+[TD] 10.0%
+[TD] 10.0%
+[TD] -1.121
+[TD] -18.538
+[TD] Non-thinking broad → count state
+[TD] 11-20
+[TD] 候选外 control-4
+[TD] 100.0%
+[TD] 100.0%
+[TD] 0.715
+[TD] 9.740
+[TD] Non-thinking broad → count state
+[TD] 21-30
+[TD] clean
+[TD] 100.0%
+[TD] 100.0%
+[TD] 0.770
+[TD] 12.358
+[TD] Non-thinking broad → count state
+[TD] 21-30
+[TD] 候选 top-1
+[TD] 76.7%
+[TD] 70.0%
+[TD] 0.241
+[TD] 1.894
+[TD] Non-thinking broad → count state
+[TD] 21-30
+[TD] 候选 top-4
+[TD] 0.0%
+[TD] 0.0%
+[TD] -1.002
+[TD] -20.220
+[TD] Non-thinking broad → count state
+[TD] 21-30
+[TD] 候选外 control-4
+[TD] 100.0%
+[TD] 100.0%
+[TD] 0.503
+[TD] 9.841
+[TD] CoT k-to-k → marker-identity state
+[TD] 1-10
+[TD] clean
+[TD] 100.0%
+[TD] 100.0%
+[TD] 1.299
+[TD] 12.836
+[TD] CoT k-to-k → marker-identity state
+[TD] 1-10
+[TD] 候选 top-1
+[TD] 100.0%
+[TD] 100.0%
+[TD] 1.158
+[TD] 12.584
+[TD] CoT k-to-k → marker-identity state
+[TD] 1-10
+[TD] 候选 top-4
+[TD] 53.3%
+[TD] 56.7%
+[TD] 0.023
+[TD] 1.136
+[TD] CoT k-to-k → marker-identity state
+[TD] 1-10
+[TD] 候选外 control-4
+[TD] 100.0%
+[TD] 100.0%
+[TD] 1.087
+[TD] 12.065
+[TD] CoT k-to-k → marker-identity state
+[TD] 11-20
+[TD] clean
+[TD] 100.0%
+[TD] 100.0%
+[TD] 1.215
+[TD] 12.751
+[TD] CoT k-to-k → marker-identity state
+[TD] 11-20
+[TD] 候选 top-1
+[TD] 100.0%
+[TD] 100.0%
+[TD] 0.991
+[TD] 12.529
+[TD] CoT k-to-k → marker-identity state
+[TD] 11-20
+[TD] 候选 top-4
+[TD] 40.0%
+[TD] 46.7%
+[TD] -0.021
+[TD] -0.936
+[TD] CoT k-to-k → marker-identity state
+[TD] 11-20
+[TD] 候选外 control-4
+[TD] 90.0%
+[TD] 93.3%
+[TD] 0.763
+[TD] 9.738
+[TD] CoT k-to-k → marker-identity state
+[TD] 21-30
+[TD] clean
+[TD] 100.0%
+[TD] 100.0%
+[TD] 1.255
+[TD] 12.740
+[TD] CoT k-to-k → marker-identity state
+[TD] 21-30
+[TD] 候选 top-1
+[TD] 100.0%
+[TD] 100.0%
+[TD] 1.115
+[TD] 12.663
+[TD] CoT k-to-k → marker-identity state
+[TD] 21-30
+[TD] 候选 top-4
+[TD] 40.0%
+[TD] 43.3%
+[TD] -0.026
+[TD] -1.382
+[TD] CoT k-to-k → marker-identity state
+[TD] 21-30
+[TD] 候选外 control-4
+[TD] 30.0%
+[TD] 30.0%
+[TD] -0.036
+[TD] -2.144
+[TD] CoT trace-readout → final count state
+[TD] 1-10
+[TD] clean
+[TD] 100.0%
+[TD] 100.0%
+[TD] 1.042
+[TD] 13.502
+[TD] CoT trace-readout → final count state
+[TD] 1-10
+[TD] 候选 top-1
+[TD] 100.0%
+[TD] 100.0%
+[TD] 0.863
+[TD] 13.039
+[TD] CoT trace-readout → final count state
+[TD] 1-10
+[TD] 候选 top-4
+[TD] 100.0%
+[TD] 100.0%
+[TD] 0.344
+[TD] 6.567
+[TD] CoT trace-readout → final count state
+[TD] 1-10
+[TD] 候选外 control-4
+[TD] 100.0%
+[TD] 100.0%
+[TD] 0.548
+[TD] 7.254
+[TD] CoT trace-readout → final count state
+[TD] 11-20
+[TD] clean
+[TD] 100.0%
+[TD] 100.0%
+[TD] 0.931
+[TD] 13.102
+[TD] CoT trace-readout → final count state
+[TD] 11-20
+[TD] 候选 top-1
+[TD] 100.0%
+[TD] 100.0%
+[TD] 0.674
+[TD] 10.588
+[TD] CoT trace-readout → final count state
+[TD] 11-20
+[TD] 候选 top-4
+[TD] 100.0%
+[TD] 100.0%
+[TD] 0.545
+[TD] 8.741
+[TD] CoT trace-readout → final count state
+[TD] 11-20
+[TD] 候选外 control-4
+[TD] 100.0%
+[TD] 100.0%
+[TD] 0.428
+[TD] 6.573
+[TD] CoT trace-readout → final count state
+[TD] 21-30
+[TD] clean
+[TD] 100.0%
+[TD] 100.0%
+[TD] 1.004
+[TD] 13.112
+[TD] CoT trace-readout → final count state
+[TD] 21-30
+[TD] 候选 top-1
+[TD] 100.0%
+[TD] 100.0%
+[TD] 0.909
+[TD] 12.191
+[TD] CoT trace-readout → final count state
+[TD] 21-30
+[TD] 候选 top-4
+[TD] 100.0%
+[TD] 100.0%
+[TD] 0.724
+[TD] 10.717
+[TD] CoT trace-readout → final count state
+[TD] 21-30
+[TD] 候选外 control-4
+[TD] 100.0%
+[TD] 100.0%
+[TD] 0.623
+[TD] 8.927
+[H3] Figure 11A. 局部 head-output mask 对后续 hidden-state geometry 的影响
+[FIGCAPTION] 三个面板分别对应 direct broad、CoT k-to-k retrieval 与 CoT trace readout。横轴是 intervention；颜色是 gold-count 区间。纵轴是末层局部 state 的 held-out nearest-centroid accuracy。direct/readout 的 centroid 标签是 exact count；targeted 链的标签是当前应写出的 marker identity。这里测的是 head 输出被改动后，后续 residual 是否仍保留正确语义，而不是只看最终 argmax。
+[H3] Figure 11B. 同一 head intervention 对局部 marker / final-count 输出的影响
+[FIGCAPTION] 横轴与 Figure 11A 相同；纵轴是局部输出准确率。Non-thinking 和 readout 面板评估 final count，targeted 面板评估当前 trace marker。把 11A 与 11B 并列阅读，可以判断 state geometry 的损伤是否与输出损伤同步。
+[H4] 分析
+[P] Non-thinking：mask broad top-1 后末层 count-state accuracy 为 16.7% / 6.7% / 76.7%，累计 top-4 后为 0% / 10% / 0%；输出准确率几乎同步下降，而候选外 control-4 保持 100%。这支持 early broad heads 在 direct counting 中因果上游于 scalar count state。
+[P] CoT targeted：单头 top-1 可被替代，但累计 top-4 后 marker-identity state 降到 53.3% / 40.0% / 40.0%，marker 输出降到 56.7% / 46.7% / 43.3%。不过候选外 control-4 在 21–30 也降到 30%，说明高 count 的 retrieval 依赖分布式 heads；结果支持“候选组必要”，不支持“只有这四头有用”。
+[P] CoT readout：这些局部 mask 下 state 与 final argmax 仍为 100%，但 margin 普遍下降。这表明最终 readout 在当前模型中高度冗余；仅凭高 trace-marker mass 不能断言某个 readout head 独立写入最终 count。
+[H3] 11.3 方向 B：hidden progress/count state 是否反向控制 attention routing
+[H4] 实验
+[P] Targeted 链固定 prompt 总 count，只把较早 progress state 移植到较晚 progress query 的对照或反向移植；routing signature 是候选 top-4 对 donor-matching needle 相对 receiver-matching needle 的 attention 差。Direct/readout 使用 5→8、15→18、25→28 的 count donors；同时记录所有下游 heads 的 signature 变化和最终预测是否采用 donor count。
+[H4] 结果：CoT targeted progress → retrieval routing
+[TH] count 区间
+[TH] residual patch 位置
+[TH] 候选 top-4 平均 routing shift
+[TH] 平均绝对 shift
+[TH] 最大绝对 shift
+[TD] 1-10
+[TD] 进入 Layer 1 前
+[TD] 0.985
+[TD] 0.985
+[TD] 1.792
+[TD] 1-10
+[TD] 进入 Layer 2 前
+[TD] 1.100
+[TD] 1.100
+[TD] 1.819
+[TD] 1-10
+[TD] 进入 Layer 3 前
+[TD] 1.106
+[TD] 1.106
+[TD] 1.749
+[TD] 1-10
+[TD] 进入 Layer 4 前
+[TD] 1.182
+[TD] 1.182
+[TD] 1.753
+[TD] 11-20
+[TD] 进入 Layer 1 前
+[TD] 0.526
+[TD] 0.526
+[TD] 0.886
+[TD] 11-20
+[TD] 进入 Layer 2 前
+[TD] 0.650
+[TD] 0.650
+[TD] 1.110
+[TD] 11-20
+[TD] 进入 Layer 3 前
+[TD] 0.692
+[TD] 0.692
+[TD] 1.189
+[TD] 11-20
+[TD] 进入 Layer 4 前
+[TD] 0.580
+[TD] 0.580
+[TD] 1.226
+[TD] 21-30
+[TD] 进入 Layer 1 前
+[TD] 0.466
+[TD] 0.466
+[TD] 0.721
+[TD] 21-30
+[TD] 进入 Layer 2 前
+[TD] 0.563
+[TD] 0.563
+[TD] 0.888
+[TD] 21-30
+[TD] 进入 Layer 3 前
+[TD] 0.614
+[TD] 0.614
+[TD] 0.916
+[TD] 21-30
+[TD] 进入 Layer 4 前
+[TD] 0.586
+[TD] 0.586
+[TD] 1.202
+[H3] Figure 11C. hidden-state transplant 是否反向改变下游 attention routing
+[FIGCAPTION] 横轴表示 donor residual 被替换到 receiver 的哪一个 Transformer Layer 之前；纵轴是候选 top-4 heads 的平均 attention-signature shift。实线为 shifted donor，虚线为 same-state donor control；颜色为 count 区间。Targeted 链的 shifted donor 保持总 count 不变，只把 trace progress 从较早 k 换成较晚 j，因此其大幅正 shift 表示 progress state 足以重定向后续 k-to-k routing。
+[H4] 分析
+[P] same-state controls 接近零；shifted progress state 在四个 patch 深度均显著把 targeted heads 推向 donor 所对应的 routing，低/中/高 count 的平均 shift 约为 0.98–1.18、0.53–0.69、0.47–0.61。因而 targeted retrieval 不只是把 marker 写进 hidden state；当前 progress residual 也因果决定下一步 heads 去读哪个 needle。这是本节最强的双向局部耦合证据。
+[H4] 结果：scalar count state → direct/readout routing 与输出
+[TH] 模式
+[TH] count 区间
+[TH] patch 进入该 Layer 前
+[TH] 下游 heads 平均绝对 routing shift
+[TH] receiver-count margin shift
+[TH] 仍输出 receiver count
+[TH] 改输出 donor count
+[TD] Non-thinking
+[TD] 1-10
+[TD] Layer 1
+[TD] 0.000
+[TD] 0.00
+[TD] 100.0%
+[TD] 0.0%
+[TD] Non-thinking
+[TD] 1-10
+[TD] Layer 2
+[TD] 0.003
+[TD] -52.83
+[TD] 0.0%
+[TD] 100.0%
+[TD] Non-thinking
+[TD] 1-10
+[TD] Layer 3
+[TD] 0.004
+[TD] -52.87
+[TD] 0.0%
+[TD] 100.0%
+[TD] Non-thinking
+[TD] 1-10
+[TD] Layer 4
+[TD] 0.006
+[TD] -52.87
+[TD] 0.0%
+[TD] 100.0%
+[TD] Non-thinking
+[TD] 11-20
+[TD] Layer 1
+[TD] 0.000
+[TD] 0.00
+[TD] 100.0%
+[TD] 0.0%
+[TD] Non-thinking
+[TD] 11-20
+[TD] Layer 2
+[TD] 0.019
+[TD] -45.41
+[TD] 0.0%
+[TD] 0.0%
+[TD] Non-thinking
+[TD] 11-20
+[TD] Layer 3
+[TD] 0.026
+[TD] -45.38
+[TD] 0.0%
+[TD] 0.0%
+[TD] Non-thinking
+[TD] 11-20
+[TD] Layer 4
+[TD] 0.031
+[TD] -45.54
+[TD] 0.0%
+[TD] 40.0%
+[TD] Non-thinking
+[TD] 21-30
+[TD] Layer 1
+[TD] 0.000
+[TD] 0.00
+[TD] 100.0%
+[TD] 0.0%
+[TD] Non-thinking
+[TD] 21-30
+[TD] Layer 2
+[TD] 0.001
+[TD] -0.21
+[TD] 100.0%
+[TD] 0.0%
+[TD] Non-thinking
+[TD] 21-30
+[TD] Layer 3
+[TD] 0.012
+[TD] -12.13
+[TD] 20.0%
+[TD] 0.0%
+[TD] Non-thinking
+[TD] 21-30
+[TD] Layer 4
+[TD] 0.008
+[TD] -27.20
+[TD] 0.0%
+[TD] 0.0%
+[TD] CoT final readout
+[TD] 1-10
+[TD] Layer 1
+[TD] 0.008
+[TD] -25.78
+[TD] 0.0%
+[TD] 100.0%
+[TD] CoT final readout
+[TD] 1-10
+[TD] Layer 2
+[TD] 0.018
+[TD] -20.19
+[TD] 0.0%
+[TD] 100.0%
+[TD] CoT final readout
+[TD] 1-10
+[TD] Layer 3
+[TD] 0.013
+[TD] -29.65
+[TD] 0.0%
+[TD] 100.0%
+[TD] CoT final readout
+[TD] 1-10
+[TD] Layer 4
+[TD] 0.061
+[TD] -31.02
+[TD] 0.0%
+[TD] 100.0%
+[TD] CoT final readout
+[TD] 11-20
+[TD] Layer 1
+[TD] 0.054
+[TD] -29.45
+[TD] 0.0%
+[TD] 100.0%
+[TD] CoT final readout
+[TD] 11-20
+[TD] Layer 2
+[TD] 0.084
+[TD] -29.82
+[TD] 0.0%
+[TD] 100.0%
+[TD] CoT final readout
+[TD] 11-20
+[TD] Layer 3
+[TD] 0.029
+[TD] -28.36
+[TD] 0.0%
+[TD] 100.0%
+[TD] CoT final readout
+[TD] 11-20
+[TD] Layer 4
+[TD] 0.075
+[TD] -30.49
+[TD] 0.0%
+[TD] 100.0%
+[TD] CoT final readout
+[TD] 21-30
+[TD] Layer 1
+[TD] 0.031
+[TD] -27.52
+[TD] 0.0%
+[TD] 100.0%
+[TD] CoT final readout
+[TD] 21-30
+[TD] Layer 2
+[TD] 0.027
+[TD] -26.83
+[TD] 0.0%
+[TD] 100.0%
+[TD] CoT final readout
+[TD] 21-30
+[TD] Layer 3
+[TD] 0.013
+[TD] -26.50
+[TD] 0.0%
+[TD] 100.0%
+[TD] CoT final readout
+[TD] 21-30
+[TD] Layer 4
+[TD] 0.023
+[TD] -26.58
+[TD] 0.0%
+[TD] 100.0%
+[H4] 分析
+[P] Direct 模式是非对称链。进入 Layer 1 前的 <Ans> residual 只有 token+position embedding，跨 count 相同，因此 patch 不改变 Layer-1 broad routing。进入 Layer 2–4 前移植 count state 后，低 count 会 100% 采用 donor count；中 count 主要发生连续 margin 搬运，只有 Layer 4 达到 40% exact donor adoption；高 count 更弱。与此同时 broad signature 的平均绝对变化很小。这说明 broad heads 先写入 count state，但后期 count state 并不会反向重建已经发生过的 early broad attention。
+[P] CoT final state 对输出充分，但对 readout routing 的控制不稳定。三个区间在四个深度均 100% 采用 donor count；然而候选 readout signature 的变化随 Layer/count 改变方向，高 count 甚至为轻微负值。更合理的解释是 final count residual 可以直接驱动 logits，而 readout heads 是形成该 state 的冗余上游，不是必须被该 state 反向控制的一组固定路由。
+[H3] 11.4 head→state→output 的效应对齐
+[H4] 实验与结果
+[H3] Figure 11D. head 导致的 state-margin 损伤是否追踪 output-margin 损伤
+[FIGCAPTION] 每个点是一个 mechanism × count-bin × intervention。横轴是 hidden centroid margin 相对 clean 的下降，纵轴是 marker/final-count logit margin 的下降；点越靠右上，越符合“head intervention 先损伤语义 state，再损伤输出”的中介链。该图是跨 intervention 的效应对齐，不单独构成 mediation 的统计识别。
+[H4] 分析
+[P] Direct broad 与 CoT targeted 的大幅 state-margin 损伤通常伴随大幅 output-margin 损伤，符合“head output 改变后续语义 residual，随后影响 logits”的串联解释。CoT readout 的点集中在较小损伤范围，再次显示局部冗余。由于这里没有在同一 intervention 内进一步随机化中介 state，该散点只能作为效应对齐，不能单独声称完成统计 mediation。
+[H3] 11.5 综合结论与边界
+[H4] Non-thinking
+[P] 支持：Layer-1 broad heads → downstream scalar-count state → final logits。后期 count-state transplant 足以搬运低 count 输出。不支持：count state 反向重建早期 broad routing；这是一条前馈、非对称因果链。
+[H4] CoT targeted retrieval
+[P] 支持：targeted head 组 → marker-identity state，且 progress state → 下一步 targeted routing。二者组成最清楚的局部双向耦合。边界：单头可替代，高 count 下候选外 heads 也重要，circuit 是分布式的。
+[H4] CoT final readout
+[P] 支持：final scalar state 对 count 输出高度充分。尚缺：固定 readout-head 组与该 state 的强双向耦合；局部 mask 与 routing shift 都显示冗余和异质性。
+[H2] 12. 综合机制结论、证据强度与尚缺环节
+[H3] Non-thinking
+[LI] 描述性 broad heads 位于早期 Layer；分层 mask 检验它们对哪些 count 区间必要。
+[LI] Nested donor patch 若在三个区间都有正 slope，说明候选 head slices 不只相关，而能运输部分 count state。
+[LI] 完整 centroid transplant 在后层趋近 slope=1，说明 answer-query residual 是足以决定 count 的因果状态。
+[LI] Adjacent-mean steering 的区间不稳定性说明该状态不是一根跨 1–30 恒定的标量 +1 方向。
+[H3] CoT
+[LI] <k> query 的 k-to-k mass 随 count 增大而下降，但 targeted clean patch 相对 bottom/random 的恢复检验其因果功能。
+[LI] Targeted retrieval 与 final trace readout 是不同排名；删除 retrieval heads 主要伤 marker trace，不自动等于删除最终 count state。
+[LI] 自然 final state 同时含 prompt、trace 内容、trace 长度和位置线索。反事实 fixed-15 control 则把 trace 内容、长度和 <Ans> 位置固定，只让 prompt count/答案 n 改变；它显示 prompt-derived count 仍可读，但分层 transplant 表明该低维几何并非在所有 count 区间都具有一比一因果控制力。
+[LI] 现有 trace-progress causality 只覆盖 26–30，尚需低 count 对称实验才能声称统一 successor circuit。
+[P] Provenance: analysis/report_stratified/manifest.json. Fresh forward pass: global head ablation. Lossless count-bin reaggregation from existing per-example intervention rows: retrieval patching, nested count patching, geometry steering, final-state transplant and centroid transplant.

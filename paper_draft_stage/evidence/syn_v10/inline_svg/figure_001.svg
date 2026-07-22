@@ -1,0 +1,32 @@
+<svg id="mechanism-direct-scene" class="mechanism-scene active" viewBox="0 0 1200 420" role="img" aria-label="Non-thinking broad aggregation hypothesis">
+          <defs>
+            <marker id="direct-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/></marker>
+          </defs>
+          <g data-step="0" class="mech-step">
+            <rect class="mech-region prompt" x="38" y="42" width="730" height="145" rx="14"/>
+            <text class="mech-region-title" x="62" y="72">Prompt body: 256 tokens</text>
+            <g class="mech-noise"><circle cx="90" cy="116" r="8"/><circle cx="190" cy="116" r="8"/><circle cx="305" cy="116" r="8"/><circle cx="430" cy="116" r="8"/><circle cx="555" cy="116" r="8"/><circle cx="685" cy="116" r="8"/></g>
+            <g class="mech-node needle"><rect x="120" y="92" width="55" height="46" rx="7"/><text x="147" y="121">M₁</text></g>
+            <g class="mech-node needle"><rect x="235" y="92" width="55" height="46" rx="7"/><text x="262" y="121">M₂</text></g>
+            <g class="mech-node needle"><rect x="360" y="92" width="55" height="46" rx="7"/><text x="387" y="121">M₃</text></g>
+            <g class="mech-node needle"><rect x="600" y="92" width="55" height="46" rx="7"/><text x="627" y="121">Mₙ</text></g>
+            <text class="mech-ellipsis" x="505" y="121">…</text>
+            <g class="mech-node query"><rect x="925" y="72" width="190" height="70" rx="10"/><text x="1020" y="102">final query</text><text class="mech-subtext" x="1020" y="125"><Ans></text></g>
+          </g>
+          <g data-step="1" class="mech-step mech-links broad-links">
+            <path d="M 940 108 C 760 12, 220 22, 148 92"/><path d="M 950 112 C 790 48, 390 30, 263 92"/><path d="M 960 116 C 830 78, 540 55, 388 92"/><path d="M 970 120 C 880 104, 760 74, 628 92"/>
+            <text x="805" y="38">parallel broad retrieval over the needle set</text>
+          </g>
+          <g data-step="2" class="mech-step">
+            <g class="mech-node state"><rect x="505" y="250" width="260" height="86" rx="12"/><text x="635" y="284">cardinality / count state</text><text class="mech-subtext" x="635" y="311">written into the answer-query residual</text></g>
+            <g class="mech-links aggregate-links"><path d="M 148 138 C 195 230, 390 245, 520 275"/><path d="M 263 138 C 330 220, 430 240, 535 275"/><path d="M 388 138 C 440 205, 500 225, 565 260"/><path d="M 628 138 C 655 188, 670 215, 675 250"/></g>
+          </g>
+          <g data-step="3" class="mech-step">
+            <g class="mech-node transform"><rect x="810" y="255" width="170" height="76" rx="10"/><text x="895" y="284">later Layers</text><text class="mech-subtext" x="895" y="308">sharpen count logits</text></g>
+            <path class="mech-flow-arrow" d="M 765 293 L 805 293"/>
+          </g>
+          <g data-step="4" class="mech-step">
+            <g class="mech-node answer"><rect x="1020" y="258" width="115" height="72" rx="10"/><text x="1077" y="286">output</text><text class="mech-answer-token" x="1077" y="313"><Cₙ></text></g>
+            <path class="mech-flow-arrow" d="M 980 293 L 1015 293"/>
+          </g>
+        </svg>

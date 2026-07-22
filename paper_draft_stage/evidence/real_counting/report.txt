@@ -1,0 +1,1049 @@
+[H1] Project ideas
+[P] Formatted HTML version of NIAH-counting.md with MathJax-enabled LaTeX, responsive tables, figure cards, and linked references.
+[LI] Project ideas
+[LI] Background
+[LI] The main experimental setup: Needle-in-a-haystack (NIAH)
+[LI] CoT helps language models to count accurately
+[LI] Basic phenemenon
+[LI] Motivating question
+[LI] Scientific hypothesis
+[LI] Compression perspective of hidden states
+[LI] Main techniques
+[LI] Probing / steering
+[LI] Intervention / ablation / activation patching
+[LI] Qualitative comparison
+[LI] Related literature
+[LI] Limitations
+[LI] Linear probes do not fully explain counting mechanism
+[LI] Needle spans in NIAH
+[LI] Finding needle spans in NIAH
+[LI] Needle-span hidden states
+[LI] Linear probes show high R^2
+[LI] Highlights
+[LI] Plots: Linear fitting of needle spans
+[LI] Plots: projections of entire sequenece
+[LI] Table: prompt linear probe
+[LI] Table: CoT linear probe
+[LI] Comparison of different linear probes
+[LI] Steering effects are weak
+[LI] Counting without CoT: noisy broad retrieval
+[LI] Attention
+[LI] Ablation
+[LI] Change of predicted counts after ablation
+[LI] Mean change in predicted counts after ablation
+[LI] Restore
+[LI] Change of predicted counts after restore
+[LI] Detailed count movements
+[LI] Counting with CoT: targeted retrieval and internal counter
+[LI] Attention
+[LI] Ablation
+[LI] Table: predicted count movements
+[LI] Restore
+[LI] Predicted count after restore
+[LI] Next steps
+[LI] NIAH experiments
+[LI] Minor experiment adjustment
+[LI] Synthetic experiment
+[LI] Theory (optional)
+[LI] Appendix: additional citations
+[H1] Project ideas#
+[P] July 2, 2026, Yiqiao Zhong
+[P] This is an outline of a possible project.
+[P] Title: Reasoning sharpens counting via compressed representations in language models
+[LI] Title: Reasoning sharpens counting via compressed representations in language models
+[P] Keywords: counting mechanism, interpretability, needle-in-a-haystack, chain-of-thought reasoning, activation patching
+[LI] Keywords: counting mechanism, interpretability, needle-in-a-haystack, chain-of-thought reasoning, activation patching
+[P] Main decision: we need to decide between an NIAH-focused project, or more broad counting-related project that covers multiple tasks (NIAH, Dyck, code, time, etc.)
+[LI] Main decision: we need to decide between an NIAH-focused project, or more broad counting-related project that covers multiple tasks (NIAH, Dyck, code, time, etc.)
+[H2] Background#
+[LI] counting is surprisingly hard for early language models (e.g., strawberry, arithmetic)
+[LI] CoT greatly improves the counting accuracy, usually attributed to test-time compositionality
+[LI] Our goal is to show CoT improves accuracy via compressed representations
+[H2] The main experimental setup: Needle-in-a-haystack (NIAH)#
+[LI] Model: Qwen3-8B
+[LI] Main text = Haystack with $n$ inserted needles (city & rating).
+[LI] Prompt = instruction + main text + query
+[LI] Answer format {count:0}
+[P] <|im_start|>user Return ONLY one JSON object on a single line with schema {"count":0}. No extra text. Some information about cities are inserted within the following text. Make sure to memorize them.
+[LI] Instruction: <|im_start|>user Return ONLY one JSON object on a single line with schema {"count":0}. No extra text. Some information about cities are inserted within the following text. Make sure to memorize them.
+[P] Chance meetings play a role like the role relaxation plays in having ideas. In the 2024 city score audit, Krakow received a score of 60. Most people have had the experience of working hard on some problem
+[LI] Main text: Graham essays as haystack, $n$ needles inserted randomly into the haystack (respecting sentence completeness). Chance meetings play a role like the role relaxation plays in having ideas. In the 2024 city score audit, Krakow received a score of 60. Most people have had the experience of working hard on some problem
+[P] One or more city score audit records are provided in the context. You need to answer the following question: How many cities received a score? Respond as JSON with key count.<|im_end|> <|im_start|>assistant
+[LI] Query: One or more city score audit records are provided in the context. You need to answer the following question: How many cities received a score? Respond as JSON with key count.<|im_end|> <|im_start|>assistant
+[H2] CoT helps language models to count accurately#
+[H3] Basic phenemenon#
+[LI] For nonthinking mode, accuracy drops quickly as number of needles increases, despite good accuracy for 1--3 needles.
+[LI] Thinking mode makes use of explicit counters (e.g., numbering, list)
+[LI] For thinking mode, almost always 100% accuracy. Reliable with 10+ needles. Thinking mode makes use of explicit counters (e.g., numbering, list)
+[P] Table extracted from run_20260702_224449:
+[TH] Gold count
+[TH] n
+[TH] Nonthinking
+[TH] Thinking
+[TD] 1
+[TD] 12
+[TD] 12/12 = 100%
+[TD] 12/12 = 100%
+[TD] 2
+[TD] 6
+[TD] 6/6 = 100%
+[TD] 6/6 = 100%
+[TD] 3
+[TD] 10
+[TD] 10/10 = 100%
+[TD] 10/10 = 100%
+[TD] 4
+[TD] 13
+[TD] 7/13 = 54%
+[TD] 13/13 = 100%
+[TD] 5
+[TD] 10
+[TD] 4/10 = 40%
+[TD] 10/10 = 100%
+[TD] 6
+[TD] 12
+[TD] 6/12 = 50%
+[TD] 12/12 = 100%
+[TD] 7
+[TD] 8
+[TD] 2/8 = 25%
+[TD] 8/8 = 100%
+[TD] 8
+[TD] 7
+[TD] 2/7 = 29%
+[TD] 7/7 = 100%
+[TD] 9
+[TD] 12
+[TD] 0/12 = 0%
+[TD] 12/12 = 100%
+[TD] 10
+[TD] 10
+[TD] 3/10 = 30%
+[TD] 10/10 = 100%
+[P] Example of Qwen thinking (CoT):
+[H3] Motivating question#
+[P] How does CoT/thinking help models improve retrieval and counting? Is there a magic in representations?
+[H3] Scientific hypothesis#
+[LI] Nonthinking mode relies on general retrieval from uncompressed hidden states, which is unreliable with more needles
+[LI] Thinking mode uses targeted retrieval to retrive one needle at a time; then the enumeration list produces compressed hidden states
+[H2] Compression perspective of hidden states#
+[P] At a given layer, suppose $h_1,h_2,h_3,\ldots$ are the hidden states of the sequence $x_1,x_2,x_3,\ldots$. Output $y_t$ is the model's prediction with
+[LI] $y_t = f(h_1,h_2,\ldots,h_t)$
+[LI] Under perfect compression, $y_t = f(h_I)$ where $I \subset \{1,\ldots,t\}$, namely $h_I$ soles decodes to $y_t$, and $h_I$ is a compressed summary of the prefix $x_1, x_2, \ldots x_t$
+[LI] For counting, this means $h_I$ stores count-related information
+[LI] Invariance: Under perfect compression, for $i \in I$, $f(h_1,\ldots, h_i, \ldots, h_t) = f(h_1,\ldots, h_i', \ldots, h_t)$ for $h_i \neq h_i'$.
+[LI] RNN is built to explicitly compress the prefix.
+[LI] Implication in sparse attention and KV cache compression in long-context inference
+[P] To measure compressed represenatation, two natural approaches: (i) probing / steering, (ii) interventional / activation pattern
+[H3] Main techniques#
+[P] These techniques are established methods for analyzing representations.
+[H4] Probing / steering#
+[LI] Fitting a linear map: hidden state at needle tokens --> needle span index (namely total count in the prefix)
+[LI] Steering increases the probe direction by h += msv where $m \in \{1,2,3,4,5\}$ is the steering multiplier, v is the probe direction, and s is the unit activation strength (based on projection)
+[H4] Intervention / ablation / activation patching#
+[LI] Two sequences: Original sequence and uninformative seqeunece. Uninformative sequence has all needle spans replaced by random same-length haystack tokens.
+[LI] Ablation: from layer $\ell$ to the last layer, all the hidden states of the original sequence at a specific needle span are patched (replaced) by the uninformative hidden states
+[LI] Restore: from layer $\ell$ to the last layer, all the hidden states of the uninformative sequence at a specific needle span are patched by the original hidden states
+[LI] Causal interpretation: Does removing or restoring targeted hidden states causally change a model's prediction behavior?
+[H3] Qualitative comparison#
+[P] For retrieval-based counting, below is qualitative charaterization.
+[TH] Counting types
+[TH] Nonthinking
+[TH] Thinking / CoT
+[TD] Accuracy
+[TD] Low at large counts
+[TD] High at large counts
+[TD] Mechanism
+[TD] Broad retrieval
+[TD] Targeted retrieval + internal counter
+[TD] Compression
+[TD] Minimally / locally compressed
+[TD] Highly compressed
+[H2] Related literature#
+[P] Both papers show that a countering feature exists in LMs. Two papers are largely complementary.
+[LI] Intervention / causal activation patching analysis
+[LI] It serves as an internal counter
+[LI] Low layer represents small counts, late layer represents large counts
+[LI] Understanding Counting Mechanisms in Large Language and Vision-Language Models Intervention / causal activation patching analysis It serves as an internal counter Low layer represents small counts, late layer represents large counts
+[LI] Probing analysis
+[LI] Counting feature exists, but may not be aligned with unembedding matrix, so prediction is fragile
+[LI] The Right Answer, the Wrong Direction Probing analysis Counting feature exists, but may not be aligned with unembedding matrix, so prediction is fragile
+[H3] Limitations#
+[LI] Both two papers use simple prompts, unclear conclusions for long context
+[LI] No study of CoT / reasoning
+[LI] No direct analysis of compression of representation perspective
+[LI] Incomplete causal analysis
+[H2] Linear probes do not fully explain counting mechanism#
+[H3] Needle spans in NIAH#
+[P] First, define a needle span as consecutive tokens that cover the needle in the prompt or in the CoT trace. The prompt needle may look like
+[P] In the 2024 city score audit, Shenzhen received a score of 95.
+[P] The CoT needle may look like
+[LI] Shenzhen: 95
+[P] or
+[LI] Shenzhen: 95
+[H4] Finding needle spans in NIAH#
+[LI] Prompt needle span is directly read from dataset construction (because we have full control over needles and inserted positions)
+[LI] Parse: CoT needle span needs parsing to identify the model's needle-related tokens. Current strategy looks at the enumerated lists (parsing is not perfect).
+[H4] Needle-span hidden states#
+[LI] For a given layer, calculate the mean hidden states over a needle span as the representation of the needle.
+[H3] Linear probes show high R^2#
+[P] Results extracted from run_20260630_202449.
+[P] Fitting a linear probe using ridge regression to learn the linear map: mean hidden state --> needle span index (occurrence)
+[H4] Highlights#
+[LI] The prompt linear probe at layer 20 results in 0.979 test R^2
+[LI] The CoT linear probe at layer 16 results in 0.987 test R^2
+[LI] The model's nonthinking prediction accuracy: 262/500 = 52.4%, despite a high rounding accuracy
+[H4] Plots: Linear fitting of needle spans#
+[FIGCAPTION] Prompt linear probe
+[FIGCAPTION] CoT linear probe
+[H4] Plots: projections of entire sequenece#
+[FIGCAPTION] Prompt linear probe
+[FIGCAPTION] CoT linear probe
+[H4] Table: prompt linear probe#
+[TH] layer
+[TH] test R2
+[TH] MAE
+[TH] rounded acc
+[TH] rounded under / exact / over
+[TD] 4
+[TD] 0.971
+[TD] 0.328
+[TD] 77.5%
+[TD] 22 / 162 / 25
+[TD] 8
+[TD] 0.982
+[TD] 0.257
+[TD] 89.0%
+[TD] 16 / 186 / 7
+[TD] 12
+[TD] 0.985
+[TD] 0.199
+[TD] 92.3%
+[TD] 8 / 193 / 8
+[TD] 16
+[TD] 0.987
+[TD] 0.195
+[TD] 95.2%
+[TD] 4 / 199 / 6
+[TD] 20
+[TD] 0.985
+[TD] 0.226
+[TD] 90.9%
+[TD] 10 / 190 / 9
+[TD] 24
+[TD] 0.979
+[TD] 0.279
+[TD] 81.8%
+[TD] 18 / 171 / 20
+[TD] 28
+[TD] 0.971
+[TD] 0.325
+[TD] 75.6%
+[TD] 28 / 158 / 23
+[H4] Table: CoT linear probe#
+[TH] layer
+[TH] test R2
+[TH] MAE
+[TH] rounded acc
+[TH] rounded under / exact / over
+[TD] 4
+[TD] 0.916
+[TD] 0.545
+[TD] 53.3%
+[TD] 33 / 106 / 60
+[TD] 8
+[TD] 0.953
+[TD] 0.408
+[TD] 68.8%
+[TD] 30 / 137 / 32
+[TD] 12
+[TD] 0.956
+[TD] 0.398
+[TD] 69.3%
+[TD] 21 / 138 / 40
+[TD] 16
+[TD] 0.957
+[TD] 0.401
+[TD] 67.3%
+[TD] 31 / 134 / 34
+[TD] 20
+[TD] 0.979
+[TD] 0.283
+[TD] 87.9%
+[TD] 14 / 175 / 10
+[TD] 24
+[TD] 0.970
+[TD] 0.337
+[TD] 72.9%
+[TD] 25 / 145 / 29
+[TD] 28
+[TD] 0.949
+[TD] 0.444
+[TD] 64.3%
+[TD] 37 / 128 / 34
+[H4] Comparison of different linear probes#
+[P] Tried different methods to calculate linear probes. Most linear probes are different but all have high test R^2.
+[LI] CoT linear probes are nearly orthogonal to prompt linear probes; within prompt or CoT, the linear probes are correlated, but not the same.
+[FIGCAPTION] Heatmap plot
+[LI] Cosine similarities between linear probes and unembedding vectors show near orthogonality.
+[FIGCAPTION] Cosine-similarity plot
+[H3] Steering effects are weak#
+[P] So far, steering does barely change model's prediction
+[LI] Prompt-span steering can slightly move predictions, but it is noisy, weak, and inconsistent. It does not give robust count control:
+[FIGCAPTION] Layerwise plot
+[LI] CoT probe steering has zero change to model's predicted count:
+[FIGCAPTION] Layerwise plot
+[H2] Counting without CoT: noisy broad retrieval#
+[P] Activation patching results are extracted from run_20260703_070834
+[H3] Attention#
+[LI] Broad attention to all needle spans at a later needle span:
+[FIGCAPTION] Broad attention to all needle spans
+[LI] No sequential attention as high compressed representation would imply
+[H3] Ablation#
+[LI] Ablation starting from low layers tends to move the predicted count by -1, but there are also -2, -3, or even +1, +2 movements
+[LI] Ablation starting from mid/high layers tend to keep prediction unchanged
+[H4] Change of predicted counts after ablation#
+[TH] layer
+[TH] -4
+[TH] -3
+[TH] -2
+[TH] -1
+[TH] 0
+[TH] +1
+[TH] +2
+[TD] L0
+[TD] 7
+[TD] 7
+[TD] 13
+[TD] 19
+[TD] 1
+[TD] 0
+[TD] 0
+[TD] L4
+[TD] 4
+[TD] 10
+[TD] 9
+[TD] 21
+[TD] 3
+[TD] 0
+[TD] 0
+[TD] L8
+[TD] 2
+[TD] 5
+[TD] 14
+[TD] 19
+[TD] 6
+[TD] 1
+[TD] 0
+[TD] L12
+[TD] 5
+[TD] 4
+[TD] 12
+[TD] 18
+[TD] 6
+[TD] 1
+[TD] 1
+[TD] L16
+[TD] 4
+[TD] 3
+[TD] 12
+[TD] 11
+[TD] 11
+[TD] 2
+[TD] 4
+[TD] L20
+[TD] 2
+[TD] 1
+[TD] 9
+[TD] 5
+[TD] 26
+[TD] 3
+[TD] 1
+[TD] L24
+[TD] 0
+[TD] 1
+[TD] 13
+[TD] 2
+[TD] 30
+[TD] 1
+[TD] 0
+[TD] L28
+[TD] 0
+[TD] 0
+[TD] 11
+[TD] 2
+[TD] 31
+[TD] 3
+[TD] 0
+[TD] L32
+[TD] 0
+[TD] 0
+[TD] 12
+[TD] 1
+[TD] 32
+[TD] 2
+[TD] 0
+[H4] Mean change in predicted counts after ablation#
+[TH] span
+[TH] L0
+[TH] L4
+[TH] L8
+[TH] L12
+[TH] L16
+[TH] L20
+[TH] L24
+[TH] L28
+[TH] L32
+[TD] N1
+[TD] -1.10
+[TD] -1.10
+[TD] -0.60
+[TD] -0.20
+[TD] +0.20
+[TD] -0.20
+[TD] -0.10
+[TD] 0.00
+[TD] 0.00
+[TD] N2
+[TD] -1.62
+[TD] -1.25
+[TD] -1.38
+[TD] -1.38
+[TD] +0.75
+[TD] +0.38
+[TD] -0.50
+[TD] -0.25
+[TD] -0.50
+[TD] N3
+[TD] -2.00
+[TD] -1.86
+[TD] -1.86
+[TD] -1.71
+[TD] -1.29
+[TD] -0.43
+[TD] -0.14
+[TD] 0.00
+[TD] -0.29
+[TD] N4
+[TD] -1.83
+[TD] -2.17
+[TD] -1.00
+[TD] -2.00
+[TD] -1.50
+[TD] -0.33
+[TD] -0.33
+[TD] -0.17
+[TD] -0.33
+[TD] N5
+[TD] -2.00
+[TD] -1.00
+[TD] -1.33
+[TD] -0.33
+[TD] -1.33
+[TD] -0.33
+[TD] -1.00
+[TD] 0.00
+[TD] -1.33
+[TD] N6
+[TD] -2.67
+[TD] -2.33
+[TD] -2.00
+[TD] -2.00
+[TD] -2.67
+[TD] -0.67
+[TD] -0.67
+[TD] -2.00
+[TD] -1.33
+[TD] N7
+[TD] -3.67
+[TD] -3.33
+[TD] -2.33
+[TD] -2.00
+[TD] -2.33
+[TD] -1.67
+[TD] -0.67
+[TD] -1.33
+[TD] -0.67
+[TD] N8
+[TD] -3.00
+[TD] -3.00
+[TD] -2.33
+[TD] -2.67
+[TD] -3.00
+[TD] -2.33
+[TD] -2.00
+[TD] -0.67
+[TD] -0.67
+[TD] N9
+[TD] -2.50
+[TD] -2.00
+[TD] -1.00
+[TD] -3.50
+[TD] -3.00
+[TD] -4.00
+[TD] -2.50
+[TD] -2.00
+[TD] -1.00
+[TD] N10
+[TD] -3.00
+[TD] -2.50
+[TD] -3.50
+[TD] -3.00
+[TD] -3.00
+[TD] -1.00
+[TD] -2.00
+[TD] -1.00
+[TD] -0.50
+[H3] Restore#
+[LI] For early needle spans, N1/N2/N3/N4 in early-to-mid layers: restoring Nk often moves the prediction by approximately +k. Later layers collapse toward (all 0 changes).
+[LI] Internal counter in early needle spans, but that representation gets noisy quickly with more needles
+[H4] Change of predicted counts after restore#
+[TH] span
+[TH] 0
+[TH] +1
+[TH] +2
+[TH] +3
+[TH] +4
+[TH] +5
+[TH] +6
+[TH] +7
+[TH] +8
+[TH] +10
+[TH] +11
+[TH] +13
+[TD] N1
+[TD] 43
+[TD] 39
+[TD] 7
+[TD] 1
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] N2
+[TD] 23
+[TD] 7
+[TD] 42
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] N3
+[TD] 21
+[TD] 0
+[TD] 4
+[TD] 36
+[TD] 2
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] N4
+[TD] 20
+[TD] 0
+[TD] 1
+[TD] 0
+[TD] 24
+[TD] 6
+[TD] 1
+[TD] 2
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] N5
+[TD] 19
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 4
+[TD] 1
+[TD] 0
+[TD] 3
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] N6
+[TD] 19
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 2
+[TD] 2
+[TD] 2
+[TD] 2
+[TD] 0
+[TD] 0
+[TD] N7
+[TD] 19
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 1
+[TD] 2
+[TD] 1
+[TD] 1
+[TD] 3
+[TD] 0
+[TD] 0
+[TD] N8
+[TD] 23
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 1
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 3
+[TD] 0
+[TD] 0
+[TD] N9
+[TD] 16
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 1
+[TD] 0
+[TD] 1
+[TD] N10
+[TD] 13
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 1
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 2
+[TD] 2
+[TD] 0
+[H4] Detailed count movements#
+[P] Each cell shows the number of instances for movements (0, +1, +2, +3, +4, >4)
+[TH] span
+[TH] L0
+[TH] L4
+[TH] L8
+[TH] L12
+[TH] L16
+[TH] L20
+[TH] L24
+[TH] L28
+[TH] L32
+[TD] N1
+[TD] (1, 9, 0, 0, 0, 0)
+[TD] (1, 9, 0, 0, 0, 0)
+[TD] (1, 9, 0, 0, 0, 0)
+[TD] (1, 9, 0, 0, 0, 0)
+[TD] (3, 1, 5, 1, 0, 0)
+[TD] (9, 0, 1, 0, 0, 0)
+[TD] (9, 0, 1, 0, 0, 0)
+[TD] (9, 1, 0, 0, 0, 0)
+[TD] (9, 1, 0, 0, 0, 0)
+[TD] N2
+[TD] (0, 1, 7, 0, 0, 0)
+[TD] (0, 1, 7, 0, 0, 0)
+[TD] (0, 1, 7, 0, 0, 0)
+[TD] (0, 1, 7, 0, 0, 0)
+[TD] (0, 1, 7, 0, 0, 0)
+[TD] (1, 1, 6, 0, 0, 0)
+[TD] (8, 0, 0, 0, 0, 0)
+[TD] (7, 0, 1, 0, 0, 0)
+[TD] (7, 1, 0, 0, 0, 0)
+[TD] N3
+[TD] (0, 0, 1, 6, 0, 0)
+[TD] (0, 0, 1, 6, 0, 0)
+[TD] (0, 0, 0, 7, 0, 0)
+[TD] (0, 0, 0, 6, 1, 0)
+[TD] (0, 0, 0, 6, 1, 0)
+[TD] (2, 0, 0, 5, 0, 0)
+[TD] (6, 0, 1, 0, 0, 0)
+[TD] (6, 0, 1, 0, 0, 0)
+[TD] (7, 0, 0, 0, 0, 0)
+[TD] N4
+[TD] (0, 0, 0, 0, 3, 3)
+[TD] (0, 0, 0, 0, 4, 2)
+[TD] (0, 0, 0, 0, 4, 2)
+[TD] (0, 0, 0, 0, 4, 2)
+[TD] (1, 0, 0, 0, 5, 0)
+[TD] (2, 0, 0, 0, 4, 0)
+[TD] (5, 0, 1, 0, 0, 0)
+[TD] (6, 0, 0, 0, 0, 0)
+[TD] (6, 0, 0, 0, 0, 0)
+[TD] N5
+[TD] (1, 0, 0, 0, 0, 2)
+[TD] (1, 0, 0, 0, 0, 2)
+[TD] (1, 0, 0, 0, 0, 2)
+[TD] (1, 0, 0, 0, 0, 2)
+[TD] (3, 0, 0, 0, 0, 0)
+[TD] (3, 0, 0, 0, 0, 0)
+[TD] (3, 0, 0, 0, 0, 0)
+[TD] (3, 0, 0, 0, 0, 0)
+[TD] (3, 0, 0, 0, 0, 0)
+[TD] N6
+[TD] (0, 0, 0, 0, 0, 3)
+[TD] (2, 0, 0, 0, 0, 1)
+[TD] (1, 0, 0, 0, 0, 2)
+[TD] (2, 0, 0, 0, 0, 1)
+[TD] (2, 0, 0, 0, 0, 1)
+[TD] (3, 0, 0, 0, 0, 0)
+[TD] (3, 0, 0, 0, 0, 0)
+[TD] (3, 0, 0, 0, 0, 0)
+[TD] (3, 0, 0, 0, 0, 0)
+[TD] N7
+[TD] (1, 0, 0, 0, 0, 2)
+[TD] (1, 0, 0, 0, 0, 2)
+[TD] (1, 0, 0, 0, 0, 2)
+[TD] (1, 0, 0, 0, 0, 2)
+[TD] (3, 0, 0, 0, 0, 0)
+[TD] (3, 0, 0, 0, 0, 0)
+[TD] (3, 0, 0, 0, 0, 0)
+[TD] (3, 0, 0, 0, 0, 0)
+[TD] (3, 0, 0, 0, 0, 0)
+[TD] N8
+[TD] (2, 0, 0, 0, 0, 1)
+[TD] (2, 0, 0, 0, 0, 1)
+[TD] (2, 0, 0, 0, 0, 1)
+[TD] (2, 0, 0, 0, 0, 1)
+[TD] (3, 0, 0, 0, 0, 0)
+[TD] (3, 0, 0, 0, 0, 0)
+[TD] (3, 0, 0, 0, 0, 0)
+[TD] (3, 0, 0, 0, 0, 0)
+[TD] (3, 0, 0, 0, 0, 0)
+[TD] N9
+[TD] (1, 0, 0, 0, 0, 1)
+[TD] (1, 0, 0, 0, 0, 1)
+[TD] (2, 0, 0, 0, 0, 0)
+[TD] (2, 0, 0, 0, 0, 0)
+[TD] (2, 0, 0, 0, 0, 0)
+[TD] (2, 0, 0, 0, 0, 0)
+[TD] (2, 0, 0, 0, 0, 0)
+[TD] (2, 0, 0, 0, 0, 0)
+[TD] (2, 0, 0, 0, 0, 0)
+[TD] N10
+[TD] (1, 0, 0, 0, 0, 1)
+[TD] (1, 0, 0, 0, 0, 1)
+[TD] (1, 0, 0, 0, 0, 1)
+[TD] (1, 0, 0, 0, 0, 1)
+[TD] (1, 0, 0, 0, 0, 1)
+[TD] (2, 0, 0, 0, 0, 0)
+[TD] (2, 0, 0, 0, 0, 0)
+[TD] (2, 0, 0, 0, 0, 0)
+[TD] (2, 0, 0, 0, 0, 0)
+[H2] Counting with CoT: targeted retrieval and internal counter#
+[H3] Attention#
+[P] At each CoT needle span (e.g., 1. Shenzhen: 95), how much attention a head pays to the prompt needle span on average (relative to uniform attention baseline). Visualize the most significant head at a given layer.
+[LI] In early layer, each CoT needle span broadly attends to earlier CoT needles:
+[FIGCAPTION] Early-layer CoT counter attention
+[LI] In mid/high layer, each CoT needle span mostly attends to a single prompt needle:
+[FIGCAPTION] Mid/high-layer CoT counter attention
+[LI] In mid/high layer, attention jumps to the next prompt needle in order in the last token; see the previous plot
+[LI] Attention at CoT tokens contrast with attention at prompt tokens: more targeted and in order:
+[FIGCAPTION] Attention at CoT tokens
+[H3] Ablation#
+[P] The results are extracted from
+[LI] The analysis is based on parsing numbered lists such as 1. Shenzhen: 95, which is treated as a CoT needle span. The bullet-style lists in the form of - Shenzhen: 95 have similar albeit weaker results.
+[H4] Table: predicted count movements#
+[LI] Each cell shows (0, -1, -2)
+[LI] So (17, 3, 0) means 17 unchanged rows, 3 rows decreased by 1, 0 rows decreased by 2.
+[LI] Sample sizes by span: N1-N4 have 20 examples, N5 has 17, N6 has 13, N7 has 8, N8 has 6, N9 has 5, N10 has 2.
+[TH] span
+[TH] L0
+[TH] L4
+[TH] L8
+[TH] L12
+[TH] L16
+[TH] L20
+[TH] L24
+[TH] L28
+[TH] L32
+[TD] N1
+[TD] (20,0,0)
+[TD] (20,0,0)
+[TD] (20,0,0)
+[TD] (20,0,0)
+[TD] (20,0,0)
+[TD] (20,0,0)
+[TD] (20,0,0)
+[TD] (20,0,0)
+[TD] (20,0,0)
+[TD] N2
+[TD] (19,1,0)
+[TD] (19,1,0)
+[TD] (20,0,0)
+[TD] (20,0,0)
+[TD] (20,0,0)
+[TD] (20,0,0)
+[TD] (20,0,0)
+[TD] (20,0,0)
+[TD] (20,0,0)
+[TD] N3
+[TD] (18,2,0)
+[TD] (18,2,0)
+[TD] (19,1,0)
+[TD] (20,0,0)
+[TD] (20,0,0)
+[TD] (20,0,0)
+[TD] (20,0,0)
+[TD] (20,0,0)
+[TD] (20,0,0)
+[TD] N4
+[TD] (16,4,0)
+[TD] (17,3,0)
+[TD] (17,3,0)
+[TD] (17,3,0)
+[TD] (17,3,0)
+[TD] (17,3,0)
+[TD] (20,0,0)
+[TD] (20,0,0)
+[TD] (20,0,0)
+[TD] N5
+[TD] (11,5,1)
+[TD] (12,4,1)
+[TD] (13,4,0)
+[TD] (13,4,0)
+[TD] (13,4,0)
+[TD] (13,4,0)
+[TD] (17,0,0)
+[TD] (17,0,0)
+[TD] (17,0,0)
+[TD] N6
+[TD] (9,4,0)
+[TD] (9,4,0)
+[TD] (9,4,0)
+[TD] (9,4,0)
+[TD] (10,3,0)
+[TD] (9,4,0)
+[TD] (13,0,0)
+[TD] (13,0,0)
+[TD] (13,0,0)
+[TD] N7
+[TD] (7,1,0)
+[TD] (7,1,0)
+[TD] (7,1,0)
+[TD] (7,1,0)
+[TD] (7,1,0)
+[TD] (7,1,0)
+[TD] (8,0,0)
+[TD] (8,0,0)
+[TD] (8,0,0)
+[TD] N8
+[TD] (5,1,0)
+[TD] (5,1,0)
+[TD] (5,1,0)
+[TD] (5,1,0)
+[TD] (5,1,0)
+[TD] (5,1,0)
+[TD] (6,0,0)
+[TD] (6,0,0)
+[TD] (6,0,0)
+[TD] N9
+[TD] (4,1,0)
+[TD] (4,1,0)
+[TD] (4,1,0)
+[TD] (4,1,0)
+[TD] (4,1,0)
+[TD] (4,1,0)
+[TD] (4,1,0)
+[TD] (5,0,0)
+[TD] (5,0,0)
+[TD] N10
+[TD] (2,0,0)
+[TD] (2,0,0)
+[TD] (2,0,0)
+[TD] (2,0,0)
+[TD] (2,0,0)
+[TD] (2,0,0)
+[TD] (2,0,0)
+[TD] (2,0,0)
+[TD] (2,0,0)
+[H3] Restore#
+[P] For restore experiments, all prompt needles and CoT needles are corrupted by uninformative tokens as the corrupted baseline. Results are extracted from run_20260703_052246
+[LI] Except for the first needle span, the restored hidden states at needle span $k$ usually decode to prediction count $k$.
+[LI] Result supports the internal counter explanation.
+[H4] Predicted count after restore#
+[TH] span
+[TH] 0
+[TH] 1
+[TH] 2
+[TH] 3
+[TH] 4
+[TH] 5
+[TH] 6
+[TH] 7
+[TH] 8
+[TH] 9
+[TH] 10
+[TH] total
+[TD] N1
+[TD] 0
+[TD] 0
+[TD] 4
+[TD] 2
+[TD] 4
+[TD] 1
+[TD] 1
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 12
+[TD] N2
+[TD] 0
+[TD] 0
+[TD] 11
+[TD] 1
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 12
+[TD] N3
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 9
+[TD] 3
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 12
+[TD] N4
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 12
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 12
+[TD] N5
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 10
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 10
+[TD] N6
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 7
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 7
+[TD] N7
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 3
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 3
+[TD] N8
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 2
+[TD] 0
+[TD] 0
+[TD] 2
+[TD] N9
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 0
+[TD] 1
+[TD] 0
+[TD] 1
+[H2] Next steps#
+[H3] NIAH experiments#
+[LI] I expected steering to be effective, at least for CoT needle spans, but I couldn't find the right probing vectors. The headache is that probing vectors are different at different token positions and steering positions
+[LI] I think we can try more probing, probably at special symbol tokens such as - , 1. , or \n. We can draw some experience from in-context learning literature
+[LI] We might also try a different probing strategy: based on maxmizing log-likelihood of desired behavior
+[LI] Steering needs to be improved I expected steering to be effective, at least for CoT needle spans, but I couldn't find the right probing vectors. The headache is that probing vectors are different at different token positions and steering positions I think we can try more probing, probably at special symbol tokens such as - , 1. , or \n. We can draw some experience from in-context learning literature We might also try a different probing strategy: based on maxmizing log-likelihood of desired behavior
+[LI] Currently, attention plots are revealing but not decisive. We should do more representation-level intervention or steering analysis.
+[LI] The mechanism of targeted retrieval can be further analyzed Currently, attention plots are revealing but not decisive. We should do more representation-level intervention or steering analysis.
+[LI] We analyzed how hidden states change prediction after intervention, but we haven't analyzed how inputs change hidden states
+[LI] To be specific, the hidden state is $h_t = g(x_1,\ldots,x_t)$. If we replace one needle (with random haystack tokens), or permute the order of the needles, how do hidden states change?
+[LI] How does input change the hidden states? We analyzed how hidden states change prediction after intervention, but we haven't analyzed how inputs change hidden states To be specific, the hidden state is $h_t = g(x_1,\ldots,x_t)$. If we replace one needle (with random haystack tokens), or permute the order of the needles, how do hidden states change?
+[LI] Larger scales and more samples
+[H4] Minor experiment adjustment#
+[LI] We can have a dataset with balanced number of needles, e.g., $m$ number of needles in 10 examples, for $m=1,2,3\ldots,30$
+[LI] We can also fix the needles to be a few representative values, e.g., $m$ number of neeldes in 100 examples, for $m = 3, 6, 10, 30$.
+[LI] Currently, the number of needles is randomly selected for each NIAH example. Perhaps it is better to have more control over the number of needles. We can have a dataset with balanced number of needles, e.g., $m$ number of needles in 10 examples, for $m=1,2,3\ldots,30$ We can also fix the needles to be a few representative values, e.g., $m$ number of neeldes in 100 examples, for $m = 3, 6, 10, 30$.
+[H3] Synthetic experiment#
+[P] Currently, we focused on Dyck languages. We can probably redirect our focus to the counting needles (NIAH-style) setting if that is better.
+[LI] When the density of relevant tokens (needles, paranthesis) is below some threshold, model's counting accuracy is bad but linear probing is still good?
+[LI] Why is there a gap between linear probing result and model's counting accuracy When the density of relevant tokens (needles, paranthesis) is below some threshold, model's counting accuracy is bad but linear probing is still good?
+[LI] Is there a critical training step for the compressed representation / internal counter to appear?
+[LI] Training dynamics analysis Is there a critical training step for the compressed representation / internal counter to appear?
+[H3] Theory (optional)#
+[LI] Perhaps some signal-vs-noise analysis
+[H2] Appendix: additional citations #
+[P] These links are added as a formatting appendix and do not alter the main document text.
+[LI] Qwen3 Technical Report. Relevant for the Qwen3 model family and thinking / non-thinking modes.
+[LI] Chain-of-Thought Prompting Elicits Reasoning in Large Language Models. Background on chain-of-thought prompting.
+[LI] Self-Consistency Improves Chain of Thought Reasoning in Language Models. Related work on reasoning-path sampling and answer consistency.
+[LI] Understanding Counting Mechanisms in Large Language and Vision-Language Models. Related mechanistic work on internal counting features.
+[LI] The Right Answer, the Wrong Direction: Why Transformers Fail at Counting and How to Fix It. Related probing and unembedding-alignment work on counting.
+[LI] Towards Best Practices of Activation Patching in Language Models: Metrics and Methods. Methodological reference for activation patching / causal tracing.

@@ -1,0 +1,368 @@
+[
+  {
+    "index": "1",
+    "alt": "Recall vs depth by question position, model by N grid",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACBAAAAOVCAYAAADapYHSAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_001.png"
+  },
+  {
+    "index": "2",
+    "alt": "Needle recall vs depth by needle count",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABtMAAAJ9CAYAAABHO40tAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_002.png"
+  },
+  {
+    "index": "3",
+    "alt": "Retrieval-stress R0-R3 with 95% CIs",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABs0AAAIhCAYAAAAFEPT6AAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAT/gAAE/4BB5Q5hAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_003.png"
+  },
+  {
+    "index": "4",
+    "alt": "Lost in the middle reproduced on Qwen3-8B",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA5oAAAJICAYAAAAAdJsbAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAT/gAAE/4BB5Q5hAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_004.png"
+  },
+  {
+    "index": "5",
+    "alt": "Count accuracy vs N, fine sweep",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABTgAAAJKCAYAAAAIpCq/AAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_005.png"
+  },
+  {
+    "index": "6",
+    "alt": "Attractor evidence: dot plot and pooled heaping test",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAB8EAAAL7CAYAAABtB/T9AAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_006.png"
+  },
+  {
+    "index": "7",
+    "alt": "Prediction structure for N=21-45",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABkoAAAJICAYAAAAuMrgQAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAT/gAAE/4BB5Q5hAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_007.png"
+  },
+  {
+    "index": "8",
+    "alt": "Register modulation of lattice prior",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABNIAAAHtCAYAAADcG1MMAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAT/gAAE/4BB5Q5hAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_008.png"
+  },
+  {
+    "index": "9",
+    "alt": "Count accuracy heatmap placement by N",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABbYAAAJcCAYAAAAl5/KLAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_009.png"
+  },
+  {
+    "index": "10",
+    "alt": "Relative signed error heatmap",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABbYAAAJcCAYAAAAl5/KLAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_010.png"
+  },
+  {
+    "index": "11",
+    "alt": "Scaffold effect on count accuracy",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABZcAAAJRCAYAAAA55om7AAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAAAynlJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_011.png"
+  },
+  {
+    "index": "12",
+    "alt": "False positives vs N",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABEkAAAIrCAYAAAATCccmAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAAA2dNJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_012.png"
+  },
+  {
+    "index": "13",
+    "alt": "Count accuracy by question position",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABZcAAAJcCAYAAACFeJplAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAAA91hJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_013.png"
+  },
+  {
+    "index": "14",
+    "alt": "Per-layer cross-needle cosine under three poolings",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABBwAAAJICAYAAADCVPfeAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAT/gAAE/4BB5Q5hAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_014.png"
+  },
+  {
+    "index": "15",
+    "alt": "c(t) and c_W(t) definitions",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABgoAAAA9CAYAAAB8+DLrAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAASPJJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_015.png"
+  },
+  {
+    "index": "16",
+    "alt": "random orthogonal rotation intervention",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABPcAAABMCAYAAAABWFJnAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAAPEpJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_016.png"
+  },
+  {
+    "index": "17",
+    "alt": "H-S formal statement",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABgMAAABMCAYAAABAk8dFAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAASFNJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_017.png"
+  },
+  {
+    "index": "18",
+    "alt": "attention mixture approximation",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABK0AAABuCAYAAADlCuDbAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAATCJJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_018.png"
+  },
+  {
+    "index": "19",
+    "alt": "rho definition and readout",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABIsAAABbCAYAAADz/gVSAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAAOkxJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_019.png"
+  },
+  {
+    "index": "20",
+    "alt": "Weber derivation from ratio code",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABb4AAABaCAYAAAB39kBLAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAARhVJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_020.png"
+  },
+  {
+    "index": "21",
+    "alt": "H-P-hier formal statement",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABh8AAACKCAYAAAC6sFuKAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAAYMtJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_021.png"
+  },
+  {
+    "index": "22",
+    "alt": "Four aggregation hypotheses schematic",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABeYAAATFCAYAAADFSgZyAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_022.png"
+  },
+  {
+    "index": "23",
+    "alt": "E1 dilution: estimate falls as filler grows",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA+gAAAKLCAYAAABltKKkAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAAA8VFJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_023.png"
+  },
+  {
+    "index": "24",
+    "alt": "Growth experiment N=8",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABdkAAAOqCAYAAABgt1zGAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_024.png"
+  },
+  {
+    "index": "25",
+    "alt": "Growth curves and share collapse (static)",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAB8EAAALZCAYAAAAnY1DAAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_025.png"
+  },
+  {
+    "index": "26",
+    "alt": "prediction pipeline",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABKYAAABHCAYAAAA9SU/SAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAAPClJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_026.png"
+  },
+  {
+    "index": "27",
+    "alt": "form A: plateau + log-linear",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABYYAAABOCAYAAACUlcIKAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAARipJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_027.png"
+  },
+  {
+    "index": "28",
+    "alt": "form B: logistic in log share",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABgAAAABDCAYAAABa8s6TAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAATMFJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_028.png"
+  },
+  {
+    "index": "29",
+    "alt": "form C: softmax share",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABJQAAABbCAYAAAAlW983AAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAAOzJJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_029.png"
+  },
+  {
+    "index": "30",
+    "alt": "Preregistered prediction vs observation",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAnsAAAJICAYAAAAZ2iKUAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAT/gAAE/4BB5Q5hAAA2XJJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_030.png"
+  },
+  {
+    "index": "31",
+    "alt": "E2 stream probes: depth decodes, running count does not",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA6gAAAJXCAYAAACe8nlQAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAAAofFJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_031.png"
+  },
+  {
+    "index": "32",
+    "alt": "H-S-sparse adjudication: traces exist, none consumed",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABckAAAIUCAYAAADBrqSfAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAT/gAAE/4BB5Q5hAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_032.png"
+  },
+  {
+    "index": "33",
+    "alt": "attention row definition",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABHcAAABYCAYAAAB/GhvrAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAAQLRJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_033.png"
+  },
+  {
+    "index": "34",
+    "alt": "mass and uniformity definitions",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABeEAAACPCAYAAAB9GhASAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAAaIZJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_034.png"
+  },
+  {
+    "index": "35",
+    "alt": "mixture approximation",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA+oAAABxCAYAAABC11nPAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAANSZJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_035.png"
+  },
+  {
+    "index": "36",
+    "alt": "Aggregator heads scatter and dilution scaling",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABnkAAAJICAYAAACt9oErAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_036.png"
+  },
+  {
+    "index": "37",
+    "alt": "E4 grouping U-shape",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA+QAAAKLCAYAAAB/iEIqAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_037.png"
+  },
+  {
+    "index": "38",
+    "alt": "Last-token probe splits and steering dose-response",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABdkAAAI4CAYAAACWbuA6AAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_038.png"
+  },
+  {
+    "index": "39",
+    "alt": "Count manifold geometry at the readout token",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAByAAAAW/CAYAAADkSeRGAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_039.png"
+  },
+  {
+    "index": "40",
+    "alt": "ordinal direction regression",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABWYAAABRCAYAAABR9381AAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAARvBJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_040.png"
+  },
+  {
+    "index": "41",
+    "alt": "ordinal patch definition",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABmIAAABdCAYAAAC2PHk1AAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAAXXxJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_041.png"
+  },
+  {
+    "index": "42",
+    "alt": "tag patch definition",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABXIAAABMCAYAAADA+k/iAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAAP5tJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_042.png"
+  },
+  {
+    "index": "43",
+    "alt": "J-lens definition",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABrUAAABoCAYAAABfRnsbAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAAXmVJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_043.png"
+  },
+  {
+    "index": "44",
+    "alt": "Counterfactual patch results and transfer failure",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABskAAAJECAYAAABUwsppAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_044.png"
+  },
+  {
+    "index": "45",
+    "alt": "J-lens readout alignment bars",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAApUAAAITCAYAAABWuOdiAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAT/gAAE/4BB5Q5hAAAhNVJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_045.png"
+  },
+  {
+    "index": "46",
+    "alt": "Bare-list accuracy and calibration N=1-30",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABzQAAAK6CAYAAABfZmrpAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_046.png"
+  },
+  {
+    "index": "47",
+    "alt": "logit lens definition",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABGkAAABTCAYAAAAsulpzAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAASapJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_047.png"
+  },
+  {
+    "index": "48",
+    "alt": "three counting functionals",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACXgAAAA+CAYAAACbKOEmAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAAefFJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_048.png"
+  },
+  {
+    "index": "49",
+    "alt": "per-N mean and spacing fit",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABZ4AAABsCAYAAADqiKcrAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAATVBJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_049.png"
+  },
+  {
+    "index": "50",
+    "alt": "Bare-regime count manifold PCA and spacing",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABvQAAALLCAYAAAAmKWXsAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_050.png"
+  },
+  {
+    "index": "51",
+    "alt": "Tag lifecycle measured anchors",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABj4AAAHGCAYAAADEwvLHAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAT/gAAE/4BB5Q5hAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_051.png"
+  },
+  {
+    "index": "52",
+    "alt": "newline metrics",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABsMAAABtCAYAAAD03B93AAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAAW2dJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_052.png"
+  },
+  {
+    "index": "53",
+    "alt": "Weber fraction from knee",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABF0AAABECAYAAABTcUoSAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAARJRJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_053.png"
+  },
+  {
+    "index": "54",
+    "alt": "Linebreak task performance on Qwen3-8B",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACEsAAAKgCAYAAABpkWHHAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_054.png"
+  },
+  {
+    "index": "55",
+    "alt": "task tolerance comparison",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABkIAAABRCAYAAACOo7qeAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAAT55JREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_055.png"
+  },
+  {
+    "index": "56",
+    "alt": "psychometric model",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABqYAAABVCAYAAAArO1WDAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAATfNJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_056.png"
+  },
+  {
+    "index": "57",
+    "alt": "three-tier accuracy",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACDMAAABPCAYAAAD8ghzVAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAAbSxJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_057.png"
+  },
+  {
+    "index": "58",
+    "alt": "Tolerance-referenced precision of the linebreak counter",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACG8AAALKCAYAAACGSO5RAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_058.png"
+  },
+  {
+    "index": "59",
+    "alt": "unit-check regression",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABagAAABNCAYAAABDlYPHAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAAVYNJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_059.png"
+  },
+  {
+    "index": "60",
+    "alt": "Verbalized counting of characters and words",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACHEAAALBCAYAAADV6K/JAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_060.png"
+  },
+  {
+    "index": "61",
+    "alt": "ICL-scaffolded character-count verbalization",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACC8AAAK6CAYAAAAT0OQwAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAYmwAAGJsBSXWDlAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_4k\\embedded_images\\image_061.png"
+  }
+]

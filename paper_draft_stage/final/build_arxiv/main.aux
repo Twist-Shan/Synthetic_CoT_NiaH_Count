@@ -1,0 +1,92 @@
+\relax 
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\citation{nye2021scratchpads,wei2022cot}
+\citation{pfau2024dot}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{1}{section.1}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Two candidate routes to the same count token. \textbf  {Top:} direct answering broadly routes unordered prompt occurrences into a late count state. \textbf  {Bottom:} an indexed trace creates a serial $k$-to-$k$ retrieval interface, an explicit progress state, and a separate trace-to-answer readout. Solid arrows are tested by query-local intervention; the dashed cross-route relation is tested only by decoding and state transport.}}{2}{figure.1}\protected@file@percent }
+\newlabel{fig:routes}{{1}{2}{Two candidate routes to the same count token. \textbf {Top:} direct answering broadly routes unordered prompt occurrences into a late count state. \textbf {Bottom:} an indexed trace creates a serial $k$-to-$k$ retrieval interface, an explicit progress state, and a separate trace-to-answer readout. Solid arrows are tested by query-local intervention; the dashed cross-route relation is tested only by decoding and state transport}{figure.1}{}}
+\citation{zhang2024patching}
+\@writefile{toc}{\contentsline {section}{\numberline {2}Experimental framework}{3}{section.2}\protected@file@percent }
+\newlabel{sec:framework}{{2}{3}{Experimental framework}{section.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Task and mechanistic hypotheses}{3}{subsection.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{H-NT: direct aggregation.}{3}{section*.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{H-CoT: externalized serial retrieval.}{3}{section*.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Controlled synthetic models}{3}{subsection.2.2}\protected@file@percent }
+\citation{yang2025qwen3}
+\citation{merrill2026olmohybrid}
+\citation{hsieh2024ruler}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Query-position intervention}{4}{subsection.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.4}Realistic 4K NIAH}{4}{subsection.2.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}Controlled training reveals two routes}{4}{section.3}\protected@file@percent }
+\newlabel{sec:synthetic}{{3}{4}{Controlled training reveals two routes}{section.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Learning time and representation separate before final behavior}{4}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}The direct route aggregates broadly and writes count late}{4}{subsection.3.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Learning dynamics in the matched query-first run. Thinking forms a decodable final-answer state and answer-to-trace routing early; direct answering acquires broad prompt retrieval and high AR accuracy late. The dotted line marks the step-1,500 loss-scope switch.}}{5}{figure.2}\protected@file@percent }
+\newlabel{fig:learning}{{2}{5}{Learning dynamics in the matched query-first run. Thinking forms a decodable final-answer state and answer-to-trace routing early; direct answering acquires broad prompt retrieval and high AR accuracy late. The dotted line marks the step-1,500 loss-scope switch}{figure.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}The trace route closes a serial causal loop}{5}{subsection.3.3}\protected@file@percent }
+\citation{liu2024lost}
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Selected causal tests in the controlled query-first run. Random controls use matched deterministic head orderings; their min--max ranges are sanity checks, not confidence intervals.}}{6}{table.1}\protected@file@percent }
+\newlabel{tab:causal}{{1}{6}{Selected causal tests in the controlled query-first run. Random controls use matched deterministic head orderings; their min--max ranges are sanity checks, not confidence intervals}{table.1}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {4}Query placement rewires the route}{6}{section.4}\protected@file@percent }
+\newlabel{sec:layout}{{4}{6}{Query placement rewires the route}{section.4}{}}
+\citation{nye2021scratchpads,wei2022cot}
+\citation{pfau2024dot}
+\citation{hou2025turing}
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Paired query-first versus query-last outcomes. The bootstrap interval reflects finite evaluation prompts, not training-seed variance.}}{7}{table.2}\protected@file@percent }
+\newlabel{tab:layout}{{2}{7}{Paired query-first versus query-last outcomes. The bootstrap interval reflects finite evaluation prompts, not training-seed variance}{table.2}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {5}Realistic long-context counting}{7}{section.5}\protected@file@percent }
+\newlabel{sec:realistic}{{5}{7}{Realistic long-context counting}{section.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Retrieval succeeds where aggregation fails}{7}{subsection.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Enumeration supplies the missing interface}{7}{subsection.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Mechanistic correspondence at scale}{7}{subsection.5.3}\protected@file@percent }
+\citation{ouellette2023counting,yehudai2024count}
+\citation{hasani2025counting,garcia2026wrong}
+\citation{liu2024lost}
+\citation{hsieh2024ruler}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Query placement intervention. Top: checkpoint diagnostic AR accuracy. Bottom: independent final accuracy by count (10 examples per count). Query-last particularly accelerates and improves direct counting; thinking is near the final-answer ceiling in both layouts.}}{8}{figure.3}\protected@file@percent }
+\newlabel{fig:layout}{{3}{8}{Query placement intervention. Top: checkpoint diagnostic AR accuracy. Bottom: independent final accuracy by count (10 examples per count). Query-last particularly accelerates and improves direct counting; thinking is near the final-answer ceiling in both layouts}{figure.3}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {6}Related work}{8}{section.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Intermediate computation.}{8}{section*.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Counting in transformers.}{8}{section*.4}\protected@file@percent }
+\bibdata{references}
+\bibcite{garcia2026wrong}{{1}{2026}{{Garcia}}{{}}}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Realistic 4K NIAH. Bare counting collapses well before item retrieval does; enumerating records before producing the total restores substantial accuracy. Error bars and bands are 95\% intervals over independently generated prompts.}}{9}{figure.4}\protected@file@percent }
+\newlabel{fig:realistic}{{4}{9}{Realistic 4K NIAH. Bare counting collapses well before item retrieval does; enumerating records before producing the total restores substantial accuracy. Error bars and bands are 95\% intervals over independently generated prompts}{figure.4}{}}
+\@writefile{toc}{\contentsline {paragraph}{Long-context retrieval and aggregation.}{9}{section*.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}Limitations and conclusion}{9}{section.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Ethics statement.}{9}{section*.6}\protected@file@percent }
+\bibcite{hasani2025counting}{{2}{2025}{{Hasani et~al.}}{{Hasani, Izadi, Askari, Bagherian, Mohammadian, Izadi, and Baghshah}}}
+\bibcite{hou2025turing}{{3}{2025}{{Hou et~al.}}{{Hou, Brandfonbrener, Kakade, Jelassi, and Malach}}}
+\bibcite{hsieh2024ruler}{{4}{2024}{{Hsieh et~al.}}{{Hsieh, Sun, Kriman, Acharya, Rekesh, Jia, Zhang, and Ginsburg}}}
+\bibcite{liu2024lost}{{5}{2024}{{Liu et~al.}}{{Liu, Lin, Hewitt, Paranjape, Bevilacqua, Petroni, and Liang}}}
+\bibcite{merrill2026olmohybrid}{{6}{2026}{{Merrill et~al.}}{{Merrill, Li, Romero, Svete, Costello, Dasigi, Groeneveld, Heineman, Kuehl, Lambert, Morrison, Soldaini, Timbers, Walsh, Smith, Hajishirzi, and Sabharwal}}}
+\bibcite{nye2021scratchpads}{{7}{2021}{{Nye et~al.}}{{Nye, Andreassen, Gur-Ari, Michalewski, Austin, Bieber, Dohan, Lewkowycz, Bosma, Luan, Sutton, and Odena}}}
+\bibcite{ouellette2023counting}{{8}{2023}{{Ouellette et~al.}}{{Ouellette, Pfister, and Jud}}}
+\bibcite{pfau2024dot}{{9}{2024}{{Pfau et~al.}}{{Pfau, Merrill, and Bowman}}}
+\bibcite{wei2022cot}{{10}{2022}{{Wei et~al.}}{{Wei, Wang, Schuurmans, Bosma, Ichter, Xia, Chi, Le, and Zhou}}}
+\bibcite{yang2025qwen3}{{11}{2025}{{Yang et~al.}}{{Yang, Li, Yang, Zhang, Hui, Zheng, Yu, Gao, et~al.}}}
+\bibcite{yehudai2024count}{{12}{2024}{{Yehudai et~al.}}{{Yehudai, Kaplan, Ghandeharioun, Geva, and Globerson}}}
+\bibcite{zhang2024patching}{{13}{2024}{{Zhang and Nanda}}{{}}}
+\bibstyle{plainnat}
+\@writefile{toc}{\contentsline {section}{\numberline {A}Exact sequence formats and metrics}{11}{appendix.A}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {B}Additional controlled results}{12}{appendix.B}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Global and query-local cumulative head ablation for direct broad aggregation, trace targeted retrieval, and trace readout. Mechanism-ranked paths are compared with six deterministic random paths.}}{12}{figure.5}\protected@file@percent }
+\newlabel{fig:app-ablation}{{5}{12}{Global and query-local cumulative head ablation for direct broad aggregation, trace targeted retrieval, and trace readout. Mechanism-ranked paths are compared with six deterministic random paths}{figure.5}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces Left: donor-count transport through answer-query head slices. Right: natural residual transplant and independently fitted centroid steering.}}{13}{figure.6}\protected@file@percent }
+\newlabel{fig:app-transport}{{6}{13}{Left: donor-count transport through answer-query head slices. Right: natural residual transplant and independently fitted centroid steering}{figure.6}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {7}{\ignorespaces Left: head-to-state damage and state-to-head routing control. Right: mean-first residual geometry across the two representations.}}{13}{figure.7}\protected@file@percent }
+\newlabel{fig:app-loop}{{7}{13}{Left: head-to-state damage and state-to-head routing control. Right: mean-first residual geometry across the two representations}{figure.7}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {8}{\ignorespaces Fixed-head route dynamics under query-first and query-last layouts. Query-last weakens direct data coverage and strengthens answer-to-query routing while improving thinking ordered retrieval.}}{14}{figure.8}\protected@file@percent }
+\newlabel{fig:app-query-route}{{8}{14}{Fixed-head route dynamics under query-first and query-last layouts. Query-last weakens direct data coverage and strengthens answer-to-query routing while improving thinking ordered retrieval}{figure.8}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {C}Additional realistic-model results}{15}{appendix.C}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {9}{\ignorespaces At fixed $N$, additional filler dilutes the predicted count. Readout heads have high cross-needle uniformity; total target mass saturates and per-needle mass follows an approximate $1/N$ law.}}{15}{figure.9}\protected@file@percent }
+\newlabel{fig:app-real-direct}{{9}{15}{At fixed $N$, additional filler dilutes the predicted count. Readout heads have high cross-needle uniformity; total target mass saturates and per-needle mass follows an approximate $1/N$ law}{figure.9}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {10}{\ignorespaces Realistic Qwen interventions. Final-token magnitude steering controls the emitted count, but ordinal directions found at needle sites do not transfer to the readout; tag-strength patches at the same site do affect output.}}{15}{figure.10}\protected@file@percent }
+\newlabel{fig:app-real-causal}{{10}{15}{Realistic Qwen interventions. Final-token magnitude steering controls the emitted count, but ordinal directions found at needle sites do not transfer to the readout; tag-strength patches at the same site do affect output}{figure.10}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {11}{\ignorespaces Qualitative attention contrast in Qwen3-8B: broad prompt-needle attention without a trace (left) and more targeted prompt retrieval from indexed CoT spans (right). These plots motivate roles but do not replace the controlled causal tests.}}{16}{figure.11}\protected@file@percent }
+\newlabel{fig:app-real-attention}{{11}{16}{Qualitative attention contrast in Qwen3-8B: broad prompt-needle attention without a trace (left) and more targeted prompt retrieval from indexed CoT spans (right). These plots motivate roles but do not replace the controlled causal tests}{figure.11}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {D}Claim--evidence matrix and highest-value next experiments}{17}{appendix.D}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Current evidence strength. ``Supported'' denotes convergent held-out description and at least one targeted intervention, not a cross-seed theorem.}}{17}{table.3}\protected@file@percent }
+\gdef \@abspage@last{17}

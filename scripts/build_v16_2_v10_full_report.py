@@ -410,6 +410,207 @@ def _insert_before_section_end(document: str, section_id: str, fragment: str) ->
     return document[:start] + updated + document[end:]
 
 
+SECTION_EVIDENCE_SUMMARIES: dict[str, tuple[list[str], list[str]]] = {
+    "questions": (
+        [
+            "在这组严格匹配的 v16.2 实验中，Thinking 的自回归准确率为 98%，高于 Nonthinking 的 84%；两种输出监督同时对应两条不同的内部计算路线。",
+            "当前最受证据支持的路线是：Thinking 使用显式 trace 完成有序检索、进度/停止控制与最终 span readout；Nonthinking 则在后层形成直接的 broad aggregation。",
+        ],
+        [
+            "结果来自单一 seed、单一语料、单一模型尺度，尚不能证明该机制可跨随机初始化、数据集与模型规模复现。",
+            "Thinking 同时改变了输出格式、监督 token 数和有效计算长度；还需要多 seed、等 token/等计算控制及 v16.3 query-last 对照，才能进一步隔离 CoT 格式本身的因果作用。",
+        ],
+    ),
+    "setup": (
+        [
+            "两路模型共享初始化、训练样本及顺序、优化器和 RoPE 架构；主要受控差异是输出目标与相应监督位置。",
+            "评估集按真实 count 平衡，因此总体准确率不容易被训练集中小 count 较多这一事实单独主导。",
+        ],
+        [
+            "没有独立训练复现实验，无法估计训练随机性带来的方差。",
+            "目前只覆盖 query-first、一个序列长度、一个 noise/候选池设置；仍需对 query 位置、trace 长度、监督 token 数及计算预算做正交消融。",
+        ],
+    ),
+    "definitions": (
+        [
+            "本报告把 teacher-forced 与 autoregressive 行为、宽覆盖与严格 k-to-k 检索、可解码性与干预可执行性分开测量，避免用单一指标替代完整机制。",
+            "固定 held-out 划分及去混淆的 trace-state probes 减少了样本复用和 count/progress 共线性造成的部分测量偏差。",
+        ],
+        [
+            "指标仍有构念边界：attention mass 不等于 value/output contribution，probe 可解码也不等于模型实际使用该方向。",
+            "还需要 bootstrap 置信区间、重复抽样稳定性、多种 probe/基线，以及对所有探索后选定指标使用独立 selection/reporting split。",
+        ],
+    ),
+    "learning": (
+        [
+            "Thinking 更早跨过自回归准确率阈值；其 answer-to-trace routing 先出现，可靠的 ordered k-to-k retrieval 随后才形成；Nonthinking 的 broad aggregation 则明显更晚。",
+            "早期 teacher-forced 准确率接近满分而自回归准确率仍低，说明逐 token 条件正确并不等价于整条 trace 能稳定生成；1,500 步的 loss-scope 切换也解释了表面 CE 的跳变。",
+        ],
+        [
+            "half-rise 时间和跨 checkpoint 相关性都可能被共同的训练时间趋势抬高，不能单独作为机制因果顺序的证明。",
+            "需要在相变区间保存更密集 checkpoint、增加训练 seeds，并对 loss-scope 切换和评估协议做控制实验。",
+        ],
+    ),
+    "attention-representation": (
+        [
+            "Thinking 先在 L2 建立 final readout scaffold，后在 L3/L4 形成 ordered retrieval；Nonthinking 主要在 L4 对多个目标 occurrence 做宽覆盖聚合。",
+            "Thinking 的正确 k attention mass 虽只有 33.9%，但相对错误 occurrence 的 margin 为 +46.7 个百分点；结合 k-to-k 准确率，这支持“稀疏但有选择性”的检索，而不是把小绝对 mass 直接解释为没有检索。",
+        ],
+        [
+            "attention 权重本身没有分解 V 与 W_O 的实际贡献，而且作用可能由多个冗余 head/subspace 分担。",
+            "需要 Q/K、V、pre-W_O 与输出切片的分别 patch，外加跨 seed 的 head-subspace 对齐及按成功/失败样本分层的因果检验。",
+        ],
+    ),
+    "residual-representation": (
+        [
+            "两路 residual 都编码 count，但 Thinking 在 L2 更早达到近乎完美的线性可解码性，Nonthinking 的可执行 count state 主要到 L4 才成熟。",
+            "去混淆的 trace-progress probes、generated-prefix 对照和 centroid 几何共同表明这些状态不只是 gold trace 泄漏；同时，弯曲且多维的几何否定了简单固定“+1 直线 number line”解释。",
+        ],
+        [
+            "PCA、ridge 和 CKA 仍是描述性工具，不能证明唯一的 number representation 或完整算法。",
+            "需要跨 seed/尺度的几何对齐、超出训练 count 范围的外推、非线性与随机标签控制，以及跨 checkpoint 的 held-out steering 验证。",
+        ],
+    ),
+    "causal-heads": (
+        [
+            "query-local ablation 中，按机制指标排序的 heads 比随机 heads 更必要：Nonthinking broad head 与 Thinking top-2 readout heads 都表现出位置和任务特异性。",
+            "global/random 删除同时显示明显冗余：关键计算由小型 head 集合协同完成，而不是由一个 head 独占。",
+        ],
+        [
+            "当前 mask 同时移除了 routing weight 与 value contribution，且强删除可能把激活推离自然分布。",
+            "需要 weight-only、V-only、pre-W_O/W_O 消融、匹配扰动幅度的对照、causal scrubbing，以及多 seed 下的 role-level 复现。",
+        ],
+    ),
+    "causal-retrieval-conversion": (
+        [
+            "在保持 count 不变的 clean→corrupt patch 中，top-4 targeted heads 能恢复 marker margin；successor/stop patch 可双向改变 continue/close 决策。",
+            "MLP feature patch 表明 ordered retrieval 之后存在局部的“继续还是关闭”转换，但该转换分布在多个 feature，而非单一 neuron。",
+        ],
+        [
+            "构造的字符替换 receiver 不完全来自自然 Shakespeare 分布，且 normalized recovery 在小分母时可超出 [0,1]，不能当作概率。",
+            "还需在自然错误轨迹上做干预，分别分解 Q/K/V 与 MLP 路径，并检验局部 margin 恢复能否持续改善完整 autoregressive rollout。",
+        ],
+    ),
+    "causal-final-readout": (
+        [
+            "Nonthinking broad heads 能部分搬运 donor count；Thinking 的 top-2 readout heads 则接近一比一搬运最终答案，支持两条不同的输出通路。",
+            "同长度 conflict patch 基本否定了“最后 marker token identity 直接携带 scalar count”；shortened-trace 与 component patch 更支持 span/边界信号经 L2 attention 桥接、再由 L4 MLP 转成 logits。",
+        ],
+        [
+            "现有 shortened-trace 操作仍同时改变有效 span、边界与 RoPE 相对位置，尚不能区分抽象 pair count 和位置编码信号。",
+            "需要 padding/mask 的固定答案位置实验、独立改变 trace pair 数与 span 的训练分布，以及 readout heads 的 Q/K/V 分解和自然 AR 轨迹干预。",
+        ],
+    ),
+    "causal-state": (
+        [
+            "用独立训练集拟合的 centroid delta 可以控制答案：Thinking 的 count state 在 L2 已可执行，Nonthinking 到 L4 才接近一比一搬运。",
+            "position-matched early-stop patch 进一步表明 final-marker residual 能因果性地推动 continue/close 决策，而不只是被动记录 progress。",
+        ],
+        [
+            "centroid direction 可能混合 count、置信度和其他类别特征；大幅 steering 也可能离开自然 activation manifold。",
+            "需要小幅度 dose-response、正交随机方向、正负双向及多步 transport、完整 AR rollout，以及跨 seed 的层级 onset 复现。",
+        ],
+    ),
+    "causal-bidirectional": (
+        [
+            "role-head ablation 会破坏下游 state/output，而 progress-state transplant 又会改变后续 attention routing；两类干预合在一起支持 head→state→head 的可操纵闭环。",
+            "这比单纯的同步相关更强，说明 attention route 与 residual state 之间存在双向依赖，而不是两条互不相关的读出。",
+        ],
+        [
+            "该结果还不是正式的 mediation 分析：两种干预都可能同时影响共同的下游部件或位置上下文。",
+            "需要路径受控的中介分析、逐层逐时序 patch、替代通路阻断和跨 seed 复现，才能量化闭环中每一段的独立贡献。",
+        ],
+    ),
+    "data-noise": (
+        [
+            "训练接受样本偏向较小 count，prompt 中约 98.1% token 为非目标噪声；但两路共享完全相同数据，因此这些事实本身不能解释两模型间的差距。",
+            "Nonthinking 的结构相关置信区间跨零；Thinking 因准确率已达 98% 且仅有两个错误，现有相关方向极不稳定。",
+        ],
+        [
+            "当前只是每模式 100 个 prompt 上的观察相关，不是 noise 或数据结构的因果效应。",
+            "需要固定真实 count 后随机操纵 target span、noise run/entropy、字符频率与 set frequency 的 factorial sweep，并扩大样本和 seeds。",
+        ],
+    ),
+    "limits": (
+        [
+            "把描述、必要性、局部充分性/transport 与反例证据合并后，当前最佳解释是：Thinking 走 ordered retrieval→progress/stop→span readout，Nonthinking 走后层 broad aggregation→L4 count state。",
+            "证据矩阵也修正了更强但不被数据支持的说法，尤其是否定了“最后 marker identity 就是 scalar count carrier”。",
+        ],
+        [
+            "整体机制故事仍建立在单 seed、单模型、单语料上，而且若干充分性干预使用构造样本或 teacher forcing。",
+            "最高优先级补证是多 seed/尺度/语料复现、count 与 span/位置解耦、Q/K/V 路径分解，以及独立自然 test set 上的 AR 干预。",
+        ],
+    ),
+    "runtime-repro": (
+        [
+            "42 个 checkpoint 的唯一 SHA、checkpoint load audit、计时表和机制产物清单，使现有报告可追溯并可从同一组 artifacts 重建；RoPE-only 身份也已核验。",
+            "运行时分解显示周期性 teacher-forced evaluation 是可见开销，而 checkpoint 序列化本身相对较小。",
+        ],
+        [
+            "artifact 完整性不等于 bitwise 可复训；CUDA kernel、驱动、依赖版本和硬件仍可能造成非确定性。",
+            "还需要冻结依赖/容器、记录 GPU 与 CUDA 元数据，在独立环境重训并比较 checkpoint/metric hashes，同时保存报告全部输入的外部归档。",
+        ],
+    ),
+}
+
+
+SECTION_EVIDENCE_STYLE = """
+  <style id="section-evidence-summary-style">
+    .section-evidence-summary{margin:30px 0 4px;padding:18px;border:1px solid #cbd5e1;border-radius:10px;background:#f8fafc}
+    .section-evidence-summary>h3{margin:0 0 14px;color:#173f67;font-size:1.08rem}
+    .section-evidence-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+    .section-evidence-column{padding:14px 16px;border-radius:8px;background:#fff;border:1px solid #dbe3ec}
+    .section-evidence-column.supported{border-top:4px solid #238636;background:#f4fbf6}
+    .section-evidence-column.missing{border-top:4px solid #b7791f;background:#fffaf0}
+    .section-evidence-column h4{margin:0 0 8px;font-size:.98rem;color:#243b53}
+    .section-evidence-column ul{margin:0;padding-left:1.25rem}
+    .section-evidence-column li{margin:.42rem 0;line-height:1.62}
+    @media(max-width:760px){.section-evidence-grid{grid-template-columns:1fr}}
+  </style>
+"""
+
+
+def _apply_section_evidence_summaries(document: str) -> str:
+    """Append a scoped conclusion/evidence-gap audit to every final report section."""
+
+    document = re.sub(
+        r"\s*<style id=\"section-evidence-summary-style\">.*?</style>\s*",
+        "\n",
+        document,
+        flags=re.S,
+    )
+    if "</head>" not in document:
+        raise ValueError("report does not contain a closing </head> tag")
+    document = document.replace("</head>", SECTION_EVIDENCE_STYLE + "\n</head>", 1)
+    document = re.sub(
+        r"\s*<aside class=\"section-evidence-summary\"[^>]*>.*?</aside>\s*",
+        "\n",
+        document,
+        flags=re.S,
+    )
+
+    for section_id, (conclusions, missing_evidence) in SECTION_EVIDENCE_SUMMARIES.items():
+        conclusion_items = "".join(f"<li>{item}</li>" for item in conclusions)
+        missing_items = "".join(f"<li>{item}</li>" for item in missing_evidence)
+        fragment = f"""
+      <aside class="section-evidence-summary" data-section-id="{section_id}" aria-label="本节结论与证据缺口">
+        <h3>本节小结：目前结论与证据缺口</h3>
+        <div class="section-evidence-grid">
+          <div class="section-evidence-column supported">
+            <h4>目前可以得到的结论</h4>
+            <ul>{conclusion_items}</ul>
+          </div>
+          <div class="section-evidence-column missing">
+            <h4>欠缺的证据</h4>
+            <ul>{missing_items}</ul>
+          </div>
+        </div>
+      </aside>"""
+        document = _insert_before_section_end(document, section_id, fragment)
+
+    return document
+
+
 def _summary_values(table_dir: Path) -> dict[str, float]:
     local = pd.read_csv(table_dir / "position_local_head_ablation.csv")
     retrieval = pd.read_csv(table_dir / "retrieval_head_patching.csv")
@@ -489,6 +690,7 @@ def build(run_dir: Path) -> Path:
                 )
             document = polish_report_html(output.read_text(encoding="utf-8"))
             document = _refresh_core_plot_images(document, run_dir)
+            document = _apply_section_evidence_summaries(document)
             _atomic_text(output, document)
             cleanup_legacy_reports(run_dir, output)
             return output
@@ -750,6 +952,7 @@ def build(run_dir: Path) -> Path:
 
     document = polish_report_html(document)
     document = _refresh_core_plot_images(document, run_dir)
+    document = _apply_section_evidence_summaries(document)
     _atomic_text(output, document)
     cleanup_legacy_reports(run_dir, output)
     return output

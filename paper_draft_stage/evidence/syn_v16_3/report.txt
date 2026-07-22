@@ -1,0 +1,342 @@
+[H1] Query 放在 data 前还是后，如何改变计数学习？
+[P] v16.2（query-first）与 v16.3（data-first / query-last）的行为、learning dynamics、attention route 与 hidden-state representation 对比。
+[P] 本报告只把证据支持到的层级写成结论；对尚未直接观测的 data→query 聚合明确标记为机制假说。
+[H2] 1. 执行摘要
+[P] 在同一 seed、相同初始权重、相同数据和相同输出绝对位置下，把 query 从 data 前移动到 data 后，主要改善了 Nonthinking：它更早学会、最终错误更少，并从“答案位置直接广泛扫描 data”转向“答案位置读取紧邻 query”的路由。Thinking 的最终答案已接近天花板，但 trace 生成明显更可靠。
+[H3] 本节小结：目前结论与证据缺口
+[H4] 目前可以得到的结论
+[LI] Query-last 对 Nonthinking 有大而一致的配对提升；Thinking 的答案提升很小，但 trace exact 大幅改善。
+[LI] 输出起点始终是 position 262，因此差异不能归因于答案绝对位置变化。
+[H4] 欠缺的证据
+[LI] 只有一个训练 seed，尚无跨初始化效应分布。
+[LI] 尚未直接 probe query-token state 或从 query token 出发的 attention；data→query→answer 目前是受多项间接证据支持的假说。
+[H2] 2. 实验设定与真正改变的变量
+[H3] v16.2 · query-first
+[P] 因果方向：query 在 data 之前，所以每个 data token 都可以读取目标字符集合；但最终输出离 query 257–261 个位置。
+[H3] v16.3 · query-last
+[P] 因果方向：data token 看不到未来 query；五个 query tokens 可以回看完整 data，并紧邻输出。
+[TH] 项目
+[TH] v16.2
+[TH] v16.3
+[TH] 可比性解释
+[TD] Sequence layout
+[TD] query → data → output
+[TD] data → query → output
+[TD] 唯一有意改变的训练接口
+[TD] Token positions before output
+[TD] query 1–5; data 6–261
+[TD] data 1–256; query 257–261
+[TD] output 均从 position 262 开始
+[TD] Causal visibility
+[TD] 每个 data token 可看到 query
+[TD] query token 可看到全部 data
+[TD] 计算方向发生反转
+[TD] Query-to-output RoPE distance
+[TD] 257–261
+[TD] 1–5
+[TD] query-last 大幅缩短 readout 距离
+[TD] Data-to-output RoPE distance
+[TD] 1–256
+[TD] 6–261
+[TD] data 整体远移 5 个位置
+[TD] Architecture
+[TD] 4L × 4H, d=256, MLP=1024
+[TD] 4L × 4H, d=256, MLP=1024
+[TD] 3,180,800 parameters
+[TD] Training
+[TD] 10,000 steps; batch 128; seed 1234
+[TD] 相同
+[TD] AdamW, lr=3e-4, wd=0.01
+[TD] Loss schedule
+[TD] step≤1500 all-sequence; later task-output
+[TD] 相同
+[TD] 输出 token 数与权重相同
+[TD] Data/noise
+[TD] 同一 Shakespeare split 与 needle pool
+[TD] 语义内容相同
+[TD] split/pool 原始 hash 相同；sampling CSV 仅换行编码不同
+[TD] Initial state
+[TD] step-0 checkpoint
+[TD] 51 state entries 全部相等
+[TD] 两模式 max |Δ| = 0
+[H3] 本节小结：目前结论与证据缺口
+[H4] 目前可以得到的结论
+[LI] corpus split 与 needle pool 的原始 SHA256 相同；training sampling 与 model specification 在统一换行后内容相同，原始 hash 差异只来自 CRLF/LF。
+[LI] 两种模式的 step-0 checkpoint 均有 51 个 state entries，跨版本最大绝对差为 0，torch RNG state 也一致。
+[H4] 欠缺的证据
+[LI] 需要 padding/copy-query 等额外布局，才能拆分因果可见性、query recency 与 data 距离。
+[LI] GPU 训练的单次轨迹仍不能给出跨运行方差。
+[H2] 3. 指标、样本配对与新定义
+[H3] 本节小结：目前结论与证据缺口
+[H4] 目前可以得到的结论
+[LI] 最终 TF/AR 是严格的同样本配对比较；训练动态使用两边相同规模的固定 diagnostic suite。
+[LI] 指标将行为、路由和可解码表征分开，避免用 attention mass 或 probe 单独代替机制。
+[H4] 欠缺的证据
+[LI] bootstrap 只反映有限测试样本的不确定性，不包含训练 seed 方差。
+[LI] best-layer 与 final-head selection 存在选择步骤；attention head 使用独立 head-selection / heldout-reporting split 降低双重使用。
+[H2] 4. 最终行为结果：主要收益集中在 Nonthinking
+[TH] 模式 / 协议
+[TH] N
+[TH] v16.2
+[TH] v16.3
+[TH] 配对增益
+[TH] 95% paired bootstrap CI
+[TH] 修复 / 退化
+[TH] McNemar p
+[TD] Nonthinking / TF final count
+[TD] 500
+[TD] 79.4%
+[TD] 95.2%
+[TD] +15.8 pp
+[TD] [+12.4 pp, +19.2 pp]
+[TD] 83 / 4
+[TD] 3.02e-20
+[TD] Nonthinking / AR final count
+[TD] 100
+[TD] 84.0%
+[TD] 96.0%
+[TD] +12.0 pp
+[TD] [+6.0 pp, +19.0 pp]
+[TD] 12 / 0
+[TD] 0.000488
+[TD] Thinking / TF final count
+[TD] 500
+[TD] 100.0%
+[TD] 100.0%
+[TD] +0.0 pp
+[TD] [+0.0 pp, +0.0 pp]
+[TD] 0 / 0
+[TD] 1
+[TD] Thinking / AR final count
+[TD] 100
+[TD] 98.0%
+[TD] 99.0%
+[TD] +1.0 pp
+[TD] [+0.0 pp, +3.0 pp]
+[TD] 1 / 0
+[TD] 1
+[H3] 行为准确率与训练进程
+[FIGCAPTION] 图 1。上排横轴是 training step（0–10,000），纵轴是 checkpoint diagnostic suite 的 AR final-count accuracy；黑色虚线为 step 1,500 loss-scope 切换。下排横轴是真实 count n=1…10，纵轴是最终独立 AR suite 中每个 count 的准确率，每个点有 10 个样本。左列 Nonthinking，右列 Thinking；蓝色 query-first，橙色 query-last。注意上排与最终表使用不同固定样本集，因此 v16.2 Nonthinking 在图末为 71%，而最终独立 AR 为 84%，二者不是同一估计量。
+[P] Nonthinking 的 TF gain 为 +15.8 pp：83 个原错误被修复、4 个样本退化；AR gain 为 +12.0 pp：12 个错误全部被修复且无退化。Thinking TF 已经同为 100%；AR 只有 1 个样本由错变对，因此 +1 pp 不足以单凭单 seed 声称稳定改善。
+[H3] 本节小结：目前结论与证据缺口
+[H4] 目前可以得到的结论
+[LI] Query-last 对 Nonthinking 的最终提升同时出现在 TF 和 AR，并且 AR 的 12 个 discordant 样本方向完全一致。
+[LI] Thinking final answer 已处于 98–100% 天花板，layout 对答案正确率的可见增益很小。
+[H4] 欠缺的证据
+[LI] 每个 count 的 AR 只有 10 个样本，不宜把单个 count 的 10 pp 波动解释为结构特异效应。
+[LI] 需要更大独立 AR test set 与多 seed，尤其用于 Thinking 的 1 pp 差异。
+[H2] 5. Learning dynamics 与输出 loss
+[TH] 版本 / 模式
+[TH] diagnostic final
+[TH] accuracy AULC
+[TH] persistent 50%
+[TH] persistent 80%
+[TH] persistent 90%
+[TD] v16.2 · query-first / Nonthinking
+[TD] 71.0%
+[TD] 0.361
+[TD] 7500
+[TD] —
+[TD] —
+[TD] v16.3 · query-last / Nonthinking
+[TD] 94.0%
+[TD] 0.694
+[TD] 3000
+[TD] 4500
+[TD] 6500
+[TD] v16.2 · query-first / Thinking
+[TD] 99.0%
+[TD] 0.624
+[TD] 4000
+[TD] 6500
+[TD] 7000
+[TD] v16.3 · query-last / Thinking
+[TD] 99.0%
+[TD] 0.708
+[TD] 3000
+[TD] 4500
+[TD] 5500
+[H3] 输出损失、配对效应与 trace 质量
+[FIGCAPTION] 图 2。上排横轴是 training step，纵轴是 held-out task suite 中 final-count token 的 example-mean cross-entropy，并使用对数刻度；竖线为 step 1,500。左下横轴区分 Nonthinking/Thinking 与 TF/AR，纵轴是 v16.3−v16.2 的配对 accuracy，误差棒为 20,000 次 paired bootstrap 95% 区间。右下横轴是 Thinking trace 指标，纵轴是最终 100 条 AR 轨迹的均值。这里没有绘制 all-token task loss，因为 step 1,500 后 data/query token 不再属于训练目标，其 CE 上升不能解释为任务退化。
+[P] 在 checkpoint diagnostic suite 中，Nonthinking 的 query-last AULC 从 0.361 提高到 0.694；它的 80% persistent crossing 从 未达到 提前到 4500.0。Thinking 也更早到达高准确率，但最终答案受天花板限制。
+[H3] 本节小结：目前结论与证据缺口
+[H4] 目前可以得到的结论
+[LI] Query-last 不只是最终更准：Nonthinking 的整个训练轨迹左移，AULC 更高、持久阈值更早。
+[LI] final-count CE 的下降与准确率提升一致；step 1,500 后 all-token CE 的上升主要是 loss scope 改变造成。
+[H4] 欠缺的证据
+[LI] 500-step checkpoint 间隔只能把机制 onset 定位到一个区间。
+[LI] AULC 仍受这一个 diagnostic suite 与单次训练轨迹影响。
+[H2] 6. Attention route：Nonthinking 从 direct-data 转向 query bottleneck
+[TH] 路由角色
+[TH] v16.2 head
+[TH] v16.2 heldout
+[TH] v16.3 head
+[TH] v16.3 heldout
+[TH] 指标
+[TD] NT direct data coverage
+[TD] L4H2
+[TD] 0.842
+[TD] L1H0
+[TD] 0.074
+[TD] top-N recall
+[TD] NT target enrichment
+[TD] L4H2
+[TD] 21.058
+[TD] L1H0
+[TD] 1.688
+[TD] needle enrichment
+[TD] NT answer → query
+[TD] L3H0
+[TD] 0.646
+[TD] L2H2
+[TD] 0.963
+[TD] query attention mass
+[TD] Thinking ordered retrieval
+[TD] L4H2
+[TD] 0.467
+[TD] L4H1
+[TD] 0.642
+[TD] top1 − chance
+[TD] Thinking trace readout
+[TD] L2H2
+[TD] 0.873
+[TD] L2H0
+[TD] 0.788
+[TD] trace attention mass
+[H3] 固定 heads 的 attention route learning dynamics
+[FIGCAPTION] 图 3。四个 panel 的横轴均为 training step，竖线为 loss-scope 切换。左上纵轴是答案 query 的 top-N target-occurrence recall；右上是答案 query 对五个 query tokens 的 attention mass；左下是 Thinking trace index 对正确第 k 个 occurrence 的 top1-minus-chance；右下是 Thinking 最终答案对完整 trace span 的 attention mass。每条曲线先在 step-10,000 head-selection split 选定一个 head，再在独立 heldout-reporting split 的全部 checkpoints 跟踪同一 head，避免逐 checkpoint 挑最大值。
+[H3] 最终 checkpoint 的逐层逐 head attention role map
+[FIGCAPTION] 图 4。每一行对应一个版本；每一列对应一种 role。每个 panel 的横轴是 head H0–H3，纵轴是 layer L1–L4，格内数字和颜色都是该 layer/head 在 step 10,000 heldout-reporting split 上的样本均值。第 1 列是答案位置落在五个 query tokens 上的 attention mass（v16.2 表中原字段为 task-prefix mass，v16.3 为 task-query mass，语义相同）；第 2 列是 Nonthinking top-N target-occurrence recall；第 3 列是 Thinking ordered retrieval 的 correct-top1−chance；第 4 列是 Thinking 最终答案对 trace span 的 attention mass。前三个 mass/recall 色标为 0–1；ordered retrieval 色标为 −0.10–0.70。
+[P] 逐 head 热图表明这不是单一“最佳 head”造成的错觉：v16.2 有 5 个 heads 的 direct target recall 超过 0.50，而 v16.3 为 0；相反，答案→query mass 超过 0.80 的 heads 从 v16.2 的 0 个变为 v16.3 的 4 个。head identity 本身不应跨 run 硬对齐，但 role 在 4×4 head 集合中的分布发生了清楚变化。
+[P] Thinking 的 ordered retrieval margin 从 0.467 升到 0.642，而 trace readout mass 从 0.873 降到 0.788。这再次说明 attention mass 不是“贡献大小”的同义词：较小 readout mass 可以与更准确的 trace 和答案共存。
+[H3] 本节小结：目前结论与证据缺口
+[H4] 目前可以得到的结论
+[LI] direct-data 到 answer→query 的变化同时出现在 final-selected 曲线和全 16-head 热图中，不依赖只挑一个极值 head。
+[LI] Thinking query-last 的 k-to-k selectivity 更高，尽管最终 trace-readout mass 略低。
+[H4] 欠缺的证据
+[LI] 现有表没有测量五个 query tokens 自己如何 attend data，也没有对 query state 做 probe/patch；两跳聚合尚未闭环。
+[LI] attention weight 没有分解 V 与 W_O contribution，需要 Q/K/V 与 output patching；head role 也需要多 seed 的 permutation-invariant 对齐。
+[H2] 7. Hidden-state representation：Nonthinking count 更早在 L2 成形
+[TH] 位置 / 层
+[TH] v16.2 R²
+[TH] v16.2 centroid acc.
+[TH] v16.3 R²
+[TH] v16.3 centroid acc.
+[TD] NT answer / L2
+[TD] 0.550
+[TD] 14.0%
+[TD] 0.978
+[TD] 87.3%
+[TD] NT answer / L4
+[TD] 0.957
+[TD] 73.3%
+[TD] 0.985
+[TD] 95.3%
+[H3] Count representation 的出现时间与层级位置
+[FIGCAPTION] 图 5。上排只看 Nonthinking final-answer state：横轴是 training step，左纵轴是五个 residual depths 中最大的 held-out ridge R²，右纵轴是最大的 nearest-centroid accuracy。下排横轴是 residual depth（Emb 表示 embedding output，L1–L4 表示各层输出），纵轴是 step-10,000 final-answer ridge R²；左为 Nonthinking，右为 Thinking。best-layer 曲线是描述性上界，不应当解释为该层具有因果必要性。
+[P] v16.2 Nonthinking 在 L2 只有 R²=0.550、centroid accuracy=14.0%，主要到 L4 才达到 R²=0.957。v16.3 在 L2 已达到 R²=0.978、centroid accuracy=87.3%，并在 L4 保持 R²=0.985。这与 L2 答案→query head 的出现相吻合。
+[TH] state / layer
+[TH] v16.2 PC1 label R²
+[TH] v16.2 d_eff
+[TH] v16.2 order violations
+[TH] v16.3 PC1 label R²
+[TH] v16.3 d_eff
+[TH] v16.3 order violations
+[TD] NT answer / L2
+[TD] 0.886
+[TD] 2.06
+[TD] 3
+[TD] 0.994
+[TD] 1.50
+[TD] 0
+[TD] NT answer / L3
+[TD] 0.981
+[TD] 1.28
+[TD] 0
+[TD] 0.549
+[TD] 2.63
+[TD] 3
+[TD] NT answer / L4
+[TD] 0.708
+[TD] 3.01
+[TD] 2
+[TD] 0.389
+[TD] 5.12
+[TD] 3
+[TD] Thinking marker / L3
+[TD] 0.992
+[TD] 2.82
+[TD] 0
+[TD] 0.963
+[TD] 5.99
+[TD] 2
+[TD] Thinking marker / L4
+[TD] 0.436
+[TD] 5.85
+[TD] 4
+[TD] 0.960
+[TD] 6.94
+[TD] 0
+[H3] 逐层 count-centroid geometry 对比
+[FIGCAPTION] 图 6。三行分别是 Nonthinking final-answer、Thinking final-answer 与 Thinking trace-marker states；横轴统一为 residual depth L1–L4。左列纵轴是有效维度 d_eff；中列纵轴是 PC1 label R²；右列纵轴是前六个 centroid PCs 的累计解释方差。蓝线为 v16.2，橙线为 v16.3。d_eff 高低没有单调的好坏含义：它只表示十个 count centroids 的变化集中在少数方向还是分散在更多方向；PC1 label R² 衡量第一几何主轴与 count 顺序的一致程度，也不同于使用全部 256 维 state 的 ridge R²。
+[P] 几何量进一步区分了“可读”与“如何组织”。v16.2 的 Nonthinking count 在 L3 最接近一条有序主轴：PC1 label R²=0.981、d_eff=1.28；v16.3 则在 L2 已达到 PC1 label R²=0.994、d_eff=1.50，且 count-order violations 从 v16.2 L2 的 3 个降为 0 个。到 L4，v16.3 的全维 ridge R² 仍高，但 d_eff 升至 5.12、PC1 label R² 降至 0.389；这表示 count 信息被重新分布到多维几何，而不是“信息消失”。
+[H3] 真实 checkpoint hidden states 的 3D mean-first PCA
+[FIGCAPTION] 图 7。两行分别是 v16.2 与 v16.3；三列依次为 Nonthinking final-answer L2、Nonthinking final-answer L4、Thinking trace-marker L3。每个点是 held-out states 中一个真实 count（1–10）的 256 维 class centroid，点旁数字即 count，灰线按 1→10 连接。三个坐标轴是对该 panel 十个 centroids 独立拟合的 PC1、PC2、PC3，括号给出各自解释的 centroid 方差比例。因每个 panel 独立定向和缩放，只比较 count 顺序、相邻分离、弯曲与是否形成近一维轨迹；不要比较跨 panel 的绝对坐标或旋转方向。Thinking 选择 trace-marker 而不是 final-answer state，是为了减少 count-dependent answer position 的直接混淆。
+[H3] 本节小结：目前结论与证据缺口
+[H4] 目前可以得到的结论
+[LI] Query-last 把 Nonthinking 的高可解码性与近一维有序 centroid geometry 一起提前到 L2；这一点在 probe、几何指标和真实 state 的 3D centroids 中相互一致。
+[LI] v16.2 与 v16.3 都不是所有层都保持一条直线：后层会重组几何，因此 full-state ridge R² 与 PC1 geometry 必须分开解读。
+[H4] 欠缺的证据
+[LI] 线性可解码和 centroid geometry 都不等于模型因果使用；v16.3 尚未完成 centroid steering、state transplant 等与 v16.2 同规格的验证。
+[LI] 各 3D panel 的 PCA basis 独立，不能做逐坐标对齐；Thinking answer-state 仍受 count-dependent position 混淆，需要固定位置重测。
+[H2] 8. Thinking trace：答案近饱和，但轨迹更稳定
+[P] 最终独立 AR suite 中，trace exact 从 81.0% 升到 98.0%，marker recall 从 93.8% 升到 99.1%；最终答案则只从 98.0% 升到 99.0%。这说明 query-last 对 Thinking 的主要可见收益是减少中间 trace 错误，而不是突破已经饱和的 final count。
+[P] 删除最后一个 index/marker pair 的 counterfactual 在两边都把 L4 ridge count prediction 约降低 1：v16.2 为 -1.016，v16.3 为 -0.970；gold-vs-(n−1) logit margin 分别变化 -22.91 与 -22.46。因此两种 layout 都继续使用 trace span/边界来形成最终 count readout。
+[H3] 本节小结：目前结论与证据缺口
+[H4] 目前可以得到的结论
+[LI] Query-last 显著提高 Thinking trace exact 与 marker recall，并提高 ordered k-to-k selectivity。
+[LI] 两种 layout 对 trace 缩短都表现出约 −1 的内部 count shift，说明核心 span-sensitive readout 仍保留。
+[H4] 欠缺的证据
+[LI] Thinking final answer 有天花板效应，需要更难 count range 或更长序列才能比较最终能力。
+[LI] v16.3 还没有完成与 v16.2 相同的 head ablation、clean-to-corrupt patch 和 residual steering 全套 causal battery。
+[H2] 9. 机制综合：为什么 query-last 尤其帮助 Nonthinking？
+[P] 数据最支持的解释是“把一个困难的长距离直接 readout，改造成靠近输出的 bottleneck”。v16.3 的 query tokens 位于 data 之后，理论上可以针对自身字符回看完整窗口；答案随后只需从最近的五个 query tokens 读取汇总。这个解释同时预测：direct broad head 变弱、query mass 变强、count representation 提前、Nonthinking 学得更快——四项都被观察到。
+[P] 但中间的 Query-token aggregator 仍是虚线：目前没有直接从 query positions 提取 hidden states、attention maps 或做 patch。其他可能解释包括单纯的 RoPE recency 优势、五个 query token 作为短期 key/value cache，或 data 整体平移五位引起的优化变化。
+[H3] 本节小结：目前结论与证据缺口
+[H4] 目前可以得到的结论
+[LI] 四个相互独立的观测——行为、学习速度、fixed-head route、L2 state——共同支持 query bottleneck 解释。
+[LI] v16.3 不是把 v16.2 direct broad aggregation 做得更强，而是以不同路线达到更好结果。
+[H4] 欠缺的证据
+[LI] 没有 query-site probe/patch，因此不能把 data→query 这一步写成已证实机制。
+[LI] 当前二点对比无法区分 causal visibility reversal、query recency 和 RoPE distance 三个子因素。
+[H2] 10. 证据边界与下一组最有信息量的实验
+[LI] 至少 5 个 seeds。重复最终 TF/AR、AULC、final-selected head roles 与 L2/L4 state onset；head 比较应使用 permutation-invariant role/subspace 指标。
+[LI] 直接测 query bottleneck。在 v16.3 的 <CountChar> 与三个字符 token 位置收集 attention/state，测试是否能分别解码三字符 occurrence count 与总 count；再做 query-state transplant 和 data→query head patch。
+[LI] 拆分三个 layout 因素。增加 beginning+end 双 query、query-last 但用 padding 固定 RoPE 距离、query-first 加末端 query copy、data 平移但 query 不变等控制。
+[LI] 补齐 v16.3 causal battery。复现 v16.2 的 query-local head ablation、Q/K/V patch、residual centroid steering、early-stop 与 head↔state 双向干预。
+[LI] 提高 Thinking 难度。扩大 count range、窗口长度或 noise，使 final answer 不再 98–100% 饱和，才能比较最终能力而不只比较 trace 稳定性。
+[H3] 本节小结：目前结论与证据缺口
+[H4] 目前可以得到的结论
+[LI] 现有结果足以把“整体 query-order layout”识别为这个 matched seed 中的有效干预。
+[LI] 报告已把直接观测、统计配对、机制推断和未验证中介分开。
+[H4] 欠缺的证据
+[LI] 尚不能给出跨训练随机性的平均处理效应。
+[LI] 尚不能把 layout 总效应归因到某一个相对距离、位置或可见性因素。
+[H2] 11. 产物、分析协议与复现
+[P] 报告由 scripts/build_v16_2_v16_3_comparison_report.py 从两个 run 的原始 CSV 与 step-0 checkpoints 重建。所有图嵌入 HTML，同时保存独立 PNG；全部派生表位于 analysis/v16_2_vs_v16_3/tables/。
+[LI] setting_and_identity_audit.csv：数据、模型规格与初始化审计。
+[LI] paired_final_behavior.csv：配对效应、bootstrap CI 与 McNemar 统计。
+[LI] checkpoint_learning_summary.csv：AULC 与 persistent crossings。
+[LI] attention_route_summary.csv：final-selected fixed-head 路由。
+[LI] attention_head_maps.csv：最终 4×4 heads 的四种 attention role。
+[LI] representation_summary.csv：逐层 final answer state probe。
+[LI] representation_geometry_final.csv：最终逐层 centroid geometry。
+[LI] hidden_state_centroid_pca.csv：3D 图的真实 state centroid 坐标与方差。
+[LI] manifest.json：输入与输出 SHA256。
+[H3] 本节小结：目前结论与证据缺口
+[H4] 目前可以得到的结论
+[LI] 输入身份、step-0 tensor equality、样本配对和派生表均有机器可读审计。
+[LI] HTML 自包含图像，不依赖本机绝对图片路径。
+[H4] 欠缺的证据
+[LI] 尚未在第二台机器或冻结容器中执行完整重建。
+[LI] v16.2/v16.3 checkpoint dynamics 的缓存开关不同，发表前应统一强制重算。

@@ -32,6 +32,23 @@ EXPECTED_FIGURES = {
     "head_state_bidirectional.png",
 }
 
+EXPECTED_SECTION_EVIDENCE_IDS = (
+    "questions",
+    "setup",
+    "definitions",
+    "learning",
+    "attention-representation",
+    "residual-representation",
+    "causal-heads",
+    "causal-retrieval-conversion",
+    "causal-final-readout",
+    "causal-state",
+    "causal-bidirectional",
+    "data-noise",
+    "limits",
+    "runtime-repro",
+)
+
 
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -130,6 +147,12 @@ def validate(run_dir: Path) -> dict[str, object]:
     embedded_images = len(re.findall(r"<img\b", report_text))
     interactive_canvases = len(re.findall(r"<canvas\b", report_text))
     reading_guides = len(re.findall(r'class="figure-reading-guide"', report_text))
+    evidence_summary_ids = re.findall(
+        r'<aside class="section-evidence-summary" data-section-id="([^"]+)"',
+        report_text,
+    )
+    evidence_conclusion_labels = report_text.count("目前可以得到的结论")
+    evidence_gap_labels = report_text.count("欠缺的证据")
     if (
         html_sections < 14
         or html_figures < 37
@@ -142,6 +165,16 @@ def validate(run_dir: Path) -> dict[str, object]:
             f"sections={html_sections}, figures={html_figures}, images={embedded_images}, "
             f"canvases={interactive_canvases}"
             f", reading_guides={reading_guides}"
+        )
+    if (
+        evidence_summary_ids != list(EXPECTED_SECTION_EVIDENCE_IDS)
+        or evidence_conclusion_labels != len(EXPECTED_SECTION_EVIDENCE_IDS)
+        or evidence_gap_labels != len(EXPECTED_SECTION_EVIDENCE_IDS)
+    ):
+        raise AssertionError(
+            "section evidence summaries are incomplete or out of order: "
+            f"ids={evidence_summary_ids}, conclusions={evidence_conclusion_labels}, "
+            f"gaps={evidence_gap_labels}"
         )
 
     return {
@@ -157,6 +190,7 @@ def validate(run_dir: Path) -> dict[str, object]:
         "interactive_rows": len(interactive),
         "interactive_canvases": interactive_canvases,
         "reading_guides": reading_guides,
+        "section_evidence_summaries": len(evidence_summary_ids),
         "html_files": html_files,
     }
 

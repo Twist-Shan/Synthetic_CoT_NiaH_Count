@@ -1,0 +1,74 @@
+[
+  {
+    "index": "1",
+    "alt": "Prompt linear probe",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAu4AAAJYCAYAAAA9jmOiAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjEwLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlHJYcgAAAAlwSFlzAAAXEgAAFxIBZ5/SUgAAzxFJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_counting\\embedded_images\\image_001.png"
+  },
+  {
+    "index": "2",
+    "alt": "CoT linear probe",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAu4AAAJYCAYAAAA9jmOiAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjEwLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlHJYcgAAAAlwSFlzAAAXEgAAFxIBZ5/SUgAAyRlJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_counting\\embedded_images\\image_002.png"
+  },
+  {
+    "index": "3",
+    "alt": "Prompt linear probe",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABM4AAAKjCAYAAADlM0PrAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjEwLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlHJYcgAAAAlwSFlzAAAXEgAAFxIBZ5/SUgABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_counting\\embedded_images\\image_003.png"
+  },
+  {
+    "index": "4",
+    "alt": "CoT linear probe",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABM4AAAKjCAYAAADlM0PrAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjEwLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlHJYcgAAAAlwSFlzAAAXEgAAFxIBZ5/SUgABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_counting\\embedded_images\\image_004.png"
+  },
+  {
+    "index": "5",
+    "alt": "Heatmap plot",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAzkAAAKjCAYAAAA+mMGIAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjEwLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlHJYcgAAAAlwSFlzAAAXEgAAFxIBZ5/SUgABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_counting\\embedded_images\\image_005.png"
+  },
+  {
+    "index": "6",
+    "alt": "Cosine-similarity plot",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABLAAAAKFCAYAAADcRhDrAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjEwLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlHJYcgAAAAlwSFlzAAAXEgAAFxIBZ5/SUgAA101JREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_counting\\embedded_images\\image_006.png"
+  },
+  {
+    "index": "7",
+    "alt": "Layerwise plot",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABTMAAALQCAYAAABMueRtAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjEwLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlHJYcgAAAAlwSFlzAAAXEgAAFxIBZ5/SUgAAxp1JREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_counting\\embedded_images\\image_007.png"
+  },
+  {
+    "index": "8",
+    "alt": "Layerwise plot",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABBoAAAJ2CAYAAADxOuFEAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjEwLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlHJYcgAAAAlwSFlzAAAXEgAAFxIBZ5/SUgAAj+ZJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_counting\\embedded_images\\image_008.png"
+  },
+  {
+    "index": "9",
+    "alt": "Broad attention to all needle spans",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABXgAAAGQCAYAAAAUUwjLAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjEwLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlHJYcgAAAAlwSFlzAAAPYQAAD2EBqD+naQABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_counting\\embedded_images\\image_009.png"
+  },
+  {
+    "index": "10",
+    "alt": "Early-layer CoT counter attention",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABOwAAAStCAYAAAD3QcRMAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjEwLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlHJYcgAAAAlwSFlzAAAbrwAAG68BXhqRHAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_counting\\embedded_images\\image_010.png"
+  },
+  {
+    "index": "11",
+    "alt": "Mid/high-layer CoT counter attention",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABOwAAAStCAYAAAD3QcRMAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjEwLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlHJYcgAAAAlwSFlzAAAbrwAAG68BXhqRHAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_counting\\embedded_images\\image_011.png"
+  },
+  {
+    "index": "12",
+    "alt": "Attention at CoT tokens",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABXgAAAGQCAYAAAAUUwjLAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjEwLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlHJYcgAAAAlwSFlzAAAPYQAAD2EBqD+naQABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\real_counting\\embedded_images\\image_012.png"
+  }
+]

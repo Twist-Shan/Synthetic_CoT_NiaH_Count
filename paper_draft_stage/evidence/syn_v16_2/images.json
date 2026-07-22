@@ -1,0 +1,188 @@
+[
+  {
+    "index": "1",
+    "alt": "Nonthinking direct aggregation and thinking serial retrieval hypotheses with causal intervention points",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACFAAAAO3CAYAAAAOeyJPAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_001.png"
+  },
+  {
+    "index": "2",
+    "alt": "needle set 频率分布",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABRYAAAMGCAYAAACH3dh/AAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjEwLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlHJYcgAAAAlwSFlzAAAbrwAAG68BXhqRHAAAtk9JREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_002.png"
+  },
+  {
+    "index": "3",
+    "alt": "行为与机制学习动态总览",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACSoAAAbYCAYAAACFBHr2AAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAbrwAAG68BXhqRHAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_003.png"
+  },
+  {
+    "index": "4",
+    "alt": "loss 动态",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACMEAAAMGCAYAAADxhAFIAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjEwLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlHJYcgAAAAlwSFlzAAAbrwAAG68BXhqRHAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_004.png"
+  },
+  {
+    "index": "5",
+    "alt": "检索强度动态",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAB6wAAAN0CAYAAAAAj9aEAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAbrwAAG68BXhqRHAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_005.png"
+  },
+  {
+    "index": "6",
+    "alt": "nonthinking 目标覆盖",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACPAAAAN0CAYAAAAwX0SEAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAbrwAAG68BXhqRHAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_006.png"
+  },
+  {
+    "index": "7",
+    "alt": "thinking 答案到 trace 的注意力",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAB6wAAAN0CAYAAAAAj9aEAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAbrwAAG68BXhqRHAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_007.png"
+  },
+  {
+    "index": "8",
+    "alt": "thinking k-to-k 检索",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAB60AAAN0CAYAAADvTb26AAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAbrwAAG68BXhqRHAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_008.png"
+  },
+  {
+    "index": "9",
+    "alt": "最终 count probe",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABmIAAAMBCAYAAAD8mKskAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAbrwAAG68BXhqRHAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_009.png"
+  },
+  {
+    "index": "10",
+    "alt": "trace marker progress probe",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABvEAAAMBCAYAAADWBJjOAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAbrwAAG68BXhqRHAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_010.png"
+  },
+  {
+    "index": "11",
+    "alt": "v10 风格 residual representation 几何分析",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACCcAAAZHCAYAAABdRIoQAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAXEgAAFxIBZ5/SUgABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_011.png"
+  },
+  {
+    "index": "12",
+    "alt": "Two-dimensional mean-first residual manifolds with held-out sample clouds",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACwoAAAdGCAYAAAATLrxgAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_012.png"
+  },
+  {
+    "index": "13",
+    "alt": "Three-dimensional count and trace-progress residual representations",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAADO0AAAhWCAYAAAAatc2ZAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_013.png"
+  },
+  {
+    "index": "14",
+    "alt": "Layer-wise residual geometry summary",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACe0AAAaUCAYAAABn/aU5AAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_014.png"
+  },
+  {
+    "index": "15",
+    "alt": "Representation learning dynamics across 21 checkpoints",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACeoAAAZoCAYAAADncWciAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_015.png"
+  },
+  {
+    "index": "16",
+    "alt": "跨位置线性迁移",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAB60AAAN0CAYAAADvTb26AAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAbrwAAG68BXhqRHAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_016.png"
+  },
+  {
+    "index": "17",
+    "alt": "count centroid geometry",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAB60AAAN0CAYAAADvTb26AAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAbrwAAG68BXhqRHAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_017.png"
+  },
+  {
+    "index": "18",
+    "alt": "状态 CKA 稳定性",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAB60AAAN0CAYAAADvTb26AAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAbrwAAG68BXhqRHAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_018.png"
+  },
+  {
+    "index": "19",
+    "alt": "Global and query-local cumulative attention-head ablation",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACjAAAAjLCAYAAAD5Fwa+AAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_019.png"
+  },
+  {
+    "index": "20",
+    "alt": "Count-preserving character corruption and k-to-k head-output patching",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACe4AAAPtCAYAAADy322UAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_020.png"
+  },
+  {
+    "index": "21",
+    "alt": "Bidirectional successor and stop head-output patching",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACe4AAAPtCAYAAADy322UAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_021.png"
+  },
+  {
+    "index": "22",
+    "alt": "Successor residual logit lens and additive component evidence",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAC2MAAARdCAYAAABmJXsfAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_022.png"
+  },
+  {
+    "index": "23",
+    "alt": "MLP feature evidence concentration and causal feature patching",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACjAAAAc9CAYAAADMlIxTAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_023.png"
+  },
+  {
+    "index": "24",
+    "alt": "Donor count transport through final-query attention-head slices",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACe4AAAPtCAYAAADy322UAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_024.png"
+  },
+  {
+    "index": "25",
+    "alt": "Length-preserving trace conflicts compared with position-shifting deletion",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAC2QAAAS3CAYAAAAzJliCAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_025.png"
+  },
+  {
+    "index": "26",
+    "alt": "Final-answer component patching from clean to shortened trace",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACBoAAAQYCAYAAACqDiiTAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQAA+CFJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_026.png"
+  },
+  {
+    "index": "27",
+    "alt": "Natural residual transplant and train-centroid count steering",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACe4AAAPtCAYAAADy322UAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_027.png"
+  },
+  {
+    "index": "28",
+    "alt": "Position-matched final-marker residual patch inducing early stop",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACPwAAAPXCAYAAAC168dKAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_028.png"
+  },
+  {
+    "index": "29",
+    "alt": "Bidirectional causal relationship between attention heads and residual states",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACe4AAAQECAYAAAAGMxlQAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAh1QAAIdUBBJy0nQABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_029.png"
+  },
+  {
+    "index": "30",
+    "alt": "训练结构与 noise 关联",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACewAAAZoCAYAAADqbxdlAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlcelbwAAAAlwSFlzAAAbrwAAG68BXhqRHAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_030.png"
+  },
+  {
+    "index": "31",
+    "alt": "运行时间分解",
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACJ4AAASKCAYAAAAVTjagAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjEwLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlHJYcgAAAAlwSFlzAAAbrwAAG68BXhqRHAABAABJREFUeJ",
+    "file": "paper_draft_stage\\evidence\\syn_v16_2\\embedded_images\\image_031.png"
+  }
+]
