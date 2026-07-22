@@ -29,6 +29,7 @@ dist/
 /logs/
 /wandb/
 /paper_figs/
+/paper_draft_stage/
 
 # Local scratch files and directories
 /tmp_*
