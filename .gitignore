@@ -32,6 +32,7 @@ dist/
 /paper_draft_stage/
 
 # Local scratch files and directories
+/tmp/
 /tmp_*
 /tmp-*
 /temp_*

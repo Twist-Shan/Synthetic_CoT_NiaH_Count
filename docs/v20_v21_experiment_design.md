@@ -62,17 +62,17 @@ S_h = \mathbb{E}_{x,k}\big[\sum_{j\in\mathrm{tokens}(k)} A_h(q=\mathrm{marker}_k
 
 这比全局 head ablation 更局部，减少“整条序列都被破坏”的混淆。v20 另外运行完整的 v10 causal port，包括 retrieval corruption/patching、successor/stop、MLP、residual transport、trace conflict 和 head↔state 分析。
 
-## 3. Phase transition 的判据
+## 3. 功能级 phase transition 的判据
 
-模型快照每 100 step 保存一次。不能只凭 accuracy 的一条陡升曲线宣布 phase transition；至少同时查看：
+模型快照每 100 step 保存一次。这里不要求 targeted retrieval、successor、value transport、residual geometry、causal effect 与最终 accuracy 同时变化；每一种功能都单独判断是快速出现还是平滑形成。对每个功能分别查看：
 
-1. 每个 true count 和每个 (k) 的 dense teacher-forced accuracy；
-2. 固定 targeted / successor head 的分数是否在同一窗口上升；
-3. marker/index centroid manifold 的 separation、step cosine 和 effective dimension 是否同期重组；
-4. 位置局部 head ablation 的 margin drop 是否从接近 control 变为显著大于 control；
-5. 转折是否可以被每个 (k) 的训练 exposure 差异解释。
+1. 每个 true count 和每个 (k) 的 dense teacher-forced / autoregressive accuracy；
+2. 固定 targeted 或 successor head 的 mass、QK margin、top-1 accuracy 和 role score；
+3. marker/index centroid manifold 的 separation、step cosine 和 effective dimension；
+4. pattern-only、value-only、residual-stream patch recovery，以及位置局部 head ablation 的 margin drop；
+5. 变化是否可以被每个 (k) 的训练 exposure、objective switch 或 count curriculum 解释。
 
-只有第 2–4 项同步出现，才支持“新内部机制形成”；只有第 1 项变陡，最多称为 behavioral transition。
+每条曲线分别比较连续增长（如 sigmoid）与 changepoint 模型，并报告 transition center、10–90% width 和模型证据。窄窗口支持该功能快速形成，宽窗口支持渐进 specialization；行为 accuracy 的陡升也可以与内部功能的平滑改善并存，例如长 trace 将逐步误差以乘法形式放大。单 seed 结果只称为“快速形成候选”或“平滑形成”，是否为稳定 phase transition 需要多 seed 验证。
 
 ## 4. 每个 k 的训练 token exposure
 
