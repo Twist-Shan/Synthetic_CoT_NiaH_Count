@@ -1,0 +1,102 @@
+\begin{tikzpicture}[
+  x=1cm,y=1cm,font=\small,
+  panel/.style={draw=black!42,rounded corners=3pt,fill=white},
+  box/.style={draw=black!38,rounded corners=2pt,fill=white,inner sep=3pt},
+  tok/.style={draw=black!25,rounded corners=1pt,minimum width=.36cm,minimum height=.29cm,inner sep=0pt},
+  arr/.style={-{Latex[length=2mm]},line width=.8pt},
+  darr/.style={arr,draw=directblue},
+  tarr/.style={arr,draw=thinkingorange}]
+
+% (a) Direct
+\draw[panel,fill=directblue!3] (0,0) rectangle (7.35,4.40);
+\node[anchor=north west,font=\bfseries] at (.16,4.27)
+  {(a) Direct: broad set routing};
+\foreach \x in {0,...,10}{\node[tok,fill=black!8] at (1.00+.39*\x,3.48) {};}
+\node[tok,fill=needlefill] (d1) at (1.78,3.48) {};
+\node[tok,fill=needlefill] (d2) at (3.34,3.48) {};
+\node[tok,fill=needlefill] (d3) at (4.90,3.48) {};
+\node[box,fill=directblue!10] (dq) at (6.45,3.48) {$q_{\rm ans}$};
+\draw[darr] (d1.south) to[bend right=19] (dq.south west);
+\draw[darr] (d2.south) to[bend right=11] (dq.south west);
+\draw[darr] (d3.south) to[bend right=4] (dq.south west);
+\node[font=\scriptsize,text=directblue!75!black] at (3.70,2.75)
+  {target mass + within-target coverage};
+\node[box,fill=directblue!9,align=center,font=\scriptsize,text width=1.55cm] (dc) at (1.42,1.65)
+  {late total state\\$h^\ell_{q_{\rm ans}}\mapsto C$};
+\node[box,fill=red!6,align=center,font=\scriptsize,text width=1.80cm] (dn) at (3.90,1.65)
+  {compressed magnitude\\+ readout noise?};
+\node[box,fill=black!6] (do) at (6.25,1.65) {$\widehat C$};
+\draw[darr] (dq)--(dc.north east);
+\draw[darr] (dc)--(dn);
+\draw[darr] (dn)--(do);
+\node[anchor=south west,font=\scriptsize,text=black!65] at (.23,.30)
+  {A prompt-local running counter is not required.};
+
+% (b) Thinking
+\begin{scope}[xshift=7.75cm]
+\draw[panel,fill=thinkingorange!3] (0,0) rectangle (7.35,4.40);
+\node[anchor=north west,font=\bfseries] at (.16,4.27)
+  {(b) Trace: targeted serial routing};
+\foreach \x in {0,...,8}{\node[tok,fill=black!8] at (.48+.37*\x,3.42) {};}
+\node[tok,fill=needlefill] (t1) at (1.22,3.42) {};
+\node[tok,fill=needlefill] (t2) at (2.33,3.42) {};
+\node[tok,fill=needlefill] (t3) at (3.44,3.42) {};
+\node[box,fill=thinkingorange!10] (r1) at (4.33,3.46) {$1.$ item};
+\node[box,fill=thinkingorange!10] (r2) at (5.36,2.83) {$2.$ item};
+\node[box,fill=thinkingorange!10] (r3) at (6.39,2.20) {$3.$ item};
+\draw[tarr] (t1)--(r1);
+\draw[tarr] (t2)--(r2);
+\draw[tarr] (t3)--(r3);
+\foreach \x/\lab in {.62/0,1.68/1,2.74/2,3.80/3}{
+  \node[box,fill=thinkingorange!8] (s\lab) at (\x,1.18) {$s_{\lab}$};}
+\draw[tarr] (s0)--node[above,font=\scriptsize] {update}(s1);
+\draw[tarr] (s1)--(s2);
+\draw[tarr] (s2)--(s3);
+\node[box,fill=black!6] (tq) at (5.15,1.18) {$q_{\rm ans}$};
+\node[box,fill=black!6] (to) at (6.50,1.18) {$\widehat C$};
+\draw[tarr] (s3)--(tq);
+\draw[tarr] (r3)--(tq);
+\draw[tarr] (tq)--(to);
+\node[anchor=south west,font=\scriptsize,text=black!65] at (.23,.30)
+  {Test pointer, progress, and final total as distinct states.};
+\end{scope}
+
+% (c) Sites
+\begin{scope}[yshift=-4.85cm]
+\draw[panel,fill=black!1] (0,0) rectangle (7.35,4.10);
+\node[anchor=north west,font=\bfseries] at (.16,3.97)
+  {(c) Semantic state sites};
+\node[box,fill=needlefill!50,align=left,text width=2.84cm,anchor=north west] at (.28,3.40)
+  {\textbf{Candidate end}\\validity tag / target rank};
+\node[box,fill=black!5,align=left,text width=2.84cm,anchor=north west] at (3.92,3.40)
+  {\textbf{Intervening filler}\\prefix-state persistence};
+\node[box,fill=directblue!8,align=left,text width=2.84cm,anchor=north west] at (.28,2.03)
+  {\textbf{Answer query}\\global total / transport};
+\node[box,fill=thinkingorange!8,align=left,text width=2.84cm,anchor=north west] at (3.92,2.03)
+  {\textbf{Trace anchors}\\pointer / progress / final total};
+\end{scope}
+
+% (d) Evidence ladder
+\begin{scope}[xshift=7.75cm,yshift=-4.85cm]
+\draw[panel,fill=black!1] (0,0) rectangle (7.35,4.10);
+\node[anchor=north west,font=\bfseries] at (.16,3.97)
+  {(d) Evidence ladder};
+\node[box,fill=black!5,align=center] (e1) at (.88,2.90) {held-out\\probe};
+\node[box,fill=black!5,align=center] (e2) at (2.63,2.90) {state\\transport};
+\node[box,fill=black!5,align=center] (e3) at (4.48,2.90) {head-output\\patch};
+\node[box,fill=black!5,align=center] (e4) at (6.25,2.90) {query-local\\ablation};
+\draw[arr,draw=black!55] (e1)--(e2);
+\draw[arr,draw=black!55] (e2)--(e3);
+\draw[arr,draw=black!55] (e3)--(e4);
+\node[anchor=west,font=\scriptsize] at (.36,2.05)
+  {$\checkmark$ Decode beyond lexical and position controls.};
+\node[anchor=west,font=\scriptsize] at (.36,1.62)
+  {$\checkmark$ Donor state moves the registered decision.};
+\node[anchor=west,font=\scriptsize] at (.36,1.19)
+  {$\checkmark$ Effects localize to the predicted query site.};
+\node[anchor=west,font=\scriptsize] at (.36,.76)
+  {$\times$ Matched random heads and donors fail to reproduce them.};
+\node[anchor=south west,font=\scriptsize,text=red!65!black] at (.25,.31)
+  {(a--b) remain realistic-LLM hypotheses until these tests pass.};
+\end{scope}
+\end{tikzpicture}
