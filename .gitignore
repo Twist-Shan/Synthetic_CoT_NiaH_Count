@@ -1,6 +1,6 @@
 # Python environments, build products, and caches
 /.venv/
-/.uv-cache/
+/.uv-cache*/
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -29,12 +29,16 @@ dist/
 /logs/
 /wandb/
 /paper_figs/
+/paper_draft/
 /paper_draft_stage/
 
 # Local scratch files and directories
+/work/
 /tmp/
 /tmp_*
 /tmp-*
+/.tmp_*
+/_tmp_*
 /temp_*
 /temp-*
 *.log
