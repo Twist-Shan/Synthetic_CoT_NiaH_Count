@@ -1,47 +1,58 @@
 # Claim-to-source map
 
-本文件用于限制证据边界。`Preliminary` 表示可以在草稿中报告但尚未完成目标设置复现；`Hypothesis/TODO` 表示不能写成已证实结论。
+本文档限制草稿的证据边界。`Preliminary` 表示可报告但尚未在目标设置复现；`TODO` 表示不能写成已证实结论。
 
-## Realistic NIAH
+## Realistic NIAH behavior
 
-| 草稿内容 | 主要本地来源 | 状态与注意事项 |
+基础目录：
+
+`C:\Users\HP\Desktop\Research\UWM Yiqiao Zhong\CoT for Counting\Realistic_CoT_NiaH_Count\reports\v2_realistic_niah_analysis_20260727`
+
+| 草稿内容 | 主要来源 | 边界 |
 |---|---|---|
-| 26,500 requests；53 个 model--mode cells；$N$、$L$、seed 设计 | `C:\Users\HP\Desktop\Research\UWM Yiqiao Zhong\CoT for Counting\Realistic_CoT_NiaH_Count\reports\v2_realistic_niah_analysis_20260727\README.md`；同目录 `analysis_manifest.json` | Completed behavior audit；机制比较仍受 decoding/checkpoint 差异影响 |
-| Table 3 的 Qwen/Gemma registered success 与 Gemma numerical exact | `...\v2_realistic_niah_analysis_20260727\tables\prompt\model_mode_summary.csv` | Preliminary behavior；strict success 必须与 numerical exact、format、parse、truncation 分开 |
-| Index vs Bullet：13 个 paired models 中 10 个 Index 更高 | `...\tables\prompt\paired_index_bullet.csv` | Descriptive paired result；不能由此单独推出内部机制 |
-| Native trace style；50.3% 无 city-bearing list | `...\tables\prompt\native_list_style_exclusive_summary.csv`；`native_list_style_inclusive_summary.csv`；`native_no_full_style_summary.csv` | Post-treatment/self-selected trace style，仅作描述 |
-| Direct/Native count--length response surfaces | `...\tables\focused_empirical_law\selected_mode_laws.csv`；`mode_candidate_summary.csv`；`...\tables\bias_multivariable\consensus_formula_by_mode_target.csv` | Exploratory；不称为 universal scaling law，加入模型前先冻结 basis/split |
-| 较早 realistic thinking probes/patching | `C:\Users\HP\Desktop\Research\UWM Yiqiao Zhong\CoT for Counting\Realistic_CoT_NiaH_Count\reports\NIAH-counting.html` | Motivating only；样本小，且 HTML 正文/表格有需复核之处 |
-| 较早 4K non-thinking：高 recall、broad heads、final count code、steering、compressed manifold | `C:\Users\HP\Desktop\Research\UWM Yiqiao Zhong\CoT for Counting\Realistic_CoT_NiaH_Count\reports\NIAH-4K-report-standalone.html` | Preliminary mechanism evidence；必须在 V2 Qwen/Gemma matched setting 复现 |
-
-上表中的 `...` 均指第一行所列 `v2_realistic_niah_analysis_20260727` 目录。
+| 26,500 requests、53 个 model–mode cells、\(N/L\)/seed 设计 | `README.md`、`analysis_manifest.json` | 完成的行为审计；不是 matched-policy mechanism study |
+| 主文 core-regime 和附录 full-grid accuracy | `tables/prompt/model_mode_summary.csv` 及 request-level compact table | numerical exact、registered success、parse、format、truncation 必须分开 |
+| \(N\) 与 \(L\) 的 accuracy 趋势 | `tables/prompt/accuracy_by_N.csv`、`accuracy_by_L.csv` | “generally decreases”，不能宣称每模型逐点单调 |
+| focused 8-slot response surfaces | `tables/focused_empirical_law/model_mode_mapping.csv`、`selected_mode_laws.csv`、`selected_model_fit_metrics.csv`、`selected_model_coefficients.csv` | 只能称 exploratory response surface；Qwen3-14B 未运行 |
+| GLM logical slot | 同上 mapping 和 model summary | GLM-4 提供 Direct/Index/Bullet，GLM-Z1 提供 CoT；不能作 same-checkpoint causal effect |
+| Cogito/Nemotron 精确模型名与 revision | reasoning-model extension 下各模型 `family_manifest.json` | Cogito 的冻结名称为 `Cogito-v1-Preview-8B` |
+| 旧 realistic thinking mechanism | `reports/NIAH-counting.html` | 仅作动机；需要在 V2 paired setting 复现 |
+| 旧 4K non-thinking broad retrieval / final count code | `reports/NIAH-4K-report-standalone.html` | preliminary mechanism evidence；不能替代 Qwen3-8B/Gemma4-E4B 因果实验 |
 
 ## Synthetic bridge
 
-| 草稿内容 | 主要本地来源 | 状态与注意事项 |
+| 草稿内容 | 主要来源 | 边界 |
 |---|---|---|
-| v10 representation、routing、patching、ablation、steering、transplant | `C:\Users\HP\Desktop\Research\UWM Yiqiao Zhong\CoT for Counting\Synthetic_NiaH_like_Count\colab_results\v10_main_seed1234_20260712_172332\syn_v10_report.html` | Strong controlled motivation，但仅单 seed、toy architecture、两种模式为独立模型 |
-| v10 centroid geometry | `...\analysis\report_stratified\tables\centroid_mean_geometry.csv` | 只描述 class means；不能据此宣称 within-class noise |
-| v10 query-local ablation | `...\analysis\report_stratified\tables\position_local_ablation_by_bin.csv` | 必须与 matched random heads 一起解释 |
-| v10 nested head-output patch | `...\analysis\report_stratified\tables\nested_head_patching_regression_by_bin.csv` | 支持局部 transport；不等于完整算法证明 |
-| v10 curved-manifold steering | `...\analysis\geometry_path_steering\tables\geometry_path_steering_regression.csv` | 支持 local path，不支持统一 global $+1$ direction |
-| v10 progress/total dissociation | `...\analysis\hidden_state_patching\tables\misaligned_trace_rollout_factor_summary.csv`；`...\analysis\head_state_bidirectional\tables\*.csv` | Teacher-forced grid 与稀疏 free rollout 必须分开报告 |
-| v15 all-sequence/RoPE/RPE candidate setting | `C:\Users\HP\Desktop\Research\UWM Yiqiao Zhong\CoT for Counting\Synthetic_NiaH_like_Count\colab_results\v15_main_all_sequence_seed1234_20260718_171459\syn_v15_report.html`；同目录 `config.json`、`manifest.json` | 多因素同时改变；state probe 受 position/$k$ confounding，不能作最终机制结论 |
-| v20 final free-running accuracy | `C:\Users\HP\Desktop\Research\UWM Yiqiao Zhong\CoT for Counting\Synthetic_NiaH_like_Count\colab_results\v20_main_RoPE_count1-30_seed1234\tables\final_autoregressive_summary.csv` | One seed；thinking .912、non-thinking .335；尚未 capability matched |
-| v20 training timeline | `...\analysis\mechanism_report_assets\mechanism_timeline.png`；`...\analysis\phase_transition_audit\tables\high_power_ar_summary.csv` | Objective 在 step 1500 切换；未经 no-switch/multi-seed control 不称为 phase transition |
-| v20 causal-stage completeness | `...\manifest.json`；`...\analysis\v10_port\manifest.json` | Partial/failed stages 需要修复与完整重跑 |
-
-Synthetic 表中的 `...` 指该行最近列出的 run 目录。
+| v10 representation、routing、patching、ablation、steering | `colab_results/v10_main_seed1234_20260712_172332/syn_v10_report.html` | 单 seed、toy architecture、两种模式为独立模型 |
+| v10 centroid geometry | v10 `analysis/report_stratified/tables/centroid_mean_geometry.csv` | class means 不能单独证明 within-class noise |
+| v10 local ablation / head patching | v10 `position_local_ablation_by_bin.csv`、`nested_head_patching_regression_by_bin.csv` | 需要 matched random control；局部 transport 不等于完整算法 |
+| v10 curved steering | v10 `analysis/geometry_path_steering/tables/geometry_path_steering_regression.csv` | 支持 local path，不支持统一 global \(+1\) direction |
+| v15 position/trace confounds | `colab_results/v15_main_all_sequence_seed1234_20260718_171459/syn_v15_report.html`、`config.json`、`manifest.json` | 多因素同时变化，不能作为最终机制 setting |
+| v20 final free-running accuracy | `colab_results/v20_main_RoPE_count1-30_seed1234/tables/final_autoregressive_summary.csv` | one seed；thinking .912、non-thinking .335；未 capability-match |
+| v20 timeline | v20 `analysis/mechanism_report_assets/mechanism_timeline.png`、phase-transition tables | step 1500 objective switch；无 multi-seed/no-switch control 前不称 phase transition |
+| v20 causal-stage completeness | v20 `manifest.json`、`analysis/v10_port/manifest.json` | 部分 stage 失败或为 repair artifact，必须完整重跑并记录 provenance |
 
 ## Public references
 
-公开论文元数据集中在 `references.bib`。模型能力陈述以 Qwen3 technical report（arXiv:2505.09388）与 Gemma 4 technical report（arXiv:2607.02770）为准。所有机制性结论仍以本地实验及其可复现实验表为依据，而不是由 technical report 推断。
+公开论文元数据在 `references.bib`。Qwen3 和 Gemma4 的模型描述分别使用其 technical report。Gemma4-E4B 的参数口径应始终写为约 4.5B effective/non-embedding、8B including embeddings，避免把它错误放入 dense 4B scaling 点。
+
+## 核心因果链的证据门槛
+
+| 结论 | 当前状态 | 升级所需证据 |
+|---|---|---|
+| trace-generating modes 在 core regime 通常明显优于 Direct | Preliminary behavior | `B0` paired matched-policy rerun |
+| Direct 使用 broad-source route 并形成 terminal total \(Z_D\) | Hypothesis + synthetic/older realistic motivation | `H1-D` 多 source causal fan-in、\(Z_D\) damage/recovery、complete-count recovery |
+| CoT 使用 matched-source retrieval 和 next-source/stop control | Synthetic motivation | `H1-C/H2` identity retargeting、bidirectional continue/stop patching、free-running effect |
+| 模型有可执行 counter state | 未在目标 LLM 设置建立 | `R1–R3` grouped holdout、local/natural transport、new-valid \(+1\)、duplicate/invalid no-op |
+| targeted retrieval 通过降低 functional noise 提高准确率 | 未建立 | `M1` route→identity/coverage→\(Z_C\)→answer，clean state restoration |
+| targeted retrieval 在 coverage 之外改善 aggregation noise | 未建立 | `M2` fixed-\(U\) 条件下 \(Z_C\) SNR 仍受 route 干预且可恢复 |
+| 上述链条解释 CoT–Direct gap | 未建立 | `M3` gap removal、null-compute controls、Qwen3-8B/Gemma4-E4B replication |
 
 ## 审计规则
 
-1. 正文每个精确数字应能回溯到 frozen CSV，而不是只回溯到 HTML prose。
-2. Attention score 只用于发现候选；功能命名还要求跨 split 复现和 query-local causal specificity。
-3. Probe 结论必须注明 anchor、label、held-out groups、position/token controls 与是否包含错误样本。
-4. Synthetic 证据不得写成 pretrained LLM 已证实机制。
-5. `count code`、`prefix counter`、`progress register` 与 `final-total register` 不得互换使用。
-
+1. 正文每个精确数字必须回溯到冻结表格和 manifest，而不只回溯到 HTML prose。
+2. PCA 只作可视化；noise 结论依赖 full-space spacing、conditional covariance、decoder error 和 causal transport。
+3. Attention score 只用于 discovery；功能命名要求独立 reporting split 的 query-local damage、clean restoration 和 semantic retargeting。
+4. Teacher-forced 结果只说明 local competence；自然执行必须在 free-running first-error 之前复现方向。
+5. Synthetic 结果不写成 pretrained LLM 已证实机制。
+6. empirical law 必须预测 untouched Qwen3-14B；失败时明确保留为 qualitative response surface。

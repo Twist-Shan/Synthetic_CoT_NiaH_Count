@@ -1,0 +1,309 @@
+\section{Experimental Design}
+\label{sec:design}
+
+\subsection{Task and frozen naturalistic stimuli}
+
+A passage contains source occurrences \(R_1,\ldots,R_M\). Under a model-specific
+tokenizer, occurrence \(i\) occupies the half-open span \(I_i=[s_i,e_i)\). A
+registered semantic predicate \(q\) gives
+\begin{equation}
+  y_i=\psi_q(R_i)\in\{0,1\},\qquad
+  G_q=\{i:y_i=1\},\qquad N=|G_q|.
+\label{eq:task}
+\end{equation}
+The source identity is the \emph{occurrence index} \(i\), not merely a city or
+score string. Retrieving one occurrence twice is a duplicate; two distinct
+valid occurrences both contribute to the count.
+
+The behavioral suite is the frozen Realistic NIAH V2 grid. Filler text is
+built from a content-deduplicated 218-source Paul Graham corpus. For each seed,
+the source documents are shuffled once and the five length conditions use
+nested prefixes; no essay is repeated to fill a context. We cross
+\[
+  L\in\{2000,3000,5000,10000,20000\},\qquad
+  N\in\{1,2,3,4,5,6,8,10,20,30\},
+\]
+with seeds \(1234,\ldots,1243\), yielding 500 frozen base passages. \(L\) is
+the exact post-insertion length under the frozen Qwen3-8B tokenizer; realized
+length under every evaluated tokenizer is also stored.
+
+Every valid record has the literal form
+\begin{quote}\small
+\texttt{In the 2024 city score audit, <city> received a score of <score>.}
+\end{quote}
+Cities and scores are sampled without replacement within a passage. Candidate
+insertion sites are conservative sentence endings that exclude numeric
+strings, URLs, file paths, and common abbreviation periods. Sites are sampled
+without replacement when possible; any replacement or word-boundary fallback
+is logged. The generator changes only neutral filler and regenerates until the
+\emph{post-insertion} canonical length is exact. A stimulus is rejected unless
+every target occurs exactly once, no target-like sentence occurs in the
+filler, every character span maps to a verified token span, and no insertion
+is truncated. Passage bytes, occurrence identities, insertion depths, and a
+SHA256 digest are frozen before expanding modes or models. Thus all modes and
+models for one behavioral stimulus receive the identical passage text.
+
+\subsection{Controlled sibling stimuli for mechanism identification}
+
+The naturalistic grid measures behavior but cannot by itself distinguish a
+record-wise counter from late aggregation: increasing \(N\) also inserts more
+record-like sentences. We therefore construct a disjoint, tokenizer-audited
+mechanism corpus. A stimulus family
+\begin{equation}
+  \omega=(H,q,\{u_j,I_j,y_j\}_{j=1}^{K})
+\label{eq:family}
+\end{equation}
+contains the same filler \(H\), \(K=10\) fixed record-like slots, opaque
+occurrence IDs \(u_j\), and positive/negative variants that differ in exactly
+one predicate-critical attribute. Hard negatives use a wrong audit type, such
+as \texttt{city safety audit}, or a wrong document type, such as
+\texttt{city score report}. Year alone is never used as a negative because
+the frozen V2 predicate does not restrict year.
+
+For each mechanism model, rejection sampling makes every positive/negative
+pair equal in token length. Slots are drawn once from ten normalized-depth
+strata at legal sentence boundaries, with a target separation of at least 128
+model tokens. Slot text, order, and token positions remain fixed across
+siblings at one length. A balanced permutation chooses which \(N\) slots are
+positive, so validity is not predicted by depth, negative type, city, or
+score. Qwen and Gemma corpora are rendered separately to make post-insertion
+length exact under each tokenizer. They share the semantic family manifest,
+slot order, labels, and normalized depths, but are not assumed to share token
+IDs or absolute token indices.
+
+We register two paired manipulations:
+\begin{itemize}
+  \item A \emph{prefix-shift} pair exchanges an early positive slot \(r\) and
+  a late matched negative slot \(s>r\), preserving final \(N\), \(L\), slot
+  identities, and all downstream token indices while changing the cumulative
+  count only for \(r\leq j<s\).
+  \item A \emph{total-shift} pair flips one equal-length slot from negative to
+  positive, producing \(N\leftrightarrow N+1\) without changing its location
+  or the length of any suffix.
+\end{itemize}
+Every clean/corrupt pair stores complete prompt and continuation token IDs,
+modified character/token spans, and length-alignment checks.
+
+\begin{todobox}
+\textbf{D1---freeze the controlled mechanism corpus.}
+Use \(N\in\{0,\ldots,6,8,10\}\). At the primary length \(L=5\)k, assign at
+least 120 independent families before activation capture: 60 discovery, 20
+validation, and 40 locked test families. A family-cluster pilot power analysis
+may increase, but may not silently shrink, the locked set. After layers,
+heads, thresholds, and intervention doses are frozen, evaluate at least 40 new
+locked families at each of \(L=2\)k and \(L=10\)k. Prefix shift is eligible
+only for \(1\leq N\leq K-1\); at \(N=0\) or \(N=K\), use the available
+one-direction total shift. Use data seeds disjoint from the behavioral grid
+and publish the semantic manifest, tokenized realizations, contamination
+audit, and all rejected generations.
+\end{todobox}
+
+\subsection{Prompt serialization, reasoning policy, and decoding}
+
+The frozen behavioral layout is \emph{predicate-before, suffix-after}. A common
+cue and the definition of a city-score audit record precede
+\texttt{<passage>}; the response request and mode-specific policy follow
+\texttt{</passage>}. The passage and final question are reused byte for byte
+across modes. The response policy and, where available, the model's reasoning
+switch define the observable interface:
+
+\begin{table}[H]
+\centering
+\small
+\caption{Frozen response interfaces. Always-on reasoning checkpoints are not
+interpreted as non-thinking in a nominal Direct cell.}
+\label{tab:prompt-modes}
+\begin{tabularx}{\textwidth}{@{}P{.14\textwidth}P{.41\textwidth}P{.19\textwidth}Y@{}}
+\toprule
+Mode & Response-policy suffix & Decoding & Primary role \\
+\midrule
+Direct
+  & One line, \texttt{Total: <integer>}; no explanation or list
+  & thinking off; greedy; 64 tokens
+  & non-thinking endpoint \\
+Bullet
+  & Passage-order list of actual \texttt{city: score} pairs, then total
+  & thinking off; greedy; 1536 tokens
+  & aligned, index-free process control \\
+Index
+  & The same list with ordinary numeric indices, then total
+  & thinking off; greedy; 1536 tokens
+  & visible-index control \\
+Native CoT
+  & Concise native reasoning, followed by the same total line
+  & thinking on; frozen model-specific policy; 4096 tokens
+  & ecological reasoning condition \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Because the mode-specific suffix follows the passage, a causal transformer
+cannot make passage-token states mode specific when the rendered prefix
+through the passage is identical. We verify this condition after applying
+each checkpoint's exact chat template. Passing passage states are treated as
+a \emph{shared scanning substrate}, not as evidence that CoT constructed a
+cleaner representation while reading. Mode-specific passage encoding is
+studied only in a separate \emph{policy-before} control that moves the
+Direct/enumeration instruction before the passage; those states are never
+pooled with the frozen behavioral grid.
+
+The mechanism study additionally crosses visible instruction (Direct versus
+unindexed enumeration) with the Qwen/Gemma reasoning switch (off versus on),
+forming a \(2\times2\) instruction-by-policy factorial. Predicate placement
+has three levels: predicate-before, \emph{predicate-after}, and
+\emph{predicate-repeat}. Predicate-after record states cannot encode the
+task-specific cumulative count and provide a causal-mask negative control;
+predicate-repeat distinguishes availability during encoding from instruction
+recency.
+
+Data-generation and decoding seeds are separate fields. The ten V2 seeds are
+stimulus replicates, not repeated samples from one decoding distribution. For
+stochastic endpoints, clean, corrupt, and patched rollouts use common random
+numbers and at least three paired decoding seeds. Parse failure, format
+failure, and truncation remain in intent-to-treat summaries. We report
+teacher-forced likelihood of the \emph{complete registered continuation} and
+free-generation exact count and MAE; a first-digit logit is never the sole
+endpoint. Equal-length null scratchpads control for extra tokens and recurrent
+computation.
+
+\begin{todobox}
+\textbf{D2---prompt and policy controls.}
+Run the \(2\times2\) instruction-by-policy factorial, the three predicate
+placements, and policy-before versus suffix-after on locked Qwen3-8B and
+Gemma4-E4B mechanism families. Freeze checkpoint and tokenizer revisions, chat
+templates, stop rules, generation budgets, and parsers. Hash every rendered
+prefix through the final passage token. Use the same sampler, maximum budget,
+and paired generation seeds within a reasoning-toggle contrast. Any claimed
+algorithmic change must survive controls for instruction recency, output
+length, null computation, and checkpoints that reason in every nominal mode.
+\end{todobox}
+
+\subsection{Registered token landmarks and activation capture}
+
+For block \(\ell\), \(h_t^\ell\) is the \texttt{resid\_post} stream returned
+after that block's residual additions and before block \(\ell+1\) consumes the
+state. Embedding states are diagnostic only. Every token index is obtained
+from character-to-token offsets on the \emph{final model-specific
+chat-rendered sequence}; no index is inferred by adding the length of a
+standalone needle.
+
+Controlled records end with the invariant delimiter
+\[
+  D_{\rm eor}=\texttt{[END-RECORD]}.
+\]
+Writing \(a_i\) for the token overlapping its closing bracket, the registered
+Direct record state is \(H_i^\ell=h_{a_i}^\ell\). The Direct terminal state
+\(Z_D^\ell=h_{q_D}^\ell\) uses the token overlapping the colon in a
+teacher-forced \texttt{Total:} prefix, immediately before the first count
+token. In controlled CoT, the unindexed grammar is
+\[
+  \texttt{Item: <city>: <score> [END-RECORD]}.
+\]
+The retrieval state \(Q_k^\ell=h_{q_k^{\rm ret}}^\ell\) is extracted at the
+colon in \texttt{Item:}, before source-bearing content. The progress state
+\(P_k^\ell=h_{q_k^{\rm end}}^\ell\) is extracted at the closing bracket after
+the \(k\)th source mention and before any next index or label. The controlled
+terminal \(Z_C^{\rm ctrl,\ell}\) is the \texttt{Total:} colon after the
+canonical teacher-forced trace. A uniquely aligned \texttt{Total:} colon in a
+free-running native trace defines \(Z_C^{\rm native,\ell}\); native and
+controlled terminals are never pooled.
+
+The chat prompt is tokenized with the exact generation-time template. A
+teacher-forced continuation is appended as continuation token IDs with no
+additional special tokens; we never retokenize the concatenated raw string in
+a way that can alter the final prompt token. A sample is rejected if the token
+overlapping \texttt{Item:} also overlaps the first source character or if the
+token overlapping \texttt{Total:} contains any count character. The manifest
+stores raw messages, rendered text, prompt and continuation token IDs,
+character spans, token spans, landmark indices, model revision, tokenizer
+revision, and hook name.
+
+At a Direct record endpoint, the semantic label is
+\begin{equation}
+  c_q(a_i)=\sum_{j\leq i}y_j.
+\label{eq:prefix-count}
+\end{equation}
+For a CoT trace, align emitted step \(k\) to
+\(\pi_k\in\{1,\ldots,M\}\cup\{\bot\}\), where \(\bot\) denotes an unaligned
+item. Define
+\begin{equation}
+  \mathcal V_k=\operatorname{uniq}
+  \{\pi_u:1\leq u\leq k,\ \pi_u\neq\bot\},
+  \qquad
+  p_k=|\mathcal V_k\cap G_q|.
+\label{eq:semantic-progress}
+\end{equation}
+Thus CoT progress is the number of distinct valid occurrences actually
+retrieved, not the visible step number.
+
+\begin{table}[H]
+\centering
+\small
+\caption{Registered residual-stream landmarks. Primary state analyses use one
+token per landmark, not a record-span average.}
+\label{tab:landmarks}
+\begin{tabularx}{\textwidth}{@{}P{.21\textwidth}P{.43\textwidth}Y@{}}
+\toprule
+State & Exact token & Registered label and use \\
+\midrule
+Direct local \(H_i^\ell\)
+  & Closing bracket of \(D_{\rm eor}\) after slot \(i\)
+  & \(c_q(a_i)\); \(+1/0\) dynamics and downstream propagation, only when the
+  predicate is already available \\
+Direct terminal \(Z_D^\ell\)
+  & Colon in teacher-forced \texttt{Total:}
+  & Total \(N\); terminal aggregation and complete-answer readout \\
+CoT retrieval \(Q_k^\ell\)
+  & Colon in unindexed \texttt{Item:}
+  & Gold next source identity; targeted retrieval \\
+CoT progress \(P_k^\ell\)
+  & Closing bracket after the \(k\)th emitted source
+  & Semantic progress \(p_k\); next-source and continue/stop control \\
+Controlled CoT terminal \(Z_C^{\rm ctrl,\ell}\)
+  & Colon in \texttt{Total:} after the canonical forced trace
+  & Terminal readout given registered evidence \\
+Native CoT terminal \(Z_C^{\rm native,\ell}\)
+  & Uniquely parsed \texttt{Total:} colon in a natural trace
+  & Ecological replication; never pooled with the controlled terminal \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Analysis unit, splitting, and averaging}
+
+The atomic representation observation is
+\[
+  \text{one family}\times\text{one rendered variant}\times
+  \text{one registered landmark}\times\text{one layer}.
+\]
+The stimulus family is the independent unit for splitting and uncertainty.
+All siblings, modes, predicate placements, \((N,L)\) variants, and
+clean/corrupt counterfactuals remain in the same family split. Discovery fits
+preprocessing and selects layers/heads; validation freezes hyperparameters,
+thresholds, and intervention doses; locked test families are opened once.
+Additional transfer tests hold out record lexemes, templates, and complete
+\((N,L)\) cells.
+
+Let \(\mathcal B\) be families, \(\mathcal V_b\) the eligible rendered variants
+of family \(b\), and \(J_{bv}\) the eligible landmarks in variant \(v\).
+Representation objectives use
+\begin{equation}
+  \frac{1}{|\mathcal B|}\sum_{b\in\mathcal B}
+  \frac{1}{|\mathcal V_b|}\sum_{v\in\mathcal V_b}
+  \frac{1}{|J_{bv}|}\sum_{j\in J_{bv}}
+  \mathcal L\!\left(g(h_{bvj}^\ell),y_{bvj}\right).
+\label{eq:family-weighting}
+\end{equation}
+No hidden state is averaged across prompts before PCA, probing, or primary
+patching. PCA centering, nuisance regression, decoder regularization, and
+directions are fitted on discovery observations only. Figures may show
+individual locked-test points and family centroids, but centroids are
+summaries rather than substituted observations.
+
+Primary natural-state patching uses one matched donor. A discovery-set mean
+state is only an ablation control. Geometric steering is the sole causal
+intervention whose direction is defined by a cross-prompt mean, estimated from
+paired discovery-family differences. Attention statistics are averaged first
+over eligible steps within a variant, then over variants within a family, and
+finally equally over families. Raw hidden vectors are never averaged across
+layers, checkpoints, token roles, or model families.

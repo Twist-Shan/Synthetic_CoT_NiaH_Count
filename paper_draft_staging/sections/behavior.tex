@@ -1,0 +1,144 @@
+\section{Behavioral Phenomenon and Empirical Response Surfaces}
+\label{sec:behavior}
+
+\subsection{Task, response modes, and outcomes}
+
+A context \(x\) contains candidate records \(R_1,\ldots,R_M\). A registered predicate \(v_i=\phi(R_i,x)\in\{0,1\}\) determines whether record \(i\) is a valid counting unit, and the gold answer is
+\begin{equation}
+C(x)=\sum_{i=1}^{M}v_i.
+\label{eq:count-task}
+\end{equation}
+In the current benchmark, the experimental target count is denoted by \(N=C(x)\), and context length by \(L\). Occurrence counting and unique-source counting are separate tasks; duplicates contribute according to the preregistered unit and are never silently deduplicated during scoring.
+
+We compare four observable response modes:
+\begin{enumerate}
+  \item \textbf{Direct}: return only the final count with thinking disabled;
+  \item \textbf{Index}: explicitly enumerate matched records in a numbered list before the count;
+  \item \textbf{Bullet}: explicitly enumerate matched records in an unnumbered list before the count;
+  \item \textbf{CoT}: use the model's native thinking mode and then return the count.
+\end{enumerate}
+Index and Bullet are controlled forms of visible serial computation; native CoT is ecologically natural but has model-selected trace structure. The primary endpoint is numerical exactness of the parsed integer. Parse success, strict format compliance, truncation, trace precision/recall, duplicate rate, and final-versus-enumerated consistency are reported separately. This prevents an accurate number with extra text from being conflated with a counting failure and prevents a truncated trace from being treated as evidence about aggregation.
+
+For model \(r\), mode \(m\), target count \(N\), and length \(L\), define
+\begin{equation}
+A_{rm}(N,L)=
+\Pr(\widehat C=C\mid r,m,N,L),
+\qquad
+e=\widehat C-C,
+\qquad
+D_{rm}(N,L)=\E[|e|\mid r,m,N,L].
+\label{eq:behavior-estimands}
+\end{equation}
+The paired CoT advantage is
+\begin{equation}
+\Delta_r(N,L)=A_{r,\mathrm{CoT}}(N,L)-A_{r,\mathrm{Direct}}(N,L).
+\label{eq:cot-gap}
+\end{equation}
+All mode effects are paired within the same generated context and seed. Numerical exactness is primary; signed bias and absolute error diagnose undercounting and error magnitude.
+
+\subsection{The behavioral model panel}
+
+The empirical response-surface panel is intentionally broader than the mechanism panel. It contains a within-family Qwen size series and several cross-family reasoning models:
+\begin{table}[H]
+\centering
+\small
+\caption{Frozen behavioral panel and its role. Gemma4-E4B has approximately 4.5B effective/non-embedding parameters and 8B parameters when embeddings are included; we therefore report both conventions and do not treat it as a dense 4B point.}
+\label{tab:model-panel}
+\begin{tabularx}{\textwidth}{@{}P{.23\textwidth}P{.34\textwidth}Y@{}}
+\toprule
+Role & Models & Use and restriction \\
+\midrule
+Within-family size panel
+  & Qwen3-4B, 8B, 14B, 32B
+  & Develop candidate surfaces on 4B/8B/32B; use 14B as a fully held-out interpolation test. Do not refit the functional form after seeing 14B. \\
+Cross-family behavior
+  & Gemma4-E4B; GLM-4-9B and GLM-Z1-9B; Cogito-v1-Preview-8B; Nemotron-Nano-v2-9B; Nemotron-3-Nano-4B
+  & Test direction and heterogeneity of the \(N,L\) effects. Do not pool their parameter counts into one scaling coefficient. \\
+Co-primary mechanism
+  & Qwen3-8B and Gemma4-E4B
+  & Direct versus native CoT is primary; Index is a structured positive control. Roles transfer by semantic site and causal function, not head number. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The current focused analysis contains eight logical slots: Qwen3-4B/8B/32B, Gemma4-E4B, one GLM slot, Cogito-v1-Preview-8B, and the two Nemotron models. Qwen3-14B is absent and is a confirmatory TODO. The GLM slot is stitched: GLM-4-9B supplies Direct/Index/Bullet, whereas GLM-Z1-9B supplies CoT. It is useful descriptively but is not a same-weight thinking toggle. Models outside this panel are retained in the appendix with numerical accuracy and an explicit inclusion failure, rather than being silently dropped.
+
+\subsection{Preliminary core-regime result}
+
+The realistic V2 audit contains 53 model--mode cells and 500 requests per complete cell, for 26,500 requests. The grid is
+\[
+N\in\{1,2,3,4,5,6,8,10,20,30\},
+\qquad
+L\in\{2,3,5,10,20\}\text{k tokens},
+\]
+with ten context seeds per \((N,L)\) cell. We define the \emph{core regime} before analysis as \(N\leq10\) and \(L\leq10\)k, giving 320 requests per complete model--mode cell.
+
+\begin{table}[H]
+\centering
+\small
+\caption{Preliminary numerical exact accuracy in the core regime \(N\leq10,L\leq10\)k (320 requests per available cell). The table reports behavior, not a same-checkpoint causal mode effect. Qwen3-14B has not yet been run.}
+\label{tab:core-behavior}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Model / logical slot & Direct & Index & Bullet & CoT \\
+\midrule
+Qwen3-4B                  & .519 & .934 & .919 & .988 \\
+Qwen3-8B                  & .716 & .991 & .991 & .997 \\
+Qwen3-14B                 & \multicolumn{4}{c}{\textit{TODO: all four modes}} \\
+Qwen3-32B                 & .781 & .994 & .997 & .994 \\
+Gemma4-E4B                & .303 & .966 & .941 & .922 \\
+GLM-4 / GLM-Z1\({}^\dagger\) & .381 & .853 & .844 & .834 \\
+Cogito-v1-Preview-8B      & .506 & .625 & .938 & .897 \\
+Nemotron-Nano-v2-9B       & .322 & .825 & .738 & .844 \\
+Nemotron-3-Nano-4B        & .478 & .797 & .619 & .794 \\
+\bottomrule
+\end{tabular}
+\vspace{0.25em}
+
+\parbox{.94\textwidth}{\footnotesize \({}^\dagger\)Direct/Index/Bullet use GLM-4-9B; CoT uses GLM-Z1-9B. The row is excluded from same-weight mode-effect estimates.}
+\end{table}
+
+Three empirical patterns motivate the mechanism study. First, all available trace-generating cells in \cref{tab:core-behavior} exceed their Direct counterpart. Second, CoT, Index, and Bullet occupy a similarly high band for the reliable Qwen, Gemma, and GLM cells; deviations such as Cogito Index and Nemotron Bullet show that trace format is not interchangeable for every model. Third, Direct is already accurate on some easy cells, which permits paired success/failure and non-ceiling mechanism analyses rather than comparing only a successful CoT state with a failed Direct state.
+
+Across the full grid, accuracy generally decreases with larger \(N\) and \(L\), while \(|e|\) generally increases. The trend is not pointwise monotone for every model and mode. For example, parsing and truncation can distort Gemma4-E4B Direct length summaries, and the shared Direct response form performs poorly for Qwen3-8B. We therefore state the trend qualitatively until the held-out tests below are complete. The mechanism paper does not depend on a universal scaling law.
+
+\begin{todobox}
+\textbf{B0---paired behavioral effect to explain.}
+For Qwen3-8B and Gemma4-E4B, rerun the same 500 registered contexts under Direct, Index, Bullet, and native CoT with frozen checkpoint and tokenizer revisions. Cross response mode with (i) deterministic matched decoding and (ii) each model's documented native policy, and cross CoT with a fixed generated-token budget. Report paired numerical exactness, absolute error, unique-source recall, duplicates, stop correctness, parse, format, and truncation with context-seed cluster-bootstrap intervals. Predeclare overlapping-difficulty cells for Gemma4-E4B because its Direct accuracy is near floor. If the numerical CoT--Direct gap disappears after decoding and budget matching, stop the reasoning-specific mediation claim.
+\end{todobox}
+
+\subsection{Response surfaces are descriptive unless they predict held-out models}
+
+We use one generic family of response surfaces for both accuracy and error:
+\begin{align}
+\operatorname{logit} A_{rm}(N,L)
+  &=\alpha^{(A)}_{rm}
+    +\beta^{(A)}_{N,rm}f(N)
+    +\beta^{(A)}_{L,rm}g(L)
+    +\beta^{(A)}_{NL,rm}f(N)g(L),\\
+\log\!\left(1+D_{rm}(N,L)\right)
+  &=\alpha^{(D)}_{rm}
+    +\beta^{(D)}_{N,rm}f(N)
+    +\beta^{(D)}_{L,rm}g(L)
+    +\beta^{(D)}_{NL,rm}f(N)g(L).
+\label{eq:response-surface}
+\end{align}
+Candidate bases \(f(N)\in\{N,\log N\}\) and \(g(L)\in\{L/1000,\log(L/1000)\}\), interactions, regularization, and held-condition splits are frozen before Qwen3-14B is generated. Coefficients are partially pooled within mode but remain model specific. A parametric form is promoted to an empirical law only if it predicts the held-out 14B results better than a no-size hierarchical baseline and remains stable under leave-one-size-out and family-held-out checks.
+
+Current evidence does not meet that standard. The Native \(N\times L\) interaction is the most stable descriptive term across the eight development slots. Direct has useful average predictive structure but unstable coefficients and a negative cross-validated \(R^2\) for Qwen3-8B under the shared form. Index and Bullet have weak or unreliable shared surfaces. Accordingly, the main text will emphasize nonparametric \((N,L)\) heatmaps and partial contrasts; full coefficients and failed fits belong in the appendix.
+
+\begin{todobox}
+\textbf{B1---held-out law test and presentation.}
+Using only Qwen3-4B/8B/32B, freeze the candidate basis, partial-pooling model, and all splits. Generate Qwen3-14B on the identical 50 \((N,L)\) cells and ten seeds in all four modes (2,000 requests). Report held-out log score, calibration, accuracy error, and absolute-error prediction against a no-size baseline; do not reselect after observing 14B. The main behavior figure should combine (a) Qwen size-panel predictions with the untouched 14B points and (b) Direct-versus-CoT cross-model partial-effect intervals. If validation succeeds, preregister a second extrapolation test with additional small Qwen checkpoints; if it fails, do not expand the size panel, replace ``law'' with qualitative response surfaces, and retain coefficients only as descriptive summaries.
+\end{todobox}
+
+\begin{todobox}
+\textbf{B2---protocol and checkpoint audit.}
+Either evaluate all four response modes on each of GLM-4-9B and GLM-Z1-9B or keep the stitched GLM slot descriptive-only. Repair and rerun Gemma4-E4B Direct and Cogito Index parser/protocol failures, reporting all-request numerical exactness, registered success, parsed-only bias, and a selection-sensitivity analysis side by side. Freeze a model-level inclusion code before examining mechanism activations.
+\end{todobox}
+
+\subsection{Mechanism sample and mode choice}
+
+Mechanism data use a dense \(N=1{:}30\) subset at 4k tokens: ten independently generated contexts per count, for 300 prompts per model and mode. A sparse 8k replication uses \(N\in\{1,5,10,20,30\}\) with ten contexts per count. Qwen3-8B and Gemma4-E4B are both analyzed; Direct and native CoT are primary, while Index is a structured serial-computation control. Bullet remains in the behavioral analysis unless it reveals a qualitatively distinct trace mechanism.
+
+Canonical teacher-forced traces provide unambiguous source alignments and semantic sites. Free-running traces provide execution evidence. Every generated item is aligned to one source or labeled duplicate, hallucinated, or unresolved; no error category is dropped. Discovery and reporting splits are separated by document, source identities, context seeds, and, where possible, count values. Primary mode analyses include all paired prompts; both-correct, Direct-only, CoT-only, and both-wrong strata are secondary diagnostics, not conditioning criteria.

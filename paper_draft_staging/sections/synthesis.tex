@@ -1,0 +1,169 @@
+\section{From Targeted Retrieval to Lower Noise and Higher Accuracy}
+\label{sec:synthesis}
+
+\subsection{The proposed explanatory chain}
+
+The preceding sections can establish that count states and routing roles exist. They do not yet explain why CoT is more accurate. The explanatory hypothesis is the following causal chain:
+\begin{equation}
+H_{\rm tgt},H_{\rm next}
+\longrightarrow
+I_{1:K},U_{\rm unique}
+\longrightarrow
+Z_C
+\longrightarrow
+\widehat C.
+\label{eq:mediation-chain}
+\end{equation}
+\(H_{\rm tgt}\) and \(H_{\rm next}\) are the causally certified matched-source and next-source bundles; \(I_k\) is the retrieved source identity at trace step \(k\); \(U_{\rm unique}\) is the set or number of distinct valid sources covered; \(Z_C\) is the final-total state; and \(\widehat C\) is the parsed answer.
+
+The contrast with Direct mode is computational rather than merely visual. Direct must allow many source contributions to reach a terminal state before any assistant-side memory exists. As \(N\) and \(L\) grow, source coverage, contribution magnitude, and aggregation may interfere. CoT turns this high-fan-in operation into repeated matched-source queries, each of which can retrieve one source with a large correct-versus-wrong margin. Writing the result into the trace creates persistent memory for duplicate avoidance and stopping. The hypothesis predicts that CoT reduces source-identity and coverage errors and produces a better-resolved final-total state. It does not predict immunity to scale: with enough steps, retrieval, duplication, and stopping errors can accumulate, so CoT accuracy can still decrease with \(N\) and \(L\).
+
+\subsection{Retrieval noise and count-state noise}
+
+We distinguish descriptive attention dispersion from functional retrieval failure. For a matched-source candidate, normalize attention over registered source spans:
+\begin{equation}
+p_i^{\ell h}(q_k)=
+\frac{a_i^{\ell h}(q_k)}
+{\sum_j a_j^{\ell h}(q_k)+\epsilon}.
+\label{eq:source-distribution}
+\end{equation}
+Two attention-level diagnostics are
+\begin{equation}
+\nu_{\rm route}^{\ell h}(k)=-\log p_{\pi_k}^{\ell h}(q_k),
+\qquad
+\nu_{\rm abs}^{\ell h}(k)=1-a_{\pi_k}^{\ell h}(q_k).
+\label{eq:attention-noise}
+\end{equation}
+The first measures conditional confusion among sources; the second detects cases in which selectivity is high only because total source mass is negligible. These quantities nominate candidate routes but are not themselves the mechanistic noise endpoint.
+
+The primary retrieval endpoint is functional source identity. Let \(g_k^\ell\) be the post-retrieval state and let \(p_\phi(i\mid g_k^\ell)\) be a grouped held-out source-identity decoder. Define
+\begin{equation}
+\nu_{\rm id}^{\ell}
+=
+\E[-\log p_\phi(\pi_k\mid g_k^\ell)].
+\label{eq:identity-noise}
+\end{equation}
+In free-running traces we additionally measure wrong-source rate, duplicate-source rate, hallucinated/unresolved rate, and unique-valid recall. A targeted route is precise only if its intervention changes these functional endpoints, not merely its attention diagonal.
+
+For final count states, use the matched-site SNR in \cref{eq:state-snr} and define normalized count-state dispersion
+\begin{equation}
+\nu_{\rm state,j}^{\ell}=\frac{1}{\SNR_j^\ell}
+=
+\frac{(t_j^\ell)^\top\overline\Sigma_j^\ell t_j^\ell}
+{(d_j^\ell)^2+\epsilon}.
+\label{eq:state-noise}
+\end{equation}
+This is conditional representation dispersion per unit count separation. The primary mode comparison is Direct \(Z_D\) versus CoT \(Z_C\); the primary intervention comparison is clean CoT versus CoT with the targeted route perturbed.
+
+\subsection{Intervening on the full chain}
+
+Let \(H^+\) denote the clean targeted bundle and \(H^-\) a query-local ablated or semantically corrupted bundle. The mechanism predicts three linked effects:
+\begin{enumerate}
+  \item \(H^-\) worsens source identity and lowers unique-valid coverage;
+  \item the same intervention worsens the true-count margin or SNR of \(Z_C\);
+  \item while \(H^-\) remains in place, restoring the clean post-retrieval state or clean \(Z_C\) recovers the downstream count.
+\end{enumerate}
+The first two raw effects are
+\begin{equation}
+\Delta_{\rm acc}^{T}
+=A(H^+)-A(H^-),
+\qquad
+\Delta_{\rm SNR}^{T}
+=\log\SNR(Z_C\mid H^+)-\log\SNR(Z_C\mid H^-).
+\label{eq:target-effects}
+\end{equation}
+For a continuous complete-count margin \(m_Y\), final-state restoration recovery is
+\begin{equation}
+\eta_Z
+=
+\frac{
+m_Y(H^-,Z_C\leftarrow Z_C^+)-m_Y(H^-,Z_C^-)
+}{
+m_Y(H^+,Z_C^+)-m_Y(H^-,Z_C^-)
+}.
+\label{eq:state-restoration}
+\end{equation}
+We always report all three raw margins and use \(\eta_Z\) only above a frozen denominator gate. The analogous \(\eta_I\) restores the clean post-retrieval identity state while leaving the heads perturbed. Full parsed-count probability and free-running numerical exactness are primary; teacher-forced first-token logits are diagnostics.
+
+\begin{figure}[H]
+\centering
+\fbox{\parbox[c][5.2cm][c]{0.94\textwidth}{
+\centering
+\textbf{TODO Figure: Causal chain from retrieval to accuracy}\\[0.5em]
+\(\boxed{\text{targeted bundle}}\rightarrow
+\boxed{\text{source identity / unique coverage}}\rightarrow
+\boxed{\text{final count-state SNR}}\rightarrow
+\boxed{\text{exact count}}\)\\[0.8em]
+\resizebox{0.90\linewidth}{!}{\begin{tabular}{lcccc}
+Condition & Identity noise & Unique recall & \(Z_C\) SNR & Exact accuracy\\
+\hline
+Clean & low & high & high & high\\
+Targeted ablation & \(\uparrow\) & \(\downarrow\) & \(\downarrow\) & \(\downarrow\)\\
+Ablation + clean identity patch & rescued & rescued & partial/full rescue & partial/full rescue\\
+Ablation + clean \(Z_C\) patch & unchanged & unchanged & restored & restored
+\end{tabular}}\\[0.7em]
+\small Show paired raw effects and bootstrap intervals for Qwen3-8B and Gemma4-E4B; do not present only normalized mediation ratios.
+}}
+\caption{Planned decisive mechanism figure. State restoration while the upstream route remains perturbed separates causal mediation from correlation between attention, representation, and accuracy.}
+\label{fig:mediation-todo}
+\end{figure}
+
+\begin{todobox}
+\textbf{M1---retrieval-to-state-to-answer intervention.}
+On at least 300 paired canonical traces per co-primary model, cross targeted-bundle state (clean, query-local mean ablation, wrong-source patch) with post-retrieval identity state (natural clean versus receiver) and final-total state \(Z_C\) (natural clean versus receiver). Measure attention diagnostics, source-identity margin and \(\nu_{\rm id}\), wrong/duplicate/hallucination rates, unique-valid recall, \(Z_C\) local SNR and true-count margin, complete parsed-count probability, and free-running exactness. Use discovery-ranked bundles frozen before the factorial experiment. Report raw path effects, \(\eta_I\), \(\eta_Z\), document/seed cluster-bootstrap intervals, and matched random-head, wrong-row, wrong-source, wrong-layer, and norm controls. The targeted-retrieval explanation requires the ordered degradation and rescue in \cref{eq:mediation-chain}; a local attention effect with no unique-coverage, state, or answer effect is a failed mechanism link.
+\end{todobox}
+
+\subsection{Coverage rescue versus aggregation-noise reduction}
+
+Targeted retrieval may improve accuracy only because it finds more distinct sources. In that case, lower final-state dispersion is downstream of better coverage rather than a separate improvement in aggregation. To distinguish the accounts, we evaluate states under fixed semantic coverage.
+
+Canonical teacher forcing supplies the same correct set of \(U\) unique sources in every condition while varying whether retrieval is naturally targeted, head-perturbed, or replaced by an equal-length prefilled ledger. If targeted-head ablation no longer changes \(Z_C\) once identity and coverage are fixed, the correct conclusion is \emph{coverage rescue}. If \(Z_C\) SNR and the final answer still worsen at fixed coverage, and restoring the clean aggregate state rescues the count, the data support an additional \emph{aggregation-noise reduction} effect. Both outcomes explain part of CoT, but they are not the same mechanism.
+
+\begin{todobox}
+\textbf{M2---fixed-coverage and extra-compute controls.}
+Cross unique-valid coverage \(U\), duplicate count, raw trace length, last visible index, and answer position. Compare a source-faithful CoT trace, a length-preserving one-item semantic corruption, a shuffled faithful trace, an equal-length null scratchpad, and Direct with the same faithful list prefilled in the prompt or assistant prefix. Under teacher forcing, hold the covered source set exactly fixed while ablating the targeted route; under free generation, measure how the route changes coverage. If the route affects accuracy only through \(U\), report coverage rescue. Claim reduced aggregation noise beyond coverage only if the fixed-\(U\) intervention changes \(Z_C\) SNR/true-count margin and a clean \(Z_C\) patch restores the answer. If null scratchpads match the gain, prefer an extra-compute account.
+\end{todobox}
+
+\subsection{Explaining the Direct--CoT gap}
+
+The final experiment asks whether the certified CoT chain accounts for the paired behavioral advantage in \cref{eq:cot-gap}. For cells with a frozen nonzero continuous Direct--CoT margin, define operational gap removal
+\begin{equation}
+\operatorname{GapRemoved}
+=
+\frac{m_{\rm CoT}-m_{\rm CoT,perturbed}}
+{m_{\rm CoT}-m_{\rm Direct}}.
+\label{eq:gap-removed}
+\end{equation}
+The ratio is secondary and undefined near a zero denominator; paired numerical accuracy and raw margins remain primary. Because a generated trace is post-treatment, we call this operational gap removal rather than nonparametric causal mediation.
+
+\begin{todobox}
+\textbf{M3---cross-model gap removal and generated-prefix validation.}
+Freeze all endpoints and intervention doses after Qwen3-8B discovery, then rerun role discovery and the full M1/M2 reporting protocol independently in Gemma4-E4B. Use all paired prompts plus preregistered overlapping-difficulty cells; common-correct subsets are sensitivities only. On 300 free-running traces per model, evaluate the frozen source-identity, progress-update, next-source/stop, \(Z_C\), and answer effects before, at, and after the first trace error. The main claim requires: (i) targeted/next-route perturbation reduces the CoT--Direct gap more than random-route and null-compute controls; (ii) clean intermediate or final-state restoration recovers a preregistered fraction of the raw gap; and (iii) the direction replicates in both models. If Gemma Direct remains at floor, report Gemma as a failure-mechanism replication rather than as unbiased cross-model mediation.
+\end{todobox}
+
+\subsection{Claim ladder and falsifiers}
+
+\begin{table}[H]
+\centering
+\small
+\caption{Evidence required for each level of the paper's claim. Passing an earlier level does not license a later conclusion.}
+\label{tab:claim-ladder}
+\begin{tabularx}{\textwidth}{@{}P{.17\textwidth}P{.27\textwidth}Y@{}}
+\toprule
+Claim level & Required evidence & Principal falsifier or weaker conclusion \\
+\midrule
+Representation
+  & grouped held-out count/progress decoding, full-space geometry, nuisance controls
+  & only visible index/position decodes; no generalization \\
+Causal state
+  & bidirectional local steering and natural-state transport change the complete count
+  & probe/PCA changes without parsed-answer transport \\
+Routing role
+  & query-local damage, clean patch recovery, semantic retargeting, free-running effect
+  & attention heatmap changes but source identity or decision does not \\
+CoT explanation
+  & targeted disruption worsens coverage/state/accuracy; state restoration rescues; null compute does not
+  & null scratchpad matches gain, fixed-coverage state is unchanged, or restoration fails \\
+\bottomrule
+\end{tabularx}
+\end{table}

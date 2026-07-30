@@ -1,34 +1,51 @@
 # Counting mechanism paper draft
 
-这是面向 arXiv 阅读与内部迭代的普通 LaTeX 预印本草稿；当前没有绑定 ICLR 模板。正文为英文，工作说明与证据索引为中文。
+这是面向 arXiv 阅读和后续 ICLR 2027 投稿的普通 LaTeX 草稿。正文为英文；本说明和证据索引为中文。
+
+## 当前主线
+
+论文围绕一个问题展开：**How does chain-of-thought help language models count?**
+
+正文的四层证据链为：
+
+1. **Behavior**：确定 CoT、Index、Bullet 相对 Direct 的准确率优势，以及准确率和绝对误差随 needle 数量 \(N\) 与 context length \(L\) 的变化。
+2. **Representation**：在 matched semantic sites 上寻找 Direct final total、CoT progress 和 CoT final total；用 held-out PCA/centroid curve 描述，用 geometric steering 和 natural-state patching 验证因果可执行性。
+3. **Routing circuit**：只保留三类核心 head role：Direct broad-source、CoT matched-source、CoT next-source/continue-stop。Attention 只用于候选发现，功能命名必须通过 query-local ablation、clean restoration 和 free-running validation。
+4. **Mechanism synthesis**：干预 targeted retrieval，测 source identity、unique coverage、final-state SNR 和 exact count；在上游 route 仍被破坏时恢复 clean identity state 或 \(Z_C\)，检验完整的 retrieval \(\rightarrow\) state quality \(\rightarrow\) accuracy 链条。
+
+主机制模型为 **Qwen3-8B** 和 **Gemma4-E4B**。Gemma4-E4B 按模型报告为约 4.5B effective/non-embedding parameters、8B including embeddings；正文同时说明两种口径。
 
 ## 文件
 
-- `main.tex`：当前编译为 22 页的论文正文与附录。
-- `references.bib`：公开论文引用。
-- `figures/mechanism_overview.tex`：可编辑的 TikZ 主机制图。
-- `figures/synthetic_v10_attention_signatures.png`：v10 的 preliminary attention panel。
-- `figures/synthetic_v20_mechanism_timeline.png`：v20 的 one-seed training timeline；当前沿用内部报告标签，正文已经标明应替换。
-- `SOURCE_MAP.md`：草稿中的数字、机制证据与本地报告/表格的对应关系。
-- `counting_mechanism_draft.pdf`：经过编译和逐页版式检查的交付 PDF。
+- `main.tex`：入口文件。
+- `sections/behavior.tex`：行为结果、模型集合和 empirical-law TODO。
+- `sections/representations.tex`：两种最小机制、counter state、PCA/geometry、steering/patching。
+- `sections/routing.tex`：三类 routing head 分数、heatmap 规划及因果实验。
+- `sections/synthesis.tex`：retrieval noise、state noise、固定 coverage 和 gap-removal 实验。
+- `sections/synthetic_discussion.tex`：v10/v15/v20、training dynamics、threats、related work。
+- `sections/appendices.tex`：完整行为表、排除模型、实验 ledger、controls 和统计细节。
+- `figures/mechanism_overview.tex`：可编辑 TikZ 主架构图。
+- `figures/synthetic_v10_attention_signatures.png`：v10 preliminary panel。
+- `figures/synthetic_v20_mechanism_timeline.png`：v20 one-seed timeline。
+- `references.bib`：公开文献。
+- `SOURCE_MAP.md`：草稿中的证据和本地报告/表格映射。
+- `archive/main_pre_four_layer_restructure.tex`：本轮四层重构前的旧正文。
+- `counting_mechanism_draft.pdf`：交付 PDF。
 
-## 当前论文主线
+## 行为模型集合
 
-最稳妥的叙述不是“non-thinking 检索不到、thinking 才能检索”，而是：
+主文 response-surface panel：
 
-1. Direct/non-thinking 往往能够定位 targets；候选机制是分布式 tagging、answer-query 处的 broad parallel retrieval、压缩的 global total state 与离散数字读出。
-2. Thinking 的候选机制是逐项 targeted retrieval、progress/termination control，以及与进度状态可分的 final-total state。
-3. “可线性解码的 count code”不等于“algorithmic counter”。只有跨位置/词面/未见 count 泛化的稳定更新律，并且通过 state/head intervention，才能称为 counter。
-4. “count 越大越 noisy”目前是待检验假设，而不是既有结论；正文预注册了 within-label covariance、local SNR、decoder residual variance 和行为条件方差。
-5. 当前 law 只能称为 count--length response surface。Direct 的 linear 与 log-length 形式近似并列且系数不稳定，不宜宣称统一 scaling law。
+- Qwen3-4B、8B、14B、32B；
+- Gemma4-E4B；
+- GLM-4-9B 与 GLM-Z1-9B；
+- Cogito-v1-Preview-8B；
+- Nemotron-Nano-v2-9B；
+- Nemotron-3-Nano-4B。
 
-## 建议模型集合
+当前 Qwen3-14B 四种模式全部缺失，已登记为 2,000-request held-out TODO。GLM 当前是 GLM-4 的 Direct/Index/Bullet 与 GLM-Z1 的 CoT 拼接，只能作 descriptive slot，不能作 same-weight thinking toggle。
 
-- 行为与 response-surface：Qwen3 1.7B/4B/8B/32B；只有冻结模型能预测 held-out size 时才补 0.6B/14B。Gemma4-E4B/12B 用作跨 family 验证。
-- 主机制：Qwen3-8B。
-- failure/capacity control：Qwen3-4B。
-- 跨架构复现：优先评估 Gemma4-12B 的 activation 成本与 matched-decoding numerical accuracy；资源不足则使用 E4B。
-- 高容量 spot check：Qwen3-32B，只做预注册的稀疏层/头集合。
+其余已审计模型的 numerical exact accuracy 和排除原因都放在附录，包括 Qwen3-1.7B、Gemma4-12B、DeepSeek-R1-Qwen3-8B、Granite、Ministral 和 OLMo3。
 
 ## 编译
 
@@ -38,13 +55,13 @@
 latexmk -pdf -interaction=nonstopmode -halt-on-error main.tex
 ```
 
-如果只想清理辅助文件，可使用 `latexmk -c main.tex`；不要删除 `main.tex`、`references.bib` 或 `figures/`。
+本轮已用 TeX Live 2025 编译，并将全部 29 页渲染成 PNG 逐页检查；最终日志中没有 overfull box 或 unresolved reference。
 
-## 首要 TODO
+## 首要实验顺序
 
-1. 同权重、同输入、匹配 decoding/token budget 的 Qwen3 与 Gemma4 paired rerun。
-2. semantic-anchor representation map，并严格区分 candidate-validity tag、source ordinal/target rank、prompt prefix、trace semantic progress 与 final total。
-3. Qwen3-8B 的 state transport、pre-`o_proj` head-slice patch、query-local ablation 与 mediation。
-4. answer position × trace extent 因子控制以及 free-running trace 验证。
-5. 至少五个 synthetic seeds、objective-switch controls、capability matching，并修复 v20 causal stage。
-6. 用冻结表格重绘 publication-quality English figures，并把所有 preliminary 数字审计到 request-level export。
+1. `B0`：Qwen3-8B 与 Gemma4-E4B 的 500-context paired behavior rerun。
+2. `B1`：冻结 Qwen 4B/8B/32B surface 后，生成 Qwen3-14B 四模式 held-out grid。
+3. `R1–R3`：counter curve、geometric/natural transport、iterative-counter event test。
+4. `H1-D/H1-C/H2`：三类 routing role 的 discovery、ablation、patching 和 free-running validation。
+5. `M1–M3`：targeted retrieval \(\rightarrow\) unique coverage \(\rightarrow Z_C\) quality \(\rightarrow\) exact count，以及 fixed-coverage、null-compute 和跨模型复现。
+6. `S1–S2`：synthetic multi-seed dynamics 和 objective/exposure controls。

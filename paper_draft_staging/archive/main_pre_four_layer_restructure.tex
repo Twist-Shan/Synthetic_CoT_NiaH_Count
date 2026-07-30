@@ -1,0 +1,602 @@
+% Archived before the behavior-to-mechanism four-layer restructure on 2026-07-29.
+\documentclass[11pt]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{booktabs,tabularx,array,multirow}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{enumitem}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc,fit,backgrounds}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage[colorlinks=true,allcolors=MidnightBlue]{hyperref}
+\usepackage[nameinlink,noabbrev]{cleveref}
+
+\graphicspath{{figures/}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcolumntype{P}[1]{>{\raggedright\arraybackslash}p{#1}}
+\setlist{nosep,leftmargin=*}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.45em}
+\renewcommand{\arraystretch}{1.13}
+
+\definecolor{directblue}{RGB}{43,103,167}
+\definecolor{thinkingorange}{RGB}{224,112,54}
+\definecolor{needlefill}{RGB}{245,194,66}
+\definecolor{todored}{RGB}{160,35,35}
+\newcommand{\inlineTODO}[1]{\textcolor{todored}{\textbf{[TODO: #1]}}}
+\newenvironment{todobox}
+  {\begin{center}\begin{minipage}{0.95\linewidth}\color{todored}\textbf{TODO.}~}
+  {\end{minipage}\end{center}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\Cov}{\operatorname{Cov}}
+\newcommand{\softmax}{\operatorname{softmax}}
+\newcommand{\NSR}{\operatorname{NSR}}
+\newcommand{\gold}{C}
+\newcommand{\pred}{\widehat C}
+\newcommand{\hidden}{h}
+
+\title{How Does Chain-of-Thought Help Language Models Count?\\
+A Mechanistic Comparison of Direct and Trace-Based Computation}
+\author{Authors to be added\\\small Working paper for an ICLR 2027 submission}
+\date{Draft of July 29, 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Counting all matching records in a long context requires every valid source to affect the answer exactly once. Chain-of-thought (CoT) often improves this task, but the computational change is unknown. We contrast two candidate mechanism chains. Direct answering may route contributions from many sources through a broad path bundle into one late total state. CoT may instead repeat source-specific retrieval, write each result into the trace, update an internal/trace aggregate carrier, and use that carrier to control continuation and the final answer. A behavioral audit currently covers 26,500 realistic needle-in-a-haystack requests across count, context length, prompting mode, and model family. The mechanistic study uses attention only to discover candidate head roles, then tests every proposed arrow with semantic input edits, query-local ablation, clean activation restoration, and free-running validation. The central explanatory test asks whether disrupting the semantic CoT path removes the paired accuracy advantage beyond equal-length null-compute controls and whether restoration recovers it. One-seed synthetic transformers show that the proposed routing and state dissociations are possible; causal validation in realistic Qwen and Gemma models remains a registered experimental target. \inlineTODO{Replace the final status sentence with preregistered paired-mode effect sizes, arrow-level recovery estimates, and gap-removal intervals.}
+\end{abstract}
+
+\section{Introduction}
+
+Long-context benchmarks usually ask whether a model can retrieve one item from distractors. Counting is stricter: every valid record must influence the answer exactly once. A single-needle score can therefore conceal failures of source coverage, aggregation, stopping, or numeric readout. Multi-needle tasks such as RULER provide a more diagnostic setting~\citep{hsieh2024ruler}.
+
+CoT improves many multi-step tasks~\citep{wei2022cot}, but an emitted explanation need not reveal the computation that produced it~\citep{turpin2023unfaithful}. Our central question is consequently not whether a longer response is more accurate, but:
+
+\begin{quote}
+\emph{How does CoT improve language-model counting: by retrieving more targets, by restructuring aggregation, by stabilizing the final readout, or only by providing additional autoregressive computation?}
+\end{quote}
+
+We test one architectural contrast. In the \textbf{Direct} candidate mechanism, task-relevant contributions from many source records converge on a late answer-query path and are compressed into a terminal total state. In the \textbf{CoT} candidate mechanism, each trace step retrieves one source, writes it into the generated prefix, updates an aggregate carrier, and controls the next retrieval or stopping decision before the final total is read out. CoT can thereby replace one high-fan-in operation with repeated source-specific operations. This proposal does not assume that the trace is faithful or that either mode contains a scalar neural counter; those are interventionally testable implementation questions. Retrieval-only, readout-only, and extra-compute accounts are treated as controls or falsifiers of the proposed chain, not as additional mechanism taxonomies.
+
+This working paper makes four contributions, with their present status stated explicitly:
+
+\begin{enumerate}
+  \item We state two minimal candidate computation chains---Direct broad retrieval plus terminal aggregation, and CoT targeted retrieval plus iterative trace aggregation---and define arrow-level causal tests for each chain.
+  \item We consolidate a realistic benchmark over $N\in\{1,2,3,4,5,6,8,10,20,30\}$ needles and $L\in\{2,3,5,10,20\}$k tokens, separating numerical accuracy from parsing, formatting, and truncation.
+  \item We specify paired semantic-trace, dummy-compute, state/head/MLP patching, query-local ablation, and restoration tests for Qwen3 and Gemma4 models that expose thinking and non-thinking modes~\citep{yang2025qwen3,gemmateam2026gemma4}.
+  \item We use synthetic transformers to study when routing roles and count-state geometry emerge during training. Existing results motivate the LLM experiments but do not substitute for them.
+\end{enumerate}
+
+The strongest current evidence is behavioral: Index and Native conditions often outperform Direct in the realistic audit. Earlier realistic reports and controlled synthetic models motivate the candidate graph, but do not establish that a pretrained LLM uses it. The decisive upgrade is a mediation result: selectively disrupting trace semantics or the trace-mediated path should remove the CoT advantage, while restoring the registered intermediate state should recover it; length-, position-, norm-, and compute-matched controls should not.
+
+\section{Two Candidate Counting Mechanisms}
+\label{sec:definitions}
+
+\subsection{Task and registered sites}
+
+A tokenized context $x$ contains candidate records $R_1,\ldots,R_M$. The registered predicate $v_i=\phi(R_i,x)\in\{0,1\}$ defines the valid counting units $\mathcal V(x)=\{i:v_i=1\}$ and the gold total
+\begin{equation}
+C(x)=|\mathcal V(x)|=\sum_{i=1}^{M}v_i.
+\label{eq:count-task}
+\end{equation}
+Occurrence counting and unique-source counting use different preregistered units and are never pooled. We distinguish numerical exactness from trace fidelity, parsing, formatting, and truncation.
+
+All internal analyses use four semantic sites: $q_D$, immediately before the first Direct answer digit; $q_k^{\rm ret}$, immediately before the source-bearing content of CoT item $k$; $q_k^{\rm end}$, the end of that item before the next-item or close decision; and $q_C$, immediately before the first answer digit after the trace. ``Direct'' and ``CoT'' name observable interfaces, not assumptions about how much latent computation occurs.
+
+\subsection{Mechanism D: broad retrieval and terminal aggregation}
+
+For each record, let $\rho_i^D$ denote its task-relevant contribution to a Direct downstream path. The candidate Direct computation is
+\begin{equation}
+\rho_i^D=\mathcal R_D(x,R_i,v_i;q_D),\qquad
+Z_D=G_D(\rho_1^D,\ldots,\rho_M^D),\qquad
+\widehat C_D=Q_D(Z_D).
+\label{eq:direct-chain}
+\end{equation}
+Retrieval is \emph{broad} when one registered downstream path bundle has independently measurable causal support from multiple valid records. This is a system-level fan-in claim: the bundle may contain one broad head, several narrow heads with broad union coverage, or a multi-hop route through summary tokens. It does not require uniform attention. Aggregation is \emph{terminal} when the causally sufficient total bottleneck is $Z_D$ near $q_D$; it does not assert that earlier layers contain no count information.
+
+\subsection{Mechanism C: targeted retrieval and iterative trace aggregation}
+
+Let $\pi_k$ be the intended source at trace step $k$, $e_k$ the written trace item, $s_k$ an optional internal control state, and $\Gamma_k=(s_k,e_{1:k})$ the aggregate carrier containing both internal state and the visible trace/KV ledger. The candidate CoT computation is
+\begin{align}
+\pi_k &= \Pi_C(x,\Gamma_{k-1}),
+& \rho_k^C &= \mathcal R_C(x,R_{\pi_k};q_k^{\rm ret}),\\
+e_k &= W_C(\rho_k^C),
+& \Gamma_k &= F_C(\Gamma_{k-1},e_k),
+\label{eq:cot-chain}
+\end{align}
+followed by
+\begin{equation}
+K=\min\{k:\sigma_C(\Gamma_k)=\textsc{stop}\},\qquad
+Z_C=G_C(\Gamma_K),\qquad
+\widehat C_C=Q_C(Z_C).
+\label{eq:cot-readout}
+\end{equation}
+Retrieval is \emph{targeted} when the causal contribution at $q_k^{\rm ret}$ is concentrated on $R_{\pi_k}$ and retargets when $\pi_k$ is changed counterfactually. Iterative aggregation means that a new trace item causally updates $\Gamma_k$ and that this update affects a later retrieval, stop decision, or final total. The visible trace may itself be the memory; an internal scalar counter is not assumed.
+
+\begin{figure}[H]
+\centering
+\resizebox{\textwidth}{!}{\input{figures/mechanism_overview.tex}}
+\caption{The two candidate mechanism chains. Direct answering is tested for multi-source causal fan-in into a late total state. CoT is tested for repeated source-specific retrieval, trace writing, aggregate-carrier update, and continuation or stopping before a final readout. Boxes denote functional variables rather than single heads or neurons.}
+\label{fig:overview}
+\end{figure}
+
+\subsection{Where to look for a counter}
+
+The primary Direct object is $Z_D$ at $q_D$, estimated across prompts with different totals. Calling an earlier prompt state a \emph{carried counter} requires the stronger event-level result: at fixed candidate ordinal, a valid record induces a $+1$ update, an invalid or duplicate record induces a no-op, the update persists through matched filler, and transplanting it changes the final count. If only $Z_D$ passes source-edit and transplant tests, the mechanism is terminal aggregation rather than a prompt-side counter.
+
+For CoT, define $u_k=1$ only when item $e_k$ represents a new valid counting unit and $u_k=0$ for an invalid or duplicate item. An internal component of $\Gamma_k$ is a counter only if a held-out semantic readout $g$ obeys
+\begin{equation}
+g(\Gamma_k)-g(\Gamma_{k-1})\approx u_k
+\label{eq:counter-update}
+\end{equation}
+and transporting that component changes the next retrieval, stopping, or final answer. If trace-token/KV edits succeed but item-end residual patches fail, the evidence instead supports an external trace ledger. Decoding the visible item number $k$ is not counter evidence.
+
+\subsection{Attention-head discovery scores}
+
+Let $A_{qj}^{\ell h}$ be the attention probability from semantic query $q$ to key token $j$ in query head $h$ at layer $\ell$. For a preregistered source anchor or span $S_i$, define $a_i^{\ell h}(q)=\sum_{j\in S_i}A_{qj}^{\ell h}$, $M(q)=\sum_i a_i^{\ell h}(q)$, $r_i(q)=a_i^{\ell h}(q)/(M(q)+\epsilon)$, and $H_N(q)=-\sum_i r_i(q)\log(r_i(q)+\epsilon)/\log N$. The four primary discovery scores are
+\begin{align}
+B_{\ell h}&=\E_x[M(q_D)H_N(q_D)],
+& T_{\ell h}&=\E_x\!\left[\frac{1}{K_x}\sum_{k=1}^{K_x}a_{\pi_k}^{\ell h}(q_k^{\rm ret})\right],\\
+S_{\ell h}&=\E_x\!\left[\frac{1}{K_x-1}\sum_{k<K_x}a_{\pi_{k+1}}^{\ell h}(q_k^{\rm end})\right],
+& R_{\ell h}&=\E_x\!\left[\sum_{k=1}^{K_x}A_{q_C,e_k^\star}^{\ell h}\right],
+\label{eq:head-scores}
+\end{align}
+where $e_k^\star$ is one fixed item-end anchor per trace item. $B$ ranks Direct broad-source candidates, $T$ targeted source-retrieval candidates, $S$ next-source or successor-routing candidates on continuation steps, and $R$ final trace-readout candidates. Scores are averaged within example before averaging across examples. We report $M$ and $H_N$ separately; $B$ is undefined for $N<2$, $S$ for $K_x<2$, and trace scores for unresolved items are recorded as missing rather than silently dropped. For $T$ and $S$, conditional source selectivity, QK margin, and source top-1 are diagnostics; raw matched-source mass is the ranking statistic because conditional selectivity can be high when total source mass is negligible.
+
+\begin{table}[H]
+\centering
+\small
+\caption{Head scores discover candidates; the last column is required before assigning a causal role.}
+\label{tab:head-scores}
+\begin{tabularx}{\textwidth}{@{}P{.14\textwidth}P{.16\textwidth}P{.20\textwidth}P{.13\textwidth}Y@{}}
+\toprule
+Candidate role & Query & Registered keys & Score & Causal certification \\
+\midrule
+Direct broad routing & $q_D$ & all valid prompt sources & $B_{\ell h}$ & source add/delete effects through one bundle; local damage and clean restoration of $Z_D$ and answer \\
+CoT targeted retrieval & $q_k^{\rm ret}$ & intended source $S_{\pi_k}$ & $T_{\ell h}$ & same-position source-identity corruption and clean recovery; pointer edit retargets the same bundle \\
+Successor routing & $q_k^{\rm end}$ & next unvisited source, continue steps only & $S_{\ell h}$ & bidirectional continue$\leftrightarrow$stop patching and correct free-running stop location \\
+Final trace readout & $q_C$ & one anchor per trace item & $R_{\ell h}$ & semantic-total transport after trace extent, last index, and answer position are varied independently \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The successor role is deliberately narrower than the counting mechanism: it routes a next-step transition but need not represent cardinality. Likewise, high $R_{\ell h}$ does not show that a head carries a scalar total. Candidate-validity writers are selected by fixed-ordinal state effects rather than a universal attention score because validity has no single query--key geometry shared by all prompt formats.
+
+\subsection{Causal support for a mechanism chain}
+
+A source is causally retrieved only when a task-relevant source intervention changes a registered downstream state or decision through a source-specific path and restoring the clean path restores the effect. An aggregate carrier is causal only when add, delete, duplicate, or validity-flip interventions have their predicted effect on the carrier and final count, and carrier restoration mediates that effect. For every proposed arrow $X\rightarrow Y$, we therefore require: (i) a semantic clean--corrupt contrast with registered nuisances fixed; (ii) query-local necessity under path ablation; (iii) recovery of both $Y$ and the downstream decision under a clean patch; and (iv) the predicted effect under free-running generation when the arrow belongs to the generated trace. Attention and probe results are discovery or representation evidence, not causal evidence.
+
+Let the paired semantic-exactness effect under identical weights and a registered prompt distribution be
+\begin{equation}
+\Delta_{\rm CoT}=\E\!\left[
+\mathbf 1(\widehat C_C=C)-\mathbf 1(\widehat C_D=C)
+\right].
+\label{eq:cot-benefit}
+\end{equation}
+
+The CoT chain explains part of this gap only if its semantic path is stronger or newly available in CoT, local disruption reduces $\Delta_{\rm CoT}$ beyond equal-compute, position-, norm-, and component-matched controls, and clean restoration recovers both the registered intermediate endpoint and the final count.
+
+\section{Mechanistic Predictions and Current Evidence}
+\label{sec:hypotheses}
+
+The Direct hypothesis predicts causal fan-in from multiple valid sources through one downstream bundle, transport of source edits into $Z_D$, and donor-total transport from $Z_D$ to the complete answer distribution. The CoT hypothesis predicts step-specific source-identity transport, new-valid versus duplicate/invalid updates of $\Gamma_k$, causal control of the next-source or stop decision, and trace-semantic transport into $Z_C$. A semantically null scratchpad, last-index copying, position tracking, or a final-readout-only effect can explain behavior without establishing the proposed CoT chain and is therefore tested as a falsifier.
+
+\begin{table}[H]
+\centering
+\small
+\caption{Evidence status for the two mechanism chains.}
+\label{tab:claim-status}
+\begin{tabularx}{\textwidth}{@{}P{.22\textwidth}Y P{.27\textwidth}@{}}
+\toprule
+Claim & Current support & Decisive required test \\
+\midrule
+Paired CoT accuracy advantage & Strong descriptive evidence in the 26,500-request audit & Same-checkpoint paired rerun with numerical, format, truncation, policy, and budget effects separated \\
+Direct broad-terminal chain & Exploratory earlier realistic evidence; causal support in one toy Direct model & Multi-source causal fan-in, $Z_D$ transport, local damage, and clean restoration in Qwen/Gemma \\
+CoT targeted-iterative chain & One-seed synthetic causal dissociation; limited older realistic motivation & Generated-prefix identity recovery, aggregate-carrier update, successor/stop control, and trace-to-$Z_C$ restoration \\
+CoT-chain explanation of the gap & Not established & Semantic trace corruption versus equal-length null trace; local path ablation and clean restoration of the paired gap \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Behavioral Study and Model Set}
+
+\subsection{Realistic NIAH counting}
+
+The current V2 audit contains 53 model--mode cells and 500 requests per cell (26,500 total). Each complete cell crosses ten target counts, five context lengths, and ten seeds. A valid target is a city--score audit record embedded among realistic distractors. The evaluation records four separate outcomes:
+\begin{enumerate}
+  \item numerical exactness of the parsed total;
+  \item parse success;
+  \item compliance with the strict final-answer format;
+  \item truncation before a valid answer.
+\end{enumerate}
+Registered success requires all four gates. Enumeration precision/recall and trace style are diagnostics, not part of the numerical target.
+
+The existing dataset is adequate for behavioral description but not yet a clean causal comparison of reasoning modes. Direct/index/bullet decoding is usually deterministic, whereas native thinking currently uses model-specific temperatures and larger token budgets. Some families compare different post-trained checkpoints rather than one checkpoint with a mode toggle. Therefore, all mechanistic claims will use the same weights, identical input, matched decoding where possible, and a separately reported compute/token-budget intervention.
+
+\begin{todobox}
+\textbf{E0: identify the behavioral effect to explain.} For Qwen3-8B, run the same 500 registered stimuli in Direct, Native Thinking, and Index-with-thinking-disabled conditions using one frozen checkpoint revision. Repeat Qwen3-32B only after the primary analysis is frozen. The primary endpoint is paired semantic exactness; unique-target recall, false positives, duplicates, stop correctness, final-versus-enumerated-count consistency, parse, format, and truncation are secondary decompositions. Run both deterministic matched decoding and the documented native policy. Cross the native toggle with a fixed maximum generated-token budget. Support for a mode effect requires a paired cluster-bootstrap interval for $\Delta_{\rm CoT}$ above zero after numerical and protocol failures are separated. If the gap disappears after these controls, do not proceed to a reasoning-specific mediation claim. Log checkpoint/tokenizer hashes, chat templates, sampling seeds, attention backend, dtype, and stopping rules.
+\end{todobox}
+
+\subsection{Model set and decision rule}
+
+Qwen3 is the primary family because a single checkpoint supports thinking and non-thinking modes~\citep{yang2025qwen3}. Gemma4 provides an independent architecture and also exposes a thinking mode~\citep{gemmateam2026gemma4}. We separate the inexpensive behavioral panel from the causal-mechanism panel.
+
+\begin{table}[H]
+\centering
+\caption{Proposed model set. ``Existing'' refers to completed realistic V2 behavior cells, not completed LLM mechanism experiments.}
+\label{tab:model-set}
+\small
+\begin{tabularx}{\textwidth}{@{}P{.22\textwidth}P{.22\textwidth}Y@{}}
+\toprule
+Role & Models & Rationale / gate \\
+\midrule
+Behavioral size series & Qwen3 1.7B, 4B, 8B, 32B (existing); 0.6B and 14B (conditional TODO) & Fit size response only within Qwen3 and add sizes only after freezing a held-out-size prediction rule; otherwise report family-specific qualitative surfaces. \\
+Cross-family behavior & Gemma4-E4B and Gemma4-12B (existing) & Replicate effect directions without treating E4B as a dense 4B size point or fitting one coefficient across incompatible training recipes. \\
+Primary mechanism & Qwen3-8B: Direct, Index, Native & High Index/Native accuracy, manageable activation cost, and a same-weight native toggle; Index supplies a distinct high-accuracy serial-computation condition. \\
+Capacity control & Qwen3-4B & High Native registered success (.928) but weaker Direct (.432), useful for failure-state comparisons. \\
+Gemma replication & Gemma4-12B, with E4B as lower-cost fallback & Start with Direct versus Index; use Native only after prompt/parser repair and matched-decoding rerun because current strict-format and truncation failures obscure the comparison. \\
+High-capacity spot check & Qwen3-32B & High Native registered success (.976); use a sparse, preregistered layer/head subset if full patching is too costly. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Behavioral estimands and inference}
+
+For each request, signed count error is $e=\pred-\gold$. We report exact accuracy, conditional bias, mean absolute and squared error, under/over-count probability, parse/format/truncation rates, and conditional error variance. Primary comparisons are paired within the same generated context and seed. The primary uncertainty procedure is a paired cluster bootstrap that resamples context-generation seeds within model and registered $(N,L)$ cells; McNemar tests provide paired binary checks. A discrete, heteroscedastic hierarchical error model with prespecified mode, $N$, $L$, and interaction terms is secondary because the model-family count is small. The multiplicity family covers primary modes, layers, and intervention doses declared before analysis. Model-generated trace style is post-treatment and is reported descriptively rather than interpreted causally.
+
+\subsection{Mechanistic sample construction}
+
+Mechanistic examples are stratified by $(N,L)$, output correctness, target placement, and trace correctness. We use three trace regimes:
+\begin{enumerate}
+  \item \textbf{canonical teacher forcing}, with machine-parseable item boundaries and a gold source alignment;
+  \item \textbf{free-running native traces}, preserving ecological validity and error propagation;
+  \item \textbf{counterfactual traces}, independently varying source count, trace extent, explicit index identity, and final answer position.
+\end{enumerate}
+Every free-running item is aligned to a source span or labeled hallucinated/unresolved; duplicates, inline prose, and unparsable traces remain explicit categories. We report identifiable-trace coverage and distinguish conditional aligned-trace estimands from all-rollout behavior. For progress, $k_{\rm emit}$, $k_{\rm valid}$, $k_{\rm unique}$, and remaining count are retained separately.
+
+Main mode comparisons include all paired examples on a common prompt distribution and report four outcome strata: both correct, Direct-only correct, trace-mode-only correct, and both wrong. Common-correct comparisons are selection-conditioned sensitivities. A prespecified subset of overlapping-difficulty $(N,L)$ cells supplies an iso-difficulty comparison; post-hoc accuracy matching is not used as the primary estimate.
+
+\section{Preliminary Behavioral Results}
+\label{sec:behavior}
+
+\subsection{Trace-generating conditions help, but strict formatting can hide numerical competence}
+
+\begin{table}[H]
+\centering
+\caption{Selected V2 registered success rates (500 requests per model--mode cell). Native numerical exactness is shown where strict-format compliance materially changes interpretation.}
+\label{tab:behavior}
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+Model & Direct & Index & Bullet & Native registered & Native exact \\
+\midrule
+Qwen3-1.7B & .196 & .248 & .380 & .602 & .602 \\
+Qwen3-4B   & .432 & .888 & .806 & .928 & .928 \\
+Qwen3-8B   & .570 & .960 & .894 & .956 & .956 \\
+Qwen3-32B  & .600 & .974 & .858 & .976 & .976 \\
+Gemma4-E4B & .240 & .882 & .794 & .792 & .832 \\
+Gemma4-12B & .514 & .950 & .746 & .314 & .908 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Explicit enumeration and native thinking usually improve over direct answering in the Qwen series. Numbered enumeration outperforms bullets for 10 of 13 paired models, although there are clear exceptions. Across all 26,500 requests, 8,165 are wrong parsed counts; 6,242 (76.4\%) are undercounts. This asymmetry is compatible with missed contributions or compressed magnitude readout, but behavior alone does not localize the cause.
+
+Gemma4-12B illustrates why output gates must be separated: native registered success is .314, while numerical exactness is .908. Most of the gap is extra material in the final channel rather than an incorrect total. Conversely, truncation is a substantive failure for some long native traces. The paper will therefore use numerical exactness for counting-mechanism inclusion and report protocol compliance as a separate outcome.
+
+Native traces are heterogeneous. In 7,000 audited traces, 50.3\% contain no city-bearing index/bullet list, although many use inline city-score prose or tallies. Trace style is model-selected and should not be read as a randomized mechanism intervention.
+
+\subsection{Secondary response surfaces, not a mechanistic scaling claim}
+
+Current analyses fit signed bias as a low-order response surface over $N$ and $L_k=L/1000$. These within-model task surfaces neither answer how CoT helps nor identify a parameter-count scaling law; their role is only to choose non-ceiling mechanism cells and decide whether extra Qwen sizes are worth running. A focused eight-model analysis selects the shared forms summarized in \cref{tab:law}; coefficients remain model-specific.
+
+\begin{table}[H]
+\centering
+\caption{Focused preliminary response surfaces for signed bias. CV $R^2$ is the median across eight model slots.}
+\label{tab:law}
+\begin{tabularx}{\textwidth}{@{}P{.10\textwidth}P{.18\textwidth}P{.17\textwidth}Y@{}}
+\toprule
+Mode & Selected form & Median CV $R^2$ & Interpretation \\
+\midrule
+Direct & $N+\log L_k$ & .748 & Predictive, but linear and log-length forms are near-tied \\
+Index & $N+\log N$ & -.023 & No reliable shared response surface \\
+Bullet & $N+L_k$ & .247 & Weak and model-dependent \\
+Native & $N+L_k+NL_k$ & .754 & Most stable; negative interaction in all eight fits \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+All candidate regressions include an intercept and use five-fold held-condition CV. For native thinking, the interaction has the same negative standardized sign in all eight models, improves median held-condition CV by .526, and passes the omnibus special-term test ($p=.0078$, BH-adjusted $q=.0234$); seven model fits have nominal term significance. Leave-one-model-out structure selection is stable. These are exploratory estimates because the structure was selected after inspecting the current dataset. Direct mode is less identifiable: $N+\log L_k$, $N+L_k$, and nearby weak-term variants have similar predictive quality, and Qwen3-8B itself has negative CV $R^2$ under the shared form. We therefore describe systematic count--length dependence without claiming a universal linear, log-linear, or cross-model coefficient law.
+
+\begin{todobox}
+Freeze the candidate basis and evaluation splits before adding Qwen3-0.6B/14B. Call a parameter scaling relation supported only if (i) held-out-size error improves over a no-size hierarchical baseline, (ii) key effect signs are stable under leave-one-size-out refits, and (iii) the selected form survives a family-held-out test. Otherwise present a qualitative phase diagram and model-specific response surfaces.
+\end{todobox}
+
+\section{Causal Tests of the Two Mechanism Chains}
+\label{sec:mechanism}
+
+The primary realistic analysis uses Qwen3-8B because one checkpoint supports both interfaces and has adequate accuracy for interventions. Qwen3-32B is a sparse replication and Qwen3-4B a capacity control; Gemma enters after matched decoding and output-format repair. Head/path discovery, probe fitting, and causal reporting use disjoint examples. Unless noted otherwise, 300 prompts cross three lengths, ten counts, and ten context seeds. We use the semantic sites in \cref{sec:definitions}; any site after a visible index is secondary and requires index permutation and index-free controls.
+
+\subsection{Direct chain: broad routing and terminal aggregation}
+
+The Direct test starts from fixed-length record edits that add, delete, or validity-flip one counting unit while holding candidate ordinal, syntax, and local depth fixed. $B_{\ell h}$ in \cref{eq:head-scores} ranks candidate heads within registered $(N,L)$ cells; bundle union coverage and multi-hop summary paths are also considered. The chain is supported only if the same bundle carries source-specific effects from multiple records into $Z_D$, local ablation damages both $Z_D$ and the complete count distribution, and a clean patch restores both on untouched reporting examples. Attention mass alone is not a result~\citep{jain2019attention}.
+
+\begin{todobox}
+\textbf{E1-D: Direct broad-terminal chain.} Split 300 prompts into 150 discovery and 150 reporting examples balanced by $(N,L)$. On reporting examples, use same-length target deletion/addition and correct-city/wrong-score versus wrong-city/correct-score pairs. At $q_D$, test discovery-ranked single heads, increasing head bundles, and candidate summary paths by query-local mean ablation and clean$\rightarrow$corrupt restoration. Primary endpoints are (i) the number of distinct sources with effects beyond matched non-target edits, (ii) change and recovery of $Z_D$ under a frozen total-state metric, and (iii) change and recovery of the complete parsed-count distribution. Same-layer score-matched/random bundles, wrong sites, and matched non-target spans are negative controls. Broad-terminal support requires all three endpoints; a high $B$ without source-specific restoration is only an attention signature.
+\end{todobox}
+
+The search for a Direct prompt-side counter is a nested hypothesis, not a requirement of Mechanism D. Candidate-end and matched-filler states are tested only to decide whether the total is carried across the prompt or primarily constructed near $q_D$.
+
+\begin{todobox}
+\textbf{E2: carried counter versus terminal aggregate.} Construct fixed-ordinal pairs in which one record is valid, invalid, or an exact duplicate, with token count and candidate position matched. A carried counter requires a target-specific $+1$ state update, a duplicate/invalid no-op, persistence to the next matched filler boundary, held-out identity/count generalization, and signed answer transport under a natural-state patch. If these tests fail but the E1-D source effects converge on a transportable $Z_D$, report terminal aggregation and no prompt-side counter. Cross-prompt decoding at $q_D$ alone is evidence for a total code, not a counter.
+\end{todobox}
+
+\subsection{CoT chain: targeted retrieval and iterative aggregation}
+
+Every generated item is aligned to one source or labeled duplicate, hallucinated, or unresolved. Unique-target recall and duplicate rate are behavioral diagnostics. Internally, $T_{\ell h}$ ranks the source-identity path at $q_k^{\rm ret}$, $S_{\ell h}$ ranks a possible next-source path at $q_k^{\rm end}$, and $R_{\ell h}$ ranks a trace-to-answer path at $q_C$. These three scores refer to different arrows. In particular, a successor head can choose the next source without carrying a count, and a readout head can attend to the trace without transporting its semantic total.
+
+\begin{todobox}
+\textbf{E1-C: targeted source-identity transport.} On at least 240 same-count, same-position, and same-length clean--corrupt pairs, change the intended source $\pi_k$ while preserving all other source locations. Select top-$K$ heads by $T$ and QK margin on the discovery split. At $q_k^{\rm ret}$, patch attention pattern, matched-source value vectors, pre-output-projection head slices, and the post-layer residual separately. The primary endpoint is recovery of the correct-versus-best-wrong source margin and the generated item identity. Wrong-source donors, wrong query rows, same-layer random bundles, and index permutations are controls. Targeted retrieval requires identity recovery and retargeting when $\pi_k$ changes; matched attention without recovery fails the causal gate.
+\end{todobox}
+
+\begin{todobox}
+\textbf{E3: aggregate-carrier update and control.} Build at least 240 trace-prefix pairs that independently cross emitted step, covered-set identity, and whether the current item is new-valid, duplicate, or invalid, while matching token count, item position, and last visible numeral. First test whether changing $\Gamma_{k-1}$ retargets the same retrieval bundle at $q_k^{\rm ret}$. Then patch the item-end residual and trace-token KV states separately and measure the registered update/no-op, duplicate suppression, and continue-versus-close margin. Continue and terminal cases are balanced, and continue$\leftrightarrow$stop patches are run in both directions. Effects must reproduce on generated prefixes. Residual transport supports an internal register; trace/KV-only transport supports an external ledger; neither is called a scalar counter without \cref{eq:counter-update}.
+\end{todobox}
+
+\subsection{Final aggregate state and representation quality}
+
+The primary final-state evidence is within-mode causal transport: prompt-source edits must act through $Z_D$ in Direct, and trace-semantic edits through $Z_C$ in CoT. Representational quality is secondary. Cross-fitted decoders and local count discriminability are reported with position-only, local-token, and shuffled-label controls~\citep{hewitt2019control}; exact dispersion metrics are in Appendix~\ref{app:noise}. ``Noise'' denotes conditional dispersion across matched prompts, not randomness of a fixed hidden state. Cross-mode $Z_D\leftrightarrow Z_C$ patches are exploratory because they may be off-manifold.
+
+\begin{todobox}
+\textbf{E4: final-state transport and dispersion.} Extract $Z_D$ and $Z_C$ immediately before the first answer digit on 300 paired prompts. Use at least 240 within-mode donor--receiver pairs balanced over count shifts $\delta=\pm1$, length, and answer position. In Direct, patch after a prompt-source edit; in CoT, patch after a trace-semantic edit. Primary endpoints are donor-total transport of the complete parsed-count distribution and restoration of the upstream edit's effect. Layerwise decoder MSE, local SNR, shrinkage Mahalanobis distance, and unseen-count generalization are secondary. Trace extent and answer position are crossed factorially; common-correct subsets are sensitivity analyses. A claim that Direct becomes noisier with count requires the preregistered conditional-dispersion slopes, not a PCA plot or output-error correlation.
+\end{todobox}
+
+\subsection{Component localization for registered arrows}
+
+We localize a path only after its semantic endpoint is established. Interventions proceed from whole residual/block to attention output or MLP output and then to pre-output-projection query-head slices, which is essential under grouped-query attention. Global head ablation is secondary; the primary necessity test is mean replacement at the registered semantic query. Zero ablation is a sensitivity analysis.
+
+For clean/corrupt metric $m$, normalized recovery is
+\begin{equation}
+\operatorname{Rec}=
+\frac{m_{\rm patch}-m_{\rm corrupt}}
+{m_{\rm clean}-m_{\rm corrupt}}.
+\label{eq:recovery}
+\end{equation}
+The endpoint $m$ is fixed per experiment: correct-versus-corrupt source margin, continue-versus-close margin, complete numeric-string teacher-forced log probability, or constrained-rollout expected parsed count. We always report the raw effect and denominator, and compute recovery only above a frozen clean--corrupt gap. Numeric conclusions never rely on one next-token logit.
+
+\begin{todobox}
+\textbf{E5a: identity transport.} Reuse the E1-C reporting pairs and decompose recovery at $q_k^{\rm ret}$ into attention pattern, matched-source value, pre-$o_{\rm proj}$ query-head slice, and post-layer residual patches. The frozen endpoint is the source-identity margin; raw effects and \cref{eq:recovery} are reported against wrong-source, wrong-row, random-bundle, and norm-matched controls. Value/head-output recovery supports identity transport; pattern-only recovery is reported as routing without evidence transport.
+\end{todobox}
+
+\begin{todobox}
+\textbf{E5b: aggregate-state control of routing.} Construct same-position trace prefixes with identical visible index but different covered sets. Patch the registered internal component of $\Gamma_{k-1}$ before the targeted layer and test whether the \emph{same} head bundle retargets from the receiver's next source to the donor's next source. The primary endpoints are QK/source-margin retargeting and generated item identity. A final-logit change without head retargeting does not support the proposed upstream-state$\rightarrow$retrieval arrow.
+\end{todobox}
+
+\begin{todobox}
+\textbf{E6: writers for the two aggregates.} Only at block-positive sites, patch \texttt{attn\_out} and \texttt{mlp\_out} separately. E6-D uses Direct source-edit pairs at $q_D$ and requires recovery of $Z_D$ and the complete count distribution. E6-C uses CoT new-valid versus duplicate/invalid pairs at $q_k^{\rm end}$ and requires recovery of the $\Gamma_k$ update and the next-source or stop decision. Wrong layers, full-block restoration, and same-layer norm-matched random subspaces are controls. Neuron/feature localization is exploratory and receives a new discovery/reporting split.
+\end{todobox}
+
+State steering is a secondary sufficiency test~\citep{turner2023actadd}. A readable direction without the registered behavioral transport remains descriptive~\citep{yuan2026hidden}. Component localization otherwise follows causal tracing and circuit-localization practice~\citep{meng2022rome,wang2022ioi,conmy2023acdc}.
+
+\subsection{Does the CoT chain explain the paired advantage?}
+
+Functional localization does not yet explain why CoT helps. The central test intervenes on trace semantics while matching generated length and autoregressive depth. Core conditions are a source-faithful trace, a length-preserving one-item semantic corruption, and an equal-length null scratchpad. Shuffled and index-free traces diagnose ordering and index shortcuts; Direct with a prefilled faithful list tests whether an external ledger is sufficient. These constructed traces identify possible carriers, while generated prefixes determine whether the model naturally executes the chain.
+
+For a continuous registered margin $m$ and cells satisfying a frozen minimum Direct--CoT gap, report
+\begin{equation}
+\operatorname{GapRemoved}(Z)=
+\frac{m_{\rm CoT}-m_{{\rm CoT},-Z}}
+{m_{\rm CoT}-m_{\rm Direct}},
+\label{eq:gap-removed}
+\end{equation}
+alongside raw effects. The accuracy-scale paired effect in \cref{eq:cot-benefit} remains primary; the ratio is undefined or unstable near a zero denominator.
+
+\begin{todobox}
+\textbf{E7: mechanistic gap removal.} On frozen paired prompts, compare faithful, length-preserving one-item-corrupt, and equal-length null traces; treat shuffled, index-free, and Direct-plus-prefilled-list conditions as secondary decomposition. Cross semantic unique-source count with raw trace extent and answer position, and include prompt--trace conflicts while fixing the last visible numeral. At the trace-to-$Z_C$ component localized in E5--E6, run query-local ablation and clean restoration. The CoT chain explains part of the gap only if semantic corruption changes the predicted intermediate endpoint, path ablation reduces $\Delta_{\rm CoT}$ more than null-token/random-path controls, and restoration recovers both that endpoint and the complete count distribution. Null tokens reproducing the gain with no incremental semantic effect supports compute-only. Because traces are post-treatment, we call this operational gap removal rather than nonparametric causal mediation.
+\end{todobox}
+
+\begin{todobox}
+\textbf{E8: generated-prefix validation.} Save activations for 300 free-running prompts at identifiable $q_k^{\rm ret}$, $q_k^{\rm end}$, and $q_C$, including the steps around the first trace error. Freeze five tests before collection: targeted source-margin recovery, $\Gamma_{k-1}$-induced retargeting, new-valid versus duplicate/invalid update, continue/close damage, and trace-to-$Z_C$ restoration. Stratify pre-error, imminent-error, and post-error steps. The execution claim requires the principal effects to retain their sign and a preregistered fraction of teacher-forced magnitude before the first error; otherwise report teacher-forced local competence only.
+\end{todobox}
+
+\begin{table}[H]
+\centering
+\small
+\caption{Arrow-level decision rules for the two candidate chains.}
+\label{tab:falsifiers}
+\begin{tabularx}{\textwidth}{@{}P{.18\textwidth}P{.25\textwidth}Y Y@{}}
+\toprule
+Chain link & Primary causal endpoint & Required result & Principal falsifier / redirect \\
+\midrule
+Direct source$\rightarrow$path & Multi-source-specific local damage and clean recovery & One bundle carries distinct valid-source effects beyond matched controls & Only attention mass is broad; random or wrong-site bundles match the effect \\
+Direct path$\rightarrow Z_D\rightarrow$answer & Within-mode total-state and answer restoration & Source edits act through a transportable terminal total & Only final logits move, or no $Z_D$ restoration occurs \\
+CoT pointer$\rightarrow$source & Same-position identity recovery and state-induced retargeting & The same bundle follows semantic pointer changes & Routing follows visible index or absolute position \\
+CoT item$\rightarrow\Gamma_k\rightarrow$control & Update/no-op transport and bidirectional continue/stop effect & New-valid, duplicate, and invalid items have predicted causal effects & Only emitted step is decodable; semantic edits do not change control \\
+Trace$\rightarrow Z_C\rightarrow$gap & Final-total restoration and paired gap removal & Semantic-path disruption removes, and clean patch restores, part of $\Delta_{\rm CoT}$ & Null tokens suffice or semantic disruption leaves the gap unchanged \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Supplementary Synthetic Bridge and Training Dynamics}
+\label{sec:synthetic}
+
+Synthetic models permit exact source alignment, dense checkpoints, and interventions that are prohibitively expensive in LLMs. Their role is to develop and falsify measurements, not to prove that an LLM uses the same circuit.
+
+\subsection{What one-seed v10 supports in its own setting}
+
+Synthetic v10 trains separate 4-layer, 4-head, $d_{\rm model}=256$ causal transformers on counts 1--30 with learned absolute positions. Within this toy setting it provides five transferable lessons:
+\begin{enumerate}
+  \item total count is highly linearly readable at the final query in both modes, but adjacent-count geometry bends and becomes higher-dimensional with depth;
+  \item direct answer queries use early broad-routing heads, while trace queries use targeted multi-head bundles;
+  \item progress/termination and final-total states are causally separable;
+  \item local count transport follows a curved centroid path better than one global $+1$ direction;
+  \item readout attention mass alone does not imply that selected head slices carry the full scalar state.
+\end{enumerate}
+
+For example, direct broad-head query-local ablation can collapse accuracy, whereas targeted trace-model heads require a bundle to recover source identity. At the final residual, donor count is transported almost perfectly; a final trace-marker state instead controls early close without transporting the final scalar. These results satisfy parts of the causal evidence ladder in a toy model, but v10 uses one seed, symbolic markers, fixed short contexts, separately trained models, and teacher forcing for many analyses.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{synthetic_v10_attention_signatures.png}
+\caption{Preliminary synthetic v10 attention signatures. Direct answer queries show broad target coverage; trace queries show targeted source retrieval; final trace readout is a separate candidate role. These are descriptive rankings and require local interventions for causal naming.}
+\label{fig:v10-attention}
+\end{figure}
+
+\subsection{v15 and v20 as candidate final settings}
+
+Version 15 uses Tiny Shakespeare backgrounds, $d_{\rm model}=256$, RoPE or learned relative bias, all-sequence loss, and inserted marker targets. It changes several factors simultaneously and therefore serves as a negative design result rather than a clean ablation. Final counts approach ceiling even when trace fidelity collapses: RoPE trace exactness across low/mid/high count bands is approximately 68/49/17\%, and relative-bias trace exactness is 24/0/0\%, while final counts remain essentially perfect. Position-only controls at key trace/final sites can also reach ceiling. Thus correct answers do not establish faithful trace aggregation, and high trace-site probes can be positional.
+
+Version 20 counts the union occurrences of a queried set of three natural characters in a 256-character Tiny Shakespeare window, restricted to totals 1--30. It uses a query-first format, RoPE, atomic count tokens, paired data/order for separately trained direct and trace models, and a two-stage objective: all-sequence loss through step 1500, then task-output loss through step 10,000. Both models have four layers, four heads, and $d_{\rm model}=256$. At the final checkpoint (one seed, 50 held-out free-running examples per count), the trace model reaches .912 exact count (Wilson 95\% CI [.897,.925]), .888 whole-trace exactness, and .983 ordered-marker accuracy. The direct model reaches .335 exact count (CI [.311,.359]), with MAE 1.177. Its output error does not support the simplest monotonic-noise claim: $r(C,|e|)=.021$ and $r(C,e^2)=.051$ in this test set. Hidden-state dispersion remains a separate TODO.
+
+The original v20 run manifest records the causal stage as failed; later local repair artifacts require a complete provenance audit. Those artifacts nevertheless provide concrete hypotheses: a marker-successor component has a large query-local effect, top-2 retrieval-head patching shows .981 recovery versus .018 for random heads, and value-only transport (.952) dominates pattern-only transport (.076). These one-seed findings motivate a multi-seed rerun but do not make v20 a capability-matched final mechanism comparison.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{synthetic_v20_mechanism_timeline.png}
+\caption{Current one-seed v20 training timeline. Teacher-forced local abilities precede free-running exact behavior; successor routing appears earlier than targeted retrieval, and the trace model ultimately outperforms the direct model. The objective switches at step 1500, so apparent transitions after that point require matched no-switch controls. Labels are inherited from the internal report.}
+\label{fig:v20-timeline}
+\end{figure}
+
+\subsection{Training-dynamics estimands}
+
+For checkpoints every 100--500 updates, we track free-running exact accuracy, teacher-forced local accuracy, source-routing selectivity, progress and total-state discriminability, local ablation damage, and patch recovery. Training step is supplemented by semantic exposure: the number of supervised occurrences of each retrieval step $k$, target identity, and answer token. In the current one seed, successor behavior appears first, teacher-forced final readout follows, and targeted retrieval specializes gradually around steps 3,300--6,000; free-running trace accuracy rises later. This ordering is descriptive because checkpoints are autocorrelated and the objective changes at step 1,500.
+
+We distinguish three possibilities:
+\begin{enumerate}
+  \item \textbf{smooth formation}: a continuous mechanism metric explains behavior without a discrete change point;
+  \item \textbf{phase transition}: a preregistered change-point model improves held-out likelihood/BIC and synchronizes across seeds and related mechanism metrics;
+  \item \textbf{objective artifact}: the transition disappears, moves, or reverses when the loss switch and semantic exposure are controlled.
+\end{enumerate}
+This follows the broader use of mechanistic progress measures to explain apparently sudden learning~\citep{nanda2023grokking,olsson2022induction}.
+
+\begin{todobox}
+\textbf{E9: multi-seed mechanism dynamics.} Train five paired initialization seeds (1234/2234/3234/4234/5234) with a seed-independent frozen data pool and paired Direct/CoT batch stream. Save 100-step snapshots; in the candidate transition window evaluate at least 50 free-running examples per count. For each seed, select the functional bundle once on a final-checkpoint discovery split and track that frozen bundle backward through all checkpoints; do not reselect the highest-scoring head at every step. Run causal ablation/patching at preregistered milestones. Primary endpoints are each seed's 10--90\% formation interval for successor control, targeted retrieval, value transport, final-total transport, and autoregressive exactness, plus $t_{\rm targeted}-t_{\rm successor}$. Call the ordering replicated only if it has the same sign in at least four of five seeds and a paired interval excluding zero. Call a transition phase-like only if a preregistered change-point model improves held-out BIC by at least 10 and replicates in at least four seeds. Repair and rerun the causal stage from a recorded code revision and publish command, manifest, and table checksums.
+\end{todobox}
+
+\begin{todobox}
+\textbf{E10: dynamics controls.} With at least three seeds per condition, vary only objective-switch step (0/1500/3000/10000), count sampling (natural/uniform), or context length (128/256/384). Replot mechanism time against optimizer step, steps since the objective switch, and cumulative supervised exposure of the relevant semantic event. Include a shared-backbone model with Direct/CoT mode tokens and loss-weight matching, a Direct checkpoint selected at prespecified iso-accuracy, digit-wise versus atomic count tokens, and held-out $C>30$. If formation times track the switch or exposure, describe curriculum/exposure dynamics rather than an intrinsic phase transition.
+\end{todobox}
+
+\section{Threats to Causal Identification}
+
+\paragraph{Retrieval failure versus aggregation failure.}
+High list recall with low bare-count accuracy, length dilution at fixed $N$, and direct-state steering are compatible with an aggregation/readout bottleneck. Nevertheless, source retrieval must be measured with the same prompt and decoding as counting. Target mass can fall merely because attention is normalized over longer contexts, and a multi-hop summary path can lack direct answer-to-source attention.
+
+\paragraph{Visible-index leakage.}
+Emitted-step progress can be decoded trivially from an index token or trace position. The main analysis uses pre-index/item-end anchors, symbolic index permutations, index-free traces, and fixed-step validity/duplication counterfactuals to separate $k_{\rm emit}$ from semantic $k_{\rm unique}$.
+
+\paragraph{Position and trace length.}
+Answer position often grows with trace extent. We cross trace extent with answer position: add padding to change position at fixed extent, and compensate with padding to fix answer position while extent changes. Patch tables retain donor/receiver positions, relative distance, and rotary phase.
+
+\paragraph{Conditioning on correct traces.}
+Correct-only traces select easier examples and can manufacture a clean manifold. Main estimates use all runs and stratify by trace correctness; canonical teacher forcing is labeled as a local competence test.
+
+\paragraph{Capability mismatch.}
+Direct and trace-generating modes currently have different accuracy, so a circuit difference may reflect success versus failure rather than computation style. Primary estimates use all paired prompts and the four paired correctness strata; preregistered overlapping-difficulty cells provide a secondary comparison. Common-correct and post-hoc iso-accuracy subsets are not treated as unbiased mode effects.
+
+\paragraph{Different compute and decoding.}
+Trace-generating modes use more generated tokens and sometimes a different temperature. We report a native-policy effect, a matched-decoding effect, and an explicit token-budget curve. Different post-trained checkpoints are not treated as a reasoning-mode toggle.
+
+\paragraph{Attention superposition and redundancy.}
+One semantic role may be distributed across heads, one head may be polysemantic, and a set of narrow heads may collectively provide broad coverage. Bundle/path-level add-delete tests, dose-response patching, and query-local ablation are preferred to naming the single highest-scoring head.
+
+\paragraph{Off-manifold interventions.}
+Large centroid replacements can create unnatural activations. We report activation norm, nearest-neighbor distance to natural states, downstream KL, and compare residual-preserving deltas with full replacement.
+
+\section{Related Work}
+
+CoT prompting improves performance on multi-step tasks~\citep{wei2022cot}, but trace faithfulness is not guaranteed~\citep{turpin2023unfaithful}. Recent work analyzes information flow and local causal structure inside reasoning traces~\citep{yang2026howcot,wei2026attricot}; the present task adds exact source alignments and a known algorithmic target. Work on hidden error signals further cautions that a strong probe can be diagnostic but not causal~\citep{yuan2026hidden}.
+
+RULER extends single-needle retrieval to multi-needle and aggregation tasks~\citep{hsieh2024ruler}. Theoretical and empirical work shows that transformer counting can be limited by representation interference, vocabulary, and context length~\citep{yehudai2024count}. Our focus is complementary: we compare routing and state-update mechanisms across response modes in pretrained language models and controlled synthetic transformers.
+
+Mechanistic interpretability provides the intervention tools used here: causal tracing and activation patching~\citep{meng2022rome}, circuit discovery~\citep{conmy2023acdc}, query-specific circuit analysis~\citep{wang2022ioi}, and activation steering~\citep{turner2023actadd}. Successor heads implement local increments over ordered token domains~\citep{gould2023successor}; we distinguish such a primitive from the broader retrieval--aggregation algorithm required by long-context counting.
+
+\section{Limitations}
+
+The realistic mechanistic evidence currently comes from heterogeneous report generations, prompts, decoding policies, and sample sizes. The strongest direct-mode evidence is not yet replicated in the V2 setting, and the strongest trace-mechanism evidence is synthetic. Open-weight Qwen/Gemma results may not generalize to proprietary or non-autoregressive systems. Linear probes can miss nonlinear or distributed codes, while powerful nonlinear probes can memorize nuisances. Patching can be off-manifold and ablation can trigger compensation. Synthetic models differ from LLMs in scale, pretraining, tokenization, and task familiarity. Finally, the law analysis is exploratory: candidate structures were selected after observing the data and must be validated on new model sizes or new condition cells.
+
+\section{Reproducibility and Artifact Plan}
+
+The final artifact will include request-level data or hashes, exact prompts, model/tokenizer revisions, chat templates, generation parameters, semantic-anchor parsers, intervention code, grouped train/test splits, and seed-level tables. Every figure will be generated from a table with a manifest and checksum. Numerical exactness, strict format, parse, and truncation will remain separate. Synthetic checkpoints and optimizer recovery states will be retained at the declared cadence.
+
+\begin{todobox}
+Create one frozen preregistration YAML containing: primary model/mode pairs; anchor definitions; discovery/evaluation split; head ranking rules; probe controls; count-noise estimands; intervention strength grid; exclusion criteria; primary endpoints; multiplicity correction; minimum seeds/examples; and the decision rules in \cref{tab:falsifiers}.
+\end{todobox}
+
+\section{Conclusion}
+
+The paper asks not merely whether CoT and Direct produce different activations, but which change in computation explains the CoT counting advantage. Our candidate answer is a scheduling transformation: Direct must route and compress a source set before producing any assistant-side memory, whereas CoT can repeatedly issue a source-specific query, write evidence into an external ledger, condition later retrieval and stopping on that ledger or an internal coverage state, and only then form the final total. This account remains a hypothesis in realistic LLMs. It will be supported only if the registered semantic path is present on generated prefixes, its disruption removes part of the paired accuracy gain, and clean restoration recovers both the intermediate transition and the count beyond equal-compute controls. Retrieval-only, readout-only, and compute-only outcomes remain live alternatives. This intervention-centered criterion turns the behavioral observation that CoT helps counting into a falsifiable mechanistic claim.
+
+\clearpage
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\appendix
+\section{Registered TODO Experiment Ledger}
+\label{app:ledger}
+
+\begin{table}[H]
+\centering
+\scriptsize
+\caption{Dependencies and decision rules for TODO experiments E0--E10. Lettered rows are distinct causal arrows within one experiment family.}
+\begin{tabularx}{\textwidth}{@{}P{.06\textwidth}P{.19\textwidth}P{.35\textwidth}Y@{}}
+\toprule
+ID & Claim / dependency & Frozen primary test & Result required before claim upgrade \\
+\midrule
+E0 & Behavioral effect to explain; gate for every LLM mechanism claim & Qwen3-8B, 500 paired prompts; Direct/Native/Index-off; deterministic and native policy; fixed-budget cross & Paired semantic-exactness interval above zero after parse, format, and truncation are separated \\
+E1-D & Direct source$\rightarrow$path$\rightarrow Z_D$ & 150 discovery + 150 reporting prompts; source edits; query-local bundle damage and clean restoration at $q_D$ & Multiple source-specific effects plus $Z_D$ and complete-answer recovery; otherwise no broad-terminal claim \\
+E1-C & CoT pointer$\rightarrow$targeted source & At least 240 identity-matched pairs; pattern/value/head/residual patches at $q_k^{\rm ret}$ & Source-margin and item-identity recovery plus counterfactual retargeting \\
+E2 & Direct carried counter versus terminal aggregate & Fixed-ordinal valid/invalid/duplicate edits at candidate, filler, and $q_D$ & Update + no-op + persistence + output transport for counter; $q_D$-only effects imply terminal aggregate \\
+E3 & CoT item$\rightarrow\Gamma_k\rightarrow$control & At least 240 prefixes crossing new-valid/duplicate/invalid/covered-set conditions; residual versus trace-KV patches & Update/no-op and bidirectional next-source/stop transport; KV-only effects imply external ledger \\
+E4 & Within-mode final-state transport; secondary dispersion & 300 paired final states plus 240 same-position donor pairs; trace extent $\times$ answer position & $Z_D/Z_C$ restores upstream edit and complete answer; noise claim separately requires conditional-dispersion slopes \\
+E5a/b & Identity transport and state-to-head control & Decompose pattern/value/head/residual recovery; covered-set donor retargets frozen bundle & Source recovery and bundle retargeting beyond wrong-source/random controls \\
+E6-D/C & Attention/MLP aggregate writers & Block-positive sites only; patch \texttt{attn\_out} and \texttt{mlp\_out} at $q_D$ or $q_k^{\rm end}$ & Registered aggregate and downstream-decision recovery beyond wrong-layer controls \\
+E7 & Operational gap removal & Faithful/corrupt/null traces; path ablation and clean restoration; generated-prefix replication & Semantic disruption removes gap and restoration recovers it; null-token equivalence supports compute-only \\
+E8 & Executed rather than teacher-forced chain & 300 free-running traces; five frozen arrow tests around first trace error & Same-sign preregistered effects before first error; otherwise report local competence only \\
+E9 & Replicable synthetic formation order & Five paired seeds, 100-step snapshots, at least 50 AR cases/count in transition window & Same successor-before-targeted ordering in at least four seeds with paired interval excluding zero \\
+E10 & Dynamics controls & At least three seeds per single-factor switch/count/length control; shared backbone; digit-wise and $C>30$ tests & Formation not explained by objective switch or exposure before any phase-like claim \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Prompt and Trace Controls to Include}
+
+\begin{itemize}
+  \item Direct total-only; numbered list; bullets; unnumbered item tags; native thinking.
+  \item The same prefilled list in user versus assistant turns, and a model-generated list replayed under teacher forcing.
+  \item Correct city with wrong score; wrong city with correct score; duplicate records; missing records; same-template distractors.
+  \item Candidate ordinal fixed while target validity flips; number of seen candidates fixed while valid-prefix count changes.
+  \item Permuted source order, permuted visible indices, symbolic indices, and fixed answer position with variable trace extent.
+  \item Fixed emitted step with valid, invalid, duplicated, hallucinated, and previously covered trace items.
+  \item Fixed $(N,L)$ with dispersed versus clustered targets and early/middle/late depth strata.
+  \item Same final total with different traces, and same trace extent with different source totals.
+\end{itemize}
+
+\section{Statistical Specification for the Noise Hypothesis}
+\label{app:noise}
+
+For mode $m$, site $s$, layer $\ell$, and count $c$, fit a grouped cross-validated decoder on training groups only. On held-out groups define
+\begin{equation}
+ b_{ms\ell}(c)=\E[\widehat C-C\mid c],\quad
+ v_{ms\ell}(c)=\Var(\widehat C-C\mid c),\quad
+ q_{ms\ell}(c)=v_{ms\ell}(c)+b_{ms\ell}(c)^2.
+\end{equation}
+For observed counts $c_1<\cdots<c_J$, let $\mu_j^\ell=\E[h^\ell\mid C=c_j]$, $\Sigma_j^\ell=\Cov(h^\ell\mid C=c_j)$ after nuisance residualization, $\Delta c_j=c_{j+1}-c_j$, $t_j=(\mu_{j+1}-\mu_j)/\|\mu_{j+1}-\mu_j\|_2$, $d_j=\|\mu_{j+1}-\mu_j\|_2/\Delta c_j$, and $\bar\Sigma_j=(\Sigma_j+\Sigma_{j+1})/2$. The pairwise representation metrics are
+\begin{align}
+\operatorname{Disp}(j)&=\frac{t_j^\top\bar\Sigma_jt_j}{d_j^2+\epsilon},
+& \operatorname{SNR}(j)&=\frac{d_j^2}{t_j^\top\bar\Sigma_jt_j+\epsilon},\\
+D^2_{M,j}&=\frac{(\mu_{j+1}-\mu_j)^\top(\bar\Sigma_j+\lambda I)^{-1}(\mu_{j+1}-\mu_j)}{(\Delta c_j)^2}.
+\label{eq:noise}
+\end{align}
+On a dense $C=1{:}30$ mechanistic subset, estimate separate slopes for $\log(v+\epsilon)$ and $\log(q+\epsilon)$ against $\log c$ while controlling for context length, target-depth distribution, trace length, answer position, and prespecified difficulty cell. Sparse-grid representation analyses regress \cref{eq:noise} on interval midpoint rather than pretending $c+1$ was observed. The primary contrast is Direct-final-total versus Native-final-total, with Direct versus Index separate. Cluster bootstrap intervals resample documents and seeds; Brown--Forsythe and shrinkage-Mahalanobis analyses are sensitivities. The claim requires convergent conditional-dispersion, MSE, and representation-discriminability evidence, not one significant slope.
+
+\end{document}
