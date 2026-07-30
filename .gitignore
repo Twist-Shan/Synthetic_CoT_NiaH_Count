@@ -31,6 +31,9 @@ dist/
 /paper_figs/
 /paper_draft/
 /paper_draft_stage/
+/paper_draft_staging/
+/paper_draft_merge/
+/cot_counting_iclr2027_merge/
 
 # Local scratch files and directories
 /work/
