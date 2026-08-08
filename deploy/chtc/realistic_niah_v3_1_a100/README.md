@@ -30,6 +30,11 @@ converts it to the comma-separated CLI representation after HTCondor has parsed
 the row; commas cannot be stored directly because `queue ... from` treats them
 as field separators.
 
+The queue columns carrying ordinary RAM and scratch-disk quantities deliberately
+use the `job_` prefix. Naming them `request_*` would make HTCondor synthesize
+additional custom-resource requirements instead of only setting the standard
+`RequestMemory` and `RequestDisk` attributes.
+
 ## Frozen inputs (not stored in Git)
 
 Place these two files beside the submit files before submission:

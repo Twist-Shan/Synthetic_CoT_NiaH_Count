@@ -17,11 +17,11 @@ when_to_transfer_output = ON_EXIT
 
 request_gpus = 4
 request_cpus = 48
-request_memory = $(request_memory_mb)MB
-request_disk = $(request_disk_mb)MB
+request_memory = $(job_memory_mb)MB
+request_disk = $(job_disk_mb)MB
 
 gpus_minimum_capability = 8.0
 gpus_minimum_memory = $(gpu_memory_min_mb)MB
 requirements = (TARGET.HasDocker == true) && regexp("A100", TARGET.GPUs_DeviceName, "i") && !regexp("MIG", TARGET.GPUs_DeviceName, "i") && (TARGET.GPUs_GlobalMemoryMb >= $(gpu_memory_min_mb)) && (TARGET.GPUs_GlobalMemoryMb < $(gpu_memory_max_mb))
 
-queue group_id,tier,gpu_memory_min_mb,gpu_memory_max_mb,request_memory_mb,request_disk_mb,worker0,worker1,worker2,worker3 from chtc_v31_a100_assignments.tsv
+queue group_id,tier,gpu_memory_min_mb,gpu_memory_max_mb,job_memory_mb,job_disk_mb,worker0,worker1,worker2,worker3 from chtc_v31_a100_assignments.tsv
