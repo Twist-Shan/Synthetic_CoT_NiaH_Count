@@ -82,7 +82,7 @@ def main(path: Path) -> None:
                 raise AssertionError(
                     f"tier mismatch for {model}: {row['tier']} in {row['group_id']}"
                 )
-            modes = modes_csv.split(",")
+            modes = modes_csv.split("+")
             if len(modes) != len(set(modes)):
                 raise AssertionError(f"duplicate modes in {spec!r}")
             observed.extend((model, mode) for mode in modes)

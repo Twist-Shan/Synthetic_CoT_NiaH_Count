@@ -25,6 +25,11 @@ model loads from 14 to 24 in exchange for using all 24 GPUs concurrently; it
 does not change stimuli, revisions, prompt construction, request IDs, or the
 final merge audit.
 
+Within the HTCondor queue table, `+` separates prompt modes. The job wrapper
+converts it to the comma-separated CLI representation after HTCondor has parsed
+the row; commas cannot be stored directly because `queue ... from` treats them
+as field separators.
+
 ## Frozen inputs (not stored in Git)
 
 Place these two files beside the submit files before submission:

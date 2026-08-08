@@ -124,10 +124,11 @@ run_worker() {
   local ordinal="$1"
   local worker_spec="$2"
   local model="${worker_spec%%|*}"
-  local modes="${worker_spec#*|}"
+  local modes_token="${worker_spec#*|}"
+  local modes="${modes_token//+/,}"
   local revision
   local request_batch_size max_num_seqs gpu_utilization
-  [[ "${model}" != "${worker_spec}" && -n "${model}" && -n "${modes}" ]]
+  [[ "${model}" != "${worker_spec}" && -n "${model}" && -n "${modes_token}" ]]
   revision="$(PYTHONPATH="${repo}/src" python3 -c \
     'import sys; from realistic_niah_v3_1.spec import MODEL_REVISIONS; print(MODEL_REVISIONS[sys.argv[1]])' \
     "${model}")"
@@ -162,8 +163,8 @@ done
 
 for worker_spec in "${worker_specs[@]}"; do
   model="${worker_spec%%|*}"
-  modes_csv="${worker_spec#*|}"
-  IFS=',' read -r -a modes <<< "${modes_csv}"
+  modes_token="${worker_spec#*|}"
+  IFS='+' read -r -a modes <<< "${modes_token}"
   for mode in "${modes[@]}"; do
     task_id="${model}__${mode}"
     python3 -c \
