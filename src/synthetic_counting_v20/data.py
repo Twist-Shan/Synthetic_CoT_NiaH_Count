@@ -159,6 +159,7 @@ class V20Vocab:
     numbers: list[str]
     character_tokens: list[str]
     count_tokenization: str = "atomic"
+    trace_format: str = "indexed"
     task_type: str = "target_character_set"
     loss_scope: str = "all_sequence"
 
@@ -180,6 +181,7 @@ class V20Vocab:
             numbers,
             characters,
             cfg.count_tokenization,
+            cfg.trace_format,
         )
 
     def encode(self, tokens: Iterable[str]) -> list[int]:
@@ -202,7 +204,14 @@ class V20Vocab:
 
     @property
     def fingerprint(self) -> str:
-        return _sha256_json(self.id_to_token)
+        # Preserve the historical v20/v21 fingerprint so existing checkpoints
+        # remain loadable.  The v22 grammar must nevertheless be distinguishable
+        # even though it deliberately reuses the exact same token inventory.
+        if self.trace_format == "indexed":
+            return _sha256_json(self.id_to_token)
+        return _sha256_json(
+            {"id_to_token": self.id_to_token, "trace_format": self.trace_format}
+        )
 
     def number_token(self, value: int) -> str:
         if self.count_tokenization != "atomic":
@@ -241,6 +250,7 @@ class V20Vocab:
                     "numbers": self.numbers,
                     "character_tokens": self.character_tokens,
                     "count_tokenization": self.count_tokenization,
+                    "trace_format": self.trace_format,
                     "task_type": self.task_type,
                     "loss_scope": self.loss_scope,
                 },
@@ -258,6 +268,7 @@ class V20Vocab:
             list(obj["numbers"]),
             list(obj["character_tokens"]),
             str(obj.get("count_tokenization", "atomic")),
+            str(obj.get("trace_format", "indexed")),
             str(obj.get("task_type", "target_character_set")),
             str(obj.get("loss_scope", "all_sequence")),
         )
@@ -308,6 +319,18 @@ class V20Spans:
 
         return int(self.count_positions[0])
 
+    @property
+    def trace_query_positions(self) -> tuple[int, ...]:
+        """Retrieval-query anchors (numeric indices in v20/v21, separators in v22)."""
+
+        return self.trace_index_positions
+
+    @property
+    def trace_query_token_groups(self) -> tuple[tuple[int, ...], ...]:
+        """Token groups spelling each retrieval query, under either trace grammar."""
+
+        return self.trace_index_token_groups
+
 
 def _trace_tokens_and_positions(
     markers: Iterable[str],
@@ -320,12 +343,16 @@ def _trace_tokens_and_positions(
     marker_positions: list[int] = []
     cursor = int(trace_start)
     for index, marker in enumerate(markers, start=1):
-        number = list(vocab.number_tokens(index))
-        group = tuple(range(cursor, cursor + len(number)))
+        query_tokens = (
+            ["<Sep>"]
+            if vocab.trace_format == "separator"
+            else list(vocab.number_tokens(index))
+        )
+        group = tuple(range(cursor, cursor + len(query_tokens)))
         groups.append(group)
         anchors.append(group[-1])
-        tokens.extend(number)
-        cursor += len(number)
+        tokens.extend(query_tokens)
+        cursor += len(query_tokens)
         marker_positions.append(cursor)
         tokens.append(marker)
         cursor += 1
@@ -342,6 +369,7 @@ class V20Rendered:
     spans: V20Spans | None
     prompt_needle_positions: tuple[int, ...]
     count: int | None
+    trace_format: str = "indexed"
 
 
 def _window_start(region: CorpusRegion, seq_len: int, rng: random.Random) -> int:
@@ -554,7 +582,9 @@ def render_v20(example: V20Example, vocab: V20Vocab, mode: str) -> V20Rendered:
     if example.example_kind == "raw_lm":
         tokens = list(example.seq_tokens)
         ids = vocab.encode(tokens)
-        return V20Rendered("raw_lm", mode, tokens, ids, list(ids), None, (), None)
+        return V20Rendered(
+            "raw_lm", mode, tokens, ids, list(ids), None, (), None, vocab.trace_format
+        )
     if (
         example.count is None
         or example.rendered_set_order is None
@@ -601,7 +631,17 @@ def render_v20(example: V20Example, vocab: V20Vocab, mode: str) -> V20Rendered:
             tuple(range(1, prompt_start)),
         )
     ids = vocab.encode(tokens)
-    return V20Rendered("counting_task", mode, tokens, ids, list(ids), spans, prompt_needles, example.count)
+    return V20Rendered(
+        "counting_task",
+        mode,
+        tokens,
+        ids,
+        list(ids),
+        spans,
+        prompt_needles,
+        example.count,
+        vocab.trace_format,
+    )
 
 
 def render_v20_shortened_trace(
@@ -656,6 +696,7 @@ def render_v20_shortened_trace(
         spans,
         gold.prompt_needle_positions,
         example.count,
+        vocab.trace_format,
     )
 
 
@@ -761,11 +802,14 @@ def component_target_positions(item: V20Rendered) -> dict[str, tuple[int, ...]]:
         "ans_token": (spans.ans_pos,),
     }
     if spans.think_pos is not None:
+        query_component = (
+            "trace_delimiter" if item.trace_format == "separator" else "trace_index"
+        )
         components.update(
             {
                 "think_open": (spans.think_pos,),
-                "trace_index": tuple(
-                    position for group in spans.trace_index_token_groups for position in group
+                query_component: tuple(
+                    position for group in spans.trace_query_token_groups for position in group
                 ),
                 "trace_marker": spans.trace_marker_positions,
                 "think_close": (spans.think_close_pos,) if spans.think_close_pos is not None else (),

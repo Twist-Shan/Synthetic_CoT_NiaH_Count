@@ -276,19 +276,20 @@ def run_v20_pipeline(
                             curve_suites["heldout"]["task"],
                         )
                     elif current == "causal":
-                        if cfg.count_tokenization == "atomic" and cfg.preset == "main":
+                        if cfg.version == "v20" and cfg.preset == "main":
                             run_v10_port_analysis(run_dir, device=cfg.device)
                         else:
                             _write_json(
                                 {
                                     "status": "not_run_by_design",
                                     "reason": (
-                                        "The full v10-compatible causal suite requires the main v20 atomic run. "
-                                        "Debug runs have too few disjoint examples, and v21 uses digit-wise numbers. "
-                                        "Phase-transition local head interventions remain available in both cases."
+                                        "The full v10-compatible causal suite requires the main indexed v20 run. "
+                                        "Debug runs have too few disjoint examples, v21 uses digit-wise numbers, "
+                                        "and v22 removes the numeric index interventions assumed by that suite. "
+                                        "Phase-transition local head interventions remain available."
                                     ),
                                 },
-                                run_dir / "analysis" / "v10_port" / "not_applicable_v21.json",
+                                run_dir / "analysis" / "v10_port" / "not_applicable.json",
                             )
                     elif current == "extended":
                         collect_dense_attention_roles(run_dir, device=cfg.device)

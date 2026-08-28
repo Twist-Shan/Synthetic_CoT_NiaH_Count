@@ -17,7 +17,15 @@ ALL_MODEL_VARIANTS = tuple(
 )
 REFERENCE_MODEL_VARIANTS = ("rope/nonthinking", "rope/thinking")
 SUPPORTED_COUNT_TOKENIZATIONS = ("atomic", "digitwise")
-SUPPORTED_VERSIONS = ("v20", "v21")
+SUPPORTED_TRACE_FORMATS = ("indexed", "separator")
+VERSION_SPECS = {
+    "v20": {"count_tokenization": "atomic", "trace_format": "indexed"},
+    "v21": {"count_tokenization": "digitwise", "trace_format": "indexed"},
+    # v22 is the matched v20 no-index control.  It keeps atomic final answers,
+    # but every ordinal trace token is replaced one-for-one by a fixed <Sep>.
+    "v22": {"count_tokenization": "atomic", "trace_format": "separator"},
+}
+SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = ("natural", "uniform")
 
 
@@ -27,11 +35,13 @@ def _float_tag(value: float) -> str:
 
 @dataclass(frozen=True)
 class V20Config:
-    """Shared v20/v21 configuration.
+    """Shared v20/v21/v22 configuration.
 
     v20 and v21 are deliberately paired.  The only task-grammar difference is
     ``count_tokenization``: v20 uses one atomic token per integer, whereas v21
     renders every trace index and final answer with shared decimal digit tokens.
+    v22 is a second matched control: it keeps v20's atomic final answer while
+    replacing every explicit trace index with the same separator token.
     """
 
     version: str = "v20"
@@ -108,6 +118,7 @@ class V20Config:
     loss_scope: str = "all_sequence"
     query_layout: str = "query_first"
     count_tokenization: str = "atomic"
+    trace_format: str = "indexed"
     use_sdpa: bool = True
 
     @property
@@ -141,14 +152,18 @@ class V20Config:
 
     @property
     def max_render_len(self) -> int:
-        # BOS + query + prompt + Think + (index digits + marker)*n +
+        # BOS + query + prompt + Think + (trace query + marker)*n +
         # close + Ans + final-count digits + EOS.  Query-first is fixed in both
-        # versions, and digitwise v21 remains within the 384-token context.
+        # families, and digitwise v21 remains within the 384-token context.
         def width(value: int) -> int:
             return 1 if self.count_tokenization == "atomic" else len(str(int(value)))
         prefix = 1 + (2 + self.needle_set_size) + self.seq_len
         direct = prefix + 1 + width(self.count_max_threshold) + 1
-        trace = sum(width(index) + 1 for index in range(1, self.count_max_threshold + 1))
+        trace = (
+            2 * self.count_max_threshold
+            if self.trace_format == "separator"
+            else sum(width(index) + 1 for index in range(1, self.count_max_threshold + 1))
+        )
         thinking = prefix + 1 + trace + 1 + 1 + width(self.count_max_threshold) + 1
         return max(direct, thinking)
 
@@ -165,15 +180,23 @@ class V20Config:
     def validate(self) -> None:
         if self.version not in SUPPORTED_VERSIONS:
             raise ValueError(f"V20Config.version must be one of {SUPPORTED_VERSIONS}")
-        expected_tokenization = "atomic" if self.version == "v20" else "digitwise"
+        version_spec = VERSION_SPECS[self.version]
+        expected_tokenization = version_spec["count_tokenization"]
         if self.count_tokenization != expected_tokenization:
             raise ValueError(
                 f"{self.version} requires count_tokenization={expected_tokenization!r}"
             )
+        if self.trace_format not in SUPPORTED_TRACE_FORMATS:
+            raise ValueError(f"trace_format must be one of {SUPPORTED_TRACE_FORMATS}")
+        expected_trace_format = version_spec["trace_format"]
+        if self.trace_format != expected_trace_format:
+            raise ValueError(
+                f"{self.version} requires trace_format={expected_trace_format!r}"
+            )
         if self.query_layout != "query_first":
-            raise ValueError("v20/v21 require query-first sequence construction")
+            raise ValueError("v20/v21/v22 require query-first sequence construction")
         if self.needle_set_size != 3:
-            raise ValueError("v20/v21 require exactly three distinct characters per needle set")
+            raise ValueError("v20/v21/v22 require exactly three distinct characters per needle set")
         if self.needle_pool_size <= 0 or self.needle_pool_frequency_bins <= 0:
             raise ValueError("needle pool size and number of bins must be positive")
         if not 0.0 < self.needle_pool_frequency_threshold <= 1.0:
@@ -201,7 +224,7 @@ class V20Config:
         if self.seq_len < 2:
             raise ValueError("seq_len must be at least two")
         if (self.n_layer, self.n_head, self.n_embd, self.n_inner) != (4, 4, 256, 1024):
-            raise ValueError("v20/v21 require 4 layers, 4 heads, d_model=256, MLP=1024")
+            raise ValueError("v20/v21/v22 require 4 layers, 4 heads, d_model=256, MLP=1024")
         if self.n_embd % self.n_head:
             raise ValueError("n_embd must be divisible by n_head")
         if self.max_render_len > self.n_positions:
@@ -241,9 +264,9 @@ class V20Config:
                 "enabled_model_variants"
             )
         if self.noise_source != "shakespeare_char" or self.task_type != "target_character_set":
-            raise ValueError("v20/v21 require the Shakespeare target-character-set task")
+            raise ValueError("v20/v21/v22 require the Shakespeare target-character-set task")
         if self.loss_scope != "all_sequence":
-            raise ValueError("v20/v21 require all-sequence next-token loss metadata")
+            raise ValueError("v20/v21/v22 require all-sequence next-token loss metadata")
         if self.precision not in {"float32", "bf16"}:
             raise ValueError("precision must be float32 or bf16")
         if self.snapshot_dtype not in {"float16", "bfloat16", "float32"}:
@@ -325,9 +348,17 @@ class V20Config:
             "example-level probability of formatting a training corpus window as a counting task"
         )
         result["sequence_layout"] = "query_first"
+        thinking_trace = (
+            "(<Sep> marker)*n"
+            if self.trace_format == "separator"
+            else "(number marker)*n"
+        )
         result["sequence_templates"] = {
             "nonthinking": "<BOS> query[5] data[256] <Ans> number <EOS>",
-            "thinking": "<BOS> query[5] data[256] <Think> (number marker)*n </Think> <Ans> number <EOS>",
+            "thinking": (
+                f"<BOS> query[5] data[256] <Think> {thinking_trace} "
+                "</Think> <Ans> number <EOS>"
+            ),
         }
         result["checkpoint_policy"] = {
             "analysis_snapshot_every": self.checkpoint_every,
@@ -449,7 +480,9 @@ def config_from_dict(values: dict[str, Any]) -> V20Config:
     data.setdefault("phase_cloud_steps", (0, 1_000, 1_500, 2_000, 2_500, 3_000, 3_500, 4_000, 5_000, 7_000, 10_000))
     data["phase_cloud_steps"] = tuple(data["phase_cloud_steps"])
     data.setdefault("query_layout", "query_first")
-    data.setdefault("count_tokenization", "atomic" if data.get("version", "v20") == "v20" else "digitwise")
+    version_spec = VERSION_SPECS.get(data.get("version", "v20"), VERSION_SPECS["v20"])
+    data.setdefault("count_tokenization", version_spec["count_tokenization"])
+    data.setdefault("trace_format", version_spec["trace_format"])
     data.setdefault("use_sdpa", True)
     data.setdefault("training_count_distribution", "natural")
     if legacy_loss_schedule:
@@ -470,6 +503,7 @@ def default_run_name(cfg: V20Config) -> str:
         if cfg.max_steps_for_language_pred < cfg.train_steps
         else "all_sequence"
     )
+    trace_tag = "" if cfg.trace_format == "indexed" else f"_trace-{cfg.trace_format}"
     return (
         f"{cfg.version}_{cfg.preset}_L{cfg.seq_len}_pool{cfg.needle_pool_size}x{cfg.needle_set_size}_"
         f"pf{_float_tag(cfg.needle_pool_frequency_threshold)}_count1-{cfg.count_max_threshold}{rpe_distance_tag}_"
@@ -478,7 +512,7 @@ def default_run_name(cfg: V20Config) -> str:
         f"fcw{_float_tag(cfg.final_count_loss_weight)}_"
         f"cotw{_float_tag(cfg.cot_trace_loss_weight)}_langsteps{cfg.max_steps_for_language_pred}_"
         f"steps{cfg.train_steps}_snap{cfg.checkpoint_every}_recover{cfg.recovery_every}_"
-        f"evaln{eval_size}_{variants.replace('/', '-')}_{cfg.count_tokenization}_"
+        f"evaln{eval_size}_{variants.replace('/', '-')}_{cfg.count_tokenization}{trace_tag}_"
         f"query-first_{schedule_tag}_seed{cfg.seed}"
     )
 

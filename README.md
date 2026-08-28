@@ -64,6 +64,7 @@ v20 进一步表明，不同功能可以以不同速度形成：marker-successor
 | v19 | v18 改为 index/final count 共享 decimal digit tokenization | 检验 compositional number representation | [报告](colab_results/v19_main_all_seed1234_20260719_205527/syn_v19_report.html) |
 | **v20** | query-first RoPE、count 1–30、atomic tokens、100-step dynamics、功能级 causal/phase audit | Thinking 0.912 vs Nonthinking 0.3347；successor 快速、targeted/value/causal 路径更平滑 | **核心系统** · [README](src/synthetic_counting_v20/README.md) · [报告](colab_results/v20_main_RoPE_count1-30_seed1234/v20_counting_mechanism_report.html) |
 | v21 | v20 的 atomic count/index token 改为共享 digit-wise tokenization | 与 v20 构成数字 tokenization 控制 | [报告](colab_results/v21_main_RoPE_count1-30_digit_seed1234/v21_counting_mechanism_report.html) |
+| **v22** | v20 的 Thinking trace 将每个显式数字 index 一对一替换为固定 `<Sep>`；其余训练设定保持匹配 | 检验 ordered targeted retrieval 与 head-bank differentiation 是否依赖显式 ordinal token；canonical run 只重训 Thinking | [README](src/synthetic_counting_v22/README.md) · [Colab](notebooks/Trace_Count_v22_NoIndex_Colab.ipynb) |
 
 ## 仓库结构
 

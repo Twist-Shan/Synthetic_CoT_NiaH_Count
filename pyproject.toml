@@ -46,6 +46,7 @@ packages = [
     "src/synthetic_counting_v19",
     "src/synthetic_counting_v20",
     "src/synthetic_counting_v21",
+    "src/synthetic_counting_v22",
 ]
 
 [dependency-groups]

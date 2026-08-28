@@ -105,10 +105,11 @@ def _targeted_and_successor_sums(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Return per-head sums and denominators for two operational head roles.
 
-    Targeted retrieval is measured at trace-index anchors and asks how much
+    Targeted retrieval is measured at trace-query anchors and asks how much
     attention lands on the matching k-th prompt needle.  Marker successor is
     measured at marker k as the absolute attention mass returning to the
-    immediately preceding index-token group k.
+    immediately preceding trace-query group k.  The query is a numeric index in
+    v20/v21 and the repeated separator token in v22.
     """
 
     if output is None:
@@ -123,7 +124,7 @@ def _targeted_and_successor_sums(
         assert item.spans is not None
         for occurrence, (query, prompt_key) in enumerate(
             zip(
-                item.spans.trace_index_positions,
+                item.spans.trace_query_positions,
                 item.prompt_needle_positions,
                 strict=True,
             )
@@ -134,7 +135,7 @@ def _targeted_and_successor_sums(
                 )
                 targeted_n[layer] += 1
             marker_query = item.spans.trace_marker_positions[occurrence]
-            past_groups = item.spans.trace_index_token_groups[: occurrence + 1]
+            past_groups = item.spans.trace_query_token_groups[: occurrence + 1]
             current_group = past_groups[-1]
             for layer, weights in enumerate(output.attentions):
                 current_mass = weights[row, :, marker_query, list(current_group)].sum(-1)
@@ -201,10 +202,10 @@ def _fixed_head_k_rows(
         assert item.spans is not None and item.count is not None
         for occurrence, (index_query, prompt_key, marker_query, group) in enumerate(
             zip(
-                item.spans.trace_index_positions,
+                item.spans.trace_query_positions,
                 item.prompt_needle_positions,
                 item.spans.trace_marker_positions,
-                item.spans.trace_index_token_groups,
+                item.spans.trace_query_token_groups,
                 strict=True,
             ),
             start=1,
@@ -245,7 +246,7 @@ def _target_positions_and_ids(
 ) -> tuple[list[int], list[int], list[int]]:
     assert item.spans is not None and item.count is not None
     if outcome == "targeted_retrieval":
-        queries = list(item.spans.trace_index_positions)
+        queries = list(item.spans.trace_query_positions)
         targets = [item.input_ids[position] for position in item.spans.trace_marker_positions]
         ks = list(range(1, int(item.count) + 1))
         return queries, targets, ks
@@ -253,7 +254,14 @@ def _target_positions_and_ids(
         queries = list(item.spans.trace_marker_positions)
         targets = []
         for k in range(1, int(item.count) + 1):
-            token = vocab.number_tokens(k + 1)[0] if k < int(item.count) else "</Think>"
+            if k < int(item.count):
+                token = (
+                    "<Sep>"
+                    if vocab.trace_format == "separator"
+                    else vocab.number_tokens(k + 1)[0]
+                )
+            else:
+                token = "</Think>"
             targets.append(vocab.token_to_id[token])
         return queries, targets, list(range(1, int(item.count) + 1))
     raise ValueError(outcome)
@@ -306,7 +314,7 @@ def _prediction_rows(
         # Semantic k->k+1 exactness spans all digit tokens in v21.  In v20 this
         # reduces to the single marker-position prediction above.
         for k in range(1, int(item.count)):
-            next_group = item.spans.trace_index_token_groups[k]
+            next_group = item.spans.trace_query_token_groups[k]
             exact = all(
                 int(output.logits[row, position - 1].argmax()) == item.input_ids[position]
                 for position in next_group
@@ -458,7 +466,7 @@ def _causal_rows(
         for item in items:
             assert item.spans is not None
             positions.append(
-                list(item.spans.trace_index_positions)
+                list(item.spans.trace_query_positions)
                 if role == "targeted_retrieval"
                 else list(item.spans.trace_marker_positions)
             )
@@ -509,6 +517,8 @@ def build_training_token_exposure(cfg: V20Config, run_dir: Path) -> pd.DataFrame
             semantic = sum(value for count, value in accepted.items() if count >= k)
             continue_exposure = sum(value for count, value in accepted.items() if count > k)
             width = len(str(k)) if cfg.count_tokenization == "digitwise" else 1
+            query_width = 1 if cfg.trace_format == "separator" else width
+            query_exposure = semantic * query_width if thinking else 0
             rows.append(
                 {
                     "position_encoding": item.position_encoding,
@@ -516,7 +526,13 @@ def build_training_token_exposure(cfg: V20Config, run_dir: Path) -> pd.DataFrame
                     "step": int(item.step),
                     "k": k,
                     "accepted_examples_with_total_at_least_k": semantic,
-                    "trace_index_token_exposure": semantic * width if thinking else 0,
+                    "trace_query_token_exposure": query_exposure,
+                    "trace_index_token_exposure": (
+                        query_exposure if thinking and cfg.trace_format == "indexed" else 0
+                    ),
+                    "trace_delimiter_token_exposure": (
+                        query_exposure if thinking and cfg.trace_format == "separator" else 0
+                    ),
                     "marker_token_exposure": semantic if thinking else 0,
                     "continue_target_exposure_after_marker_k": continue_exposure if thinking else 0,
                     "close_target_exposure_after_marker_k": accepted[k] if thinking else 0,
@@ -527,7 +543,12 @@ def build_training_token_exposure(cfg: V20Config, run_dir: Path) -> pd.DataFrame
     return pd.DataFrame(rows)
 
 
-def plot_training_token_exposure(frame: pd.DataFrame, run_dir: Path) -> None:
+def plot_training_token_exposure(
+    frame: pd.DataFrame,
+    run_dir: Path,
+    *,
+    trace_format: str = "indexed",
+) -> None:
     if frame.empty:
         return
     sns.set_theme(style="whitegrid", context="notebook")
@@ -536,7 +557,7 @@ def plot_training_token_exposure(frame: pd.DataFrame, run_dir: Path) -> None:
     for row, mode in enumerate(modes):
         subset = frame[frame["mode"] == mode]
         heat_metric = (
-            "trace_index_token_exposure"
+            "trace_query_token_exposure"
             if mode == "thinking"
             else "final_answer_digit_token_exposure"
         )
@@ -550,7 +571,13 @@ def plot_training_token_exposure(frame: pd.DataFrame, run_dir: Path) -> None:
         final_step = int(subset["step"].max())
         final = subset[subset["step"] == final_step].sort_values("k")
         if mode == "thinking":
-            axes[row, 1].plot(final["k"], final["trace_index_token_exposure"], marker="o", label="index token")
+            query_label = "separator token" if trace_format == "separator" else "index token"
+            axes[row, 1].plot(
+                final["k"],
+                final["trace_query_token_exposure"],
+                marker="o",
+                label=query_label,
+            )
             axes[row, 1].plot(final["k"], final["continue_target_exposure_after_marker_k"], marker="o", label="continue target")
             axes[row, 1].plot(final["k"], final["close_target_exposure_after_marker_k"], marker="o", label="close target")
         else:
@@ -725,7 +752,8 @@ def _phase_candidates(
                     sustained = int(steps[index])
                     break
             mode, outcome, coordinate = values
-            exposure_value = math.nan
+            query_exposure_value = math.nan
+            index_exposure_value = math.nan
             if axis == "k" and not math.isnan(sustained):
                 match = exposure[
                     (exposure["mode"] == mode)
@@ -733,7 +761,12 @@ def _phase_candidates(
                     & (exposure["step"] == int(sustained))
                 ]
                 if not match.empty:
-                    exposure_value = float(match.iloc[-1]["trace_index_token_exposure"])
+                    query_exposure_value = float(
+                        match.iloc[-1]["trace_query_token_exposure"]
+                    )
+                    index_exposure_value = float(
+                        match.iloc[-1]["trace_index_token_exposure"]
+                    )
             rows.append(
                 {
                     "evidence_family": "behavior",
@@ -746,7 +779,8 @@ def _phase_candidates(
                     "change_statistic": float(slopes[steep]),
                     "criterion": "maximum positive accuracy change per 100 steps",
                     "sustained_80pct_step": sustained,
-                    "trace_index_token_exposure_at_sustained_step": exposure_value,
+                    "trace_query_token_exposure_at_sustained_step": query_exposure_value,
+                    "trace_index_token_exposure_at_sustained_step": index_exposure_value,
                     "interpretation": "behavioral transition candidate only",
                 }
             )
@@ -776,6 +810,7 @@ def _phase_candidates(
                 "change_statistic": float(slopes[index]),
                 "criterion": "maximum positive role-score change per 100 steps",
                 "sustained_80pct_step": math.nan,
+                "trace_query_token_exposure_at_sustained_step": math.nan,
                 "trace_index_token_exposure_at_sustained_step": math.nan,
                 "interpretation": "descriptive head-emergence candidate",
             }
@@ -807,6 +842,7 @@ def _phase_candidates(
                     "change_statistic": float(slopes[index]),
                     "criterion": "largest absolute signed geometry change per 100 steps",
                     "sustained_80pct_step": math.nan,
+                    "trace_query_token_exposure_at_sustained_step": math.nan,
                     "trace_index_token_exposure_at_sustained_step": math.nan,
                     "interpretation": "largest absolute geometry reorganization",
                 }
@@ -831,6 +867,7 @@ def _phase_candidates(
                 "change_statistic": causal_change,
                 "criterion": "most negative local-ablation margin change among milestones",
                 "sustained_80pct_step": math.nan,
+                "trace_query_token_exposure_at_sustained_step": math.nan,
                 "trace_index_token_exposure_at_sustained_step": math.nan,
                 "interpretation": "milestone with largest negative local-ablation effect",
             }
@@ -901,6 +938,9 @@ def run_phase_transition_analysis(
     geometry_rows: list[dict[str, Any]] = []
     cloud_rows: list[dict[str, Any]] = []
     causal_rows: list[dict[str, Any]] = []
+    trace_query_site = (
+        "trace_separator" if cfg.trace_format == "separator" else "trace_index"
+    )
     for mode in cfg.modes:
         entries = checkpoint_steps(run_dir, "rope", mode)
         by_shard: dict[Path, list[int]] = {}
@@ -940,8 +980,8 @@ def run_phase_transition_analysis(
                             )
                             labels.setdefault(key, []).append(int(item.count))
                             if mode == "thinking":
-                                for k, position in enumerate(item.spans.trace_index_positions, start=1):
-                                    key = ("trace_index", layer)
+                                for k, position in enumerate(item.spans.trace_query_positions, start=1):
+                                    key = (trace_query_site, layer)
                                     vectors.setdefault(key, []).append(
                                         hidden[row, position].detach().float().cpu().numpy()
                                     )
@@ -1033,7 +1073,7 @@ def run_phase_transition_analysis(
         exposure,
     )
     _atomic_csv(candidates, table_dir / "phase_transition_candidates.csv")
-    plot_training_token_exposure(exposure, run_dir)
+    plot_training_token_exposure(exposure, run_dir, trace_format=cfg.trace_format)
     plot_phase_diagnostics(
         tables["dense_behavior_by_count.csv"],
         tables["dense_fixed_head_dynamics.csv"],
@@ -1048,6 +1088,7 @@ def run_phase_transition_analysis(
     _atomic_json(
         {
             "version": cfg.version,
+            "trace_format": cfg.trace_format,
             "checkpoint_cadence": cfg.checkpoint_every,
             "head_selection_split": "first heldout examples per count",
             "reporting_split": "subsequent disjoint heldout examples per count",
@@ -1056,11 +1097,22 @@ def run_phase_transition_analysis(
                 role: list(head) for role, head in controls.items()
             },
             "definitions": {
-                "targeted_retrieval_score": "mean attention mass from trace-index anchor k to matching prompt needle k",
-                "marker_successor_score": "mean absolute attention mass from marker k to the immediately preceding index-token group k",
+                "targeted_retrieval_score": (
+                    "mean attention mass from trace-query anchor k to matching prompt needle k; "
+                    "the query anchor is the repeated <Sep> token in separator traces"
+                    if cfg.trace_format == "separator"
+                    else "mean attention mass from trace-index anchor k to matching prompt needle k"
+                ),
+                "marker_successor_score": (
+                    "mean absolute attention mass from marker k to the immediately preceding "
+                    "trace-query token group k"
+                ),
                 "adjacent_between_over_within": "mean squared adjacent-centroid distance divided by mean within-k squared scatter",
                 "path_straightness": "distance from centroid k=1 to k=max divided by sum of adjacent-centroid distances",
-                "token_exposure_k": "cumulative accepted training examples whose total count n is at least k, multiplied by the number of tokens used to spell k when applicable",
+                "token_exposure_k": (
+                    "cumulative accepted training examples whose total count n is at least k, "
+                    "multiplied by the trace-query width (one for separator traces)"
+                ),
                 "transition_candidate": "maximum adjacent-checkpoint slope; behavioral 80% onset additionally requires three consecutive snapshots at or above 0.8",
             },
             "storage_policy": "aggregate every snapshot; sample clouds and local causal interventions only at phase_cloud_steps; no raw attention tensor is written",

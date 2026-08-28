@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import argparse
 
-from .config import ALL_MODEL_VARIANTS, preset_config
+from .config import ALL_MODEL_VARIANTS, VERSION_SPECS, preset_config
 
 
 def build_parser(version: str = "v20") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description=f"Run {version}: query-first RoPE synthetic counting (counts 1..30)"
+        description=(
+            f"Run {version}: query-first RoPE synthetic counting (counts 1..30; "
+            f"trace={VERSION_SPECS[version]['trace_format']})"
+        )
     )
     parser.add_argument("--preset", choices=("debug", "main"), default="debug")
     parser.add_argument(
@@ -101,12 +104,18 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         "candidate_filter_max_attempts",
     )
     overrides = {name: getattr(args, name) for name in names if getattr(args, name) is not None}
+    version_spec = VERSION_SPECS[version]
     overrides.update(
         version=version,
-        count_tokenization="atomic" if version == "v20" else "digitwise",
+        count_tokenization=version_spec["count_tokenization"],
+        trace_format=version_spec["trace_format"],
     )
     if args.model_variant is not None:
         overrides["enabled_model_variants"] = tuple(args.model_variant)
+    elif version == "v22":
+        # The nonthinking objective is identical to v20, so the canonical v22
+        # run trains only the changed separator-trace Thinking model.
+        overrides["enabled_model_variants"] = ("rope/thinking",)
     cfg = preset_config(args.preset, **overrides)
     from .pipeline import run_v20_pipeline
 

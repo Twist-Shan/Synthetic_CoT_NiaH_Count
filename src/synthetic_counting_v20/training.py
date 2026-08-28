@@ -570,7 +570,7 @@ def teacher_forced_task_evaluation(
             assert item.spans is not None and example.count is not None
             predicted, final_exact = _teacher_forced_number(logits[row_index], item, vocab)
             marker_correct: list[float] = []
-            index_correct: list[float] = []
+            query_correct: list[float] = []
             marker_correct_by_token: dict[str, list[float]] = {}
             if mode == "thinking":
                 for marker_position in item.spans.trace_marker_positions:
@@ -580,8 +580,8 @@ def teacher_forced_task_evaluation(
                     )
                     marker_correct.append(correct)
                     marker_correct_by_token.setdefault(item.tokens[marker_position], []).append(correct)
-                for group in item.spans.trace_index_token_groups:
-                    index_correct.append(
+                for group in item.spans.trace_query_token_groups:
+                    query_correct.append(
                         float(
                             all(
                                 int(logits[row_index, position - 1].argmax())
@@ -609,7 +609,17 @@ def teacher_forced_task_evaluation(
                 "tf_pred_count": predicted,
                 "tf_final_accuracy": final_exact,
                 "tf_trace_marker_accuracy": float(np.mean(marker_correct)) if marker_correct else np.nan,
-                "tf_trace_index_accuracy": float(np.mean(index_correct)) if index_correct else np.nan,
+                "tf_trace_query_accuracy": float(np.mean(query_correct)) if query_correct else np.nan,
+                "tf_trace_index_accuracy": (
+                    float(np.mean(query_correct))
+                    if query_correct and vocab.trace_format == "indexed"
+                    else np.nan
+                ),
+                "tf_trace_delimiter_accuracy": (
+                    float(np.mean(query_correct))
+                    if query_correct and vocab.trace_format == "separator"
+                    else np.nan
+                ),
                 "frequency_baseline_count": baseline,
                 "frequency_baseline_accuracy": float(baseline == example.count),
             }
@@ -637,29 +647,58 @@ def _parse_generation(tokens: list[str], vocab: V20Vocab, example: V20Example, m
             cursor += 1
         predicted = vocab.decode_number_tokens(number)
     trace: list[str] = []
-    if mode == "thinking" and "<Think>" in tokens:
+    trace_started = mode == "thinking" and "<Think>" in tokens
+    trace_closed = False
+    if trace_started:
         start = tokens.index("<Think>") + 1
-        end = tokens.index("</Think>") if "</Think>" in tokens[start:] else len(tokens)
+        trace_closed = "</Think>" in tokens[start:]
+        end = tokens.index("</Think>", start) if trace_closed else len(tokens)
         trace = tokens[start:end]
-    expected = [
-        token
-        for index, marker in enumerate(example.needle_markers, start=1)
-        for token in (*vocab.number_tokens(index), marker)
-    ]
+    if vocab.trace_format == "separator":
+        expected = [
+            token
+            for marker in example.needle_markers
+            for token in ("<Sep>", marker)
+        ]
+    else:
+        expected = [
+            token
+            for index, marker in enumerate(example.needle_markers, start=1)
+            for token in (*vocab.number_tokens(index), marker)
+        ]
     generated_markers: list[str] = []
     cursor = 0
-    while cursor < len(trace):
-        number: list[str] = []
-        while cursor < len(trace) and trace[cursor] in vocab.numbers:
-            number.append(trace[cursor])
+    # A generation that never enters the trace is not a well-formed empty
+    # trace.  Closure is reported separately so syntax and stopping can be
+    # diagnosed independently.
+    trace_format_valid = trace_started
+    if vocab.trace_format == "separator":
+        while cursor < len(trace):
+            if trace[cursor] != "<Sep>" or cursor + 1 >= len(trace):
+                trace_format_valid = False
+                break
+            marker = trace[cursor + 1]
+            if marker not in vocab.character_tokens:
+                trace_format_valid = False
+                break
+            generated_markers.append(marker)
+            cursor += 2
+    else:
+        while cursor < len(trace):
+            number: list[str] = []
+            while cursor < len(trace) and trace[cursor] in vocab.numbers:
+                number.append(trace[cursor])
+                cursor += 1
+            if not number or cursor >= len(trace):
+                trace_format_valid = False
+                break
+            marker = trace[cursor]
             cursor += 1
-        if not number or cursor >= len(trace):
-            break
-        marker = trace[cursor]
-        cursor += 1
-        if marker not in vocab.character_tokens:
-            break
-        generated_markers.append(marker)
+            if marker not in vocab.character_tokens:
+                trace_format_valid = False
+                break
+            generated_markers.append(marker)
+    trace_format_valid = trace_format_valid and cursor == len(trace)
     matches = sum(
         int(index < len(generated_markers) and generated_markers[index] == marker)
         for index, marker in enumerate(example.needle_markers)
@@ -675,6 +714,28 @@ def _parse_generation(tokens: list[str], vocab: V20Vocab, example: V20Example, m
         "trace_exact": float(trace == expected) if mode == "thinking" else np.nan,
         "trace_ordered_marker_accuracy": (
             matches / max(1, int(example.count)) if mode == "thinking" else np.nan
+        ),
+        "trace_generated_marker_count": (
+            len(generated_markers) if mode == "thinking" else np.nan
+        ),
+        "trace_marker_count_accuracy": (
+            float(len(generated_markers) == int(example.count))
+            if mode == "thinking"
+            else np.nan
+        ),
+        "trace_format_valid": (
+            float(trace_format_valid) if mode == "thinking" else np.nan
+        ),
+        "trace_closed": float(trace_closed) if mode == "thinking" else np.nan,
+        "trace_delimiter_count": (
+            trace.count("<Sep>")
+            if mode == "thinking" and vocab.trace_format == "separator"
+            else np.nan
+        ),
+        "trace_delimiter_count_accuracy": (
+            float(trace.count("<Sep>") == int(example.count))
+            if mode == "thinking" and vocab.trace_format == "separator"
+            else np.nan
         ),
         # Backward-compatible alias. This is positional accuracy, not set-level recall.
         "trace_marker_recall": matches / max(1, int(example.count)) if mode == "thinking" else np.nan,
@@ -1496,14 +1557,18 @@ def train_v20_variant(
 def summarize_learning_tables(run_dir: Path) -> None:
     detail = _read_table(run_dir / "tables" / "eval_detail.csv")
     if not detail.empty:
+        tf_aggregations: dict[str, tuple[str, str]] = {
+            "tf_final_accuracy": ("tf_final_accuracy", "mean"),
+            "tf_trace_marker_accuracy": ("tf_trace_marker_accuracy", "mean"),
+            "tf_trace_index_accuracy": ("tf_trace_index_accuracy", "mean"),
+            "frequency_baseline_accuracy": ("frequency_baseline_accuracy", "mean"),
+        }
+        for name in ("tf_trace_query_accuracy", "tf_trace_delimiter_accuracy"):
+            if name in detail:
+                tf_aggregations[name] = (name, "mean")
         by_count = detail.groupby(
             ["position_encoding", "mode", "step", "count", "count_bin"], as_index=False
-        ).agg(
-            tf_final_accuracy=("tf_final_accuracy", "mean"),
-            tf_trace_marker_accuracy=("tf_trace_marker_accuracy", "mean"),
-            tf_trace_index_accuracy=("tf_trace_index_accuracy", "mean"),
-            frequency_baseline_accuracy=("frequency_baseline_accuracy", "mean"),
-        )
+        ).agg(**tf_aggregations)
         atomic_csv(by_count, run_dir / "tables" / "eval_by_count.csv")
         by_set = detail.groupby(
             ["position_encoding", "mode", "step", "set_id", "set_frequency_bin"], as_index=False
@@ -1519,18 +1584,27 @@ def summarize_learning_tables(run_dir: Path) -> None:
             )
         if "trace_ordered_marker_accuracy" not in ar:
             ar["trace_ordered_marker_accuracy"] = ar["trace_marker_recall"]
+        ar_aggregations: dict[str, tuple[str, str]] = {
+            "ar_final_accuracy": ("ar_accuracy", "mean"),
+            "ar_answer_rate": ("ar_answered", "mean"),
+            "ar_abs_error_answered_only": ("ar_abs_error", "mean"),
+            "ar_abs_error": ("ar_abs_error", "mean"),
+            "ar_abs_error_with_missing_penalty": ("ar_abs_error_with_missing_penalty", "mean"),
+            "trace_exact": ("trace_exact", "mean"),
+            "trace_ordered_marker_accuracy": ("trace_ordered_marker_accuracy", "mean"),
+            "trace_marker_recall": ("trace_marker_recall", "mean"),
+        }
+        for name in (
+            "trace_marker_count_accuracy",
+            "trace_format_valid",
+            "trace_closed",
+            "trace_delimiter_count_accuracy",
+        ):
+            if name in ar:
+                ar_aggregations[name] = (name, "mean")
         summary = ar.groupby(
             ["position_encoding", "mode", "step", "count"], as_index=False
-        ).agg(
-            ar_final_accuracy=("ar_accuracy", "mean"),
-            ar_answer_rate=("ar_answered", "mean"),
-            ar_abs_error_answered_only=("ar_abs_error", "mean"),
-            ar_abs_error=("ar_abs_error", "mean"),
-            ar_abs_error_with_missing_penalty=("ar_abs_error_with_missing_penalty", "mean"),
-            trace_exact=("trace_exact", "mean"),
-            trace_ordered_marker_accuracy=("trace_ordered_marker_accuracy", "mean"),
-            trace_marker_recall=("trace_marker_recall", "mean"),
-        )
+        ).agg(**ar_aggregations)
         atomic_csv(summary, run_dir / "tables" / "autoregressive_by_count.csv")
     final_ar = _read_table(run_dir / "tables" / "final_autoregressive_detail.csv")
     if not final_ar.empty:
@@ -1538,20 +1612,29 @@ def summarize_learning_tables(run_dir: Path) -> None:
             final_ar["ar_answered"] = final_ar["ar_pred_count"].notna().astype(float)
         if "trace_ordered_marker_accuracy" not in final_ar:
             final_ar["trace_ordered_marker_accuracy"] = final_ar["trace_marker_recall"]
-        final_by_count = final_ar.groupby(
-            ["position_encoding", "mode", "step", "count"], as_index=False
-        ).agg(
-            examples=("ar_accuracy", "size"),
-            ar_final_accuracy=("ar_accuracy", "mean"),
-            ar_answer_rate=("ar_answered", "mean"),
-            ar_abs_error_answered_only=("ar_abs_error", "mean"),
-            ar_abs_error_with_missing_penalty=(
+        final_aggregations: dict[str, tuple[str, str]] = {
+            "examples": ("ar_accuracy", "size"),
+            "ar_final_accuracy": ("ar_accuracy", "mean"),
+            "ar_answer_rate": ("ar_answered", "mean"),
+            "ar_abs_error_answered_only": ("ar_abs_error", "mean"),
+            "ar_abs_error_with_missing_penalty": (
                 "ar_abs_error_with_missing_penalty",
                 "mean",
             ),
-            trace_exact=("trace_exact", "mean"),
-            trace_ordered_marker_accuracy=("trace_ordered_marker_accuracy", "mean"),
-        )
+            "trace_exact": ("trace_exact", "mean"),
+            "trace_ordered_marker_accuracy": ("trace_ordered_marker_accuracy", "mean"),
+        }
+        for name in (
+            "trace_marker_count_accuracy",
+            "trace_format_valid",
+            "trace_closed",
+            "trace_delimiter_count_accuracy",
+        ):
+            if name in final_ar:
+                final_aggregations[name] = (name, "mean")
+        final_by_count = final_ar.groupby(
+            ["position_encoding", "mode", "step", "count"], as_index=False
+        ).agg(**final_aggregations)
         atomic_csv(final_by_count, run_dir / "tables" / "final_autoregressive_by_count.csv")
 
         rows: list[dict[str, Any]] = []
@@ -1583,6 +1666,16 @@ def summarize_learning_tables(run_dir: Path) -> None:
                     "trace_ordered_marker_accuracy": float(
                         group["trace_ordered_marker_accuracy"].mean()
                     ),
+                    **{
+                        name: float(group[name].mean())
+                        for name in (
+                            "trace_marker_count_accuracy",
+                            "trace_format_valid",
+                            "trace_closed",
+                            "trace_delimiter_count_accuracy",
+                        )
+                        if name in group
+                    },
                 }
             )
         atomic_csv(
