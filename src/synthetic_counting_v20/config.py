@@ -24,6 +24,13 @@ VERSION_SPECS = {
     # v22 is the matched v20 no-index control.  It keeps atomic final answers,
     # but every ordinal trace token is replaced one-for-one by a fixed <Sep>.
     "v22": {"count_tokenization": "atomic", "trace_format": "separator"},
+    # v23 preserves the v22 grammar and reruns both modes with an 8x weight on
+    # the final count target.  This isolates loss dilution from de-indexing.
+    "v23": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "final_count_loss_weight": 8.0,
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = ("natural", "uniform")
@@ -35,13 +42,15 @@ def _float_tag(value: float) -> str:
 
 @dataclass(frozen=True)
 class V20Config:
-    """Shared v20/v21/v22 configuration.
+    """Shared v20/v21/v22/v23 configuration.
 
     v20 and v21 are deliberately paired.  The only task-grammar difference is
     ``count_tokenization``: v20 uses one atomic token per integer, whereas v21
     renders every trace index and final answer with shared decimal digit tokens.
     v22 is a second matched control: it keeps v20's atomic final answer while
     replacing every explicit trace index with the same separator token.
+    v23 keeps that separator trace and trains both modes with an 8x final-count
+    loss weight.
     """
 
     version: str = "v20"
@@ -194,9 +203,9 @@ class V20Config:
                 f"{self.version} requires trace_format={expected_trace_format!r}"
             )
         if self.query_layout != "query_first":
-            raise ValueError("v20/v21/v22 require query-first sequence construction")
+            raise ValueError("v20/v21/v22/v23 require query-first sequence construction")
         if self.needle_set_size != 3:
-            raise ValueError("v20/v21/v22 require exactly three distinct characters per needle set")
+            raise ValueError("v20/v21/v22/v23 require exactly three distinct characters per needle set")
         if self.needle_pool_size <= 0 or self.needle_pool_frequency_bins <= 0:
             raise ValueError("needle pool size and number of bins must be positive")
         if not 0.0 < self.needle_pool_frequency_threshold <= 1.0:
@@ -224,7 +233,7 @@ class V20Config:
         if self.seq_len < 2:
             raise ValueError("seq_len must be at least two")
         if (self.n_layer, self.n_head, self.n_embd, self.n_inner) != (4, 4, 256, 1024):
-            raise ValueError("v20/v21/v22 require 4 layers, 4 heads, d_model=256, MLP=1024")
+            raise ValueError("v20/v21/v22/v23 require 4 layers, 4 heads, d_model=256, MLP=1024")
         if self.n_embd % self.n_head:
             raise ValueError("n_embd must be divisible by n_head")
         if self.max_render_len > self.n_positions:
@@ -264,9 +273,9 @@ class V20Config:
                 "enabled_model_variants"
             )
         if self.noise_source != "shakespeare_char" or self.task_type != "target_character_set":
-            raise ValueError("v20/v21/v22 require the Shakespeare target-character-set task")
+            raise ValueError("v20/v21/v22/v23 require the Shakespeare target-character-set task")
         if self.loss_scope != "all_sequence":
-            raise ValueError("v20/v21/v22 require all-sequence next-token loss metadata")
+            raise ValueError("v20/v21/v22/v23 require all-sequence next-token loss metadata")
         if self.precision not in {"float32", "bf16"}:
             raise ValueError("precision must be float32 or bf16")
         if self.snapshot_dtype not in {"float16", "bfloat16", "float32"}:
@@ -279,6 +288,15 @@ class V20Config:
             value = float(getattr(self, name))
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be finite and strictly positive")
+        canonical_final_weight = version_spec.get("final_count_loss_weight")
+        if (
+            canonical_final_weight is not None
+            and float(self.final_count_loss_weight) != float(canonical_final_weight)
+        ):
+            raise ValueError(
+                f"{self.version} requires final_count_loss_weight="
+                f"{canonical_final_weight:g}"
+            )
         if type(self.max_steps_for_language_pred) is not int or self.max_steps_for_language_pred < 0:
             raise ValueError("max_steps_for_language_pred must be a nonnegative integer")
         if self.max_steps_for_language_pred < self.train_steps and self.task_occurrence_ratio == 0:

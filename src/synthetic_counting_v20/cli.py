@@ -69,7 +69,8 @@ def build_parser(version: str = "v20") -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
-    args = build_parser(version).parse_args(argv)
+    parser = build_parser(version)
+    args = parser.parse_args(argv)
     names = (
         "device",
         "seed",
@@ -105,17 +106,35 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
     )
     overrides = {name: getattr(args, name) for name in names if getattr(args, name) is not None}
     version_spec = VERSION_SPECS[version]
+    canonical_final_weight = version_spec.get("final_count_loss_weight")
+    if (
+        canonical_final_weight is not None
+        and args.final_count_loss_weight is not None
+        and float(args.final_count_loss_weight) != float(canonical_final_weight)
+    ):
+        parser.error(
+            f"{version} fixes --final-count-loss-weight at {canonical_final_weight:g}"
+        )
     overrides.update(
         version=version,
         count_tokenization=version_spec["count_tokenization"],
         trace_format=version_spec["trace_format"],
     )
+    if canonical_final_weight is not None:
+        overrides["final_count_loss_weight"] = canonical_final_weight
     if args.model_variant is not None:
         overrides["enabled_model_variants"] = tuple(args.model_variant)
     elif version == "v22":
         # The nonthinking objective is identical to v20, so the canonical v22
         # run trains only the changed separator-trace Thinking model.
         overrides["enabled_model_variants"] = ("rope/thinking",)
+    elif version == "v23":
+        # Both objectives are retrained at the same answer-token weight so the
+        # within-version Thinking/Non-thinking comparison remains controlled.
+        overrides["enabled_model_variants"] = (
+            "rope/nonthinking",
+            "rope/thinking",
+        )
     cfg = preset_config(args.preset, **overrides)
     from .pipeline import run_v20_pipeline
 

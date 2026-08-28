@@ -285,7 +285,7 @@ def run_v20_pipeline(
                                     "reason": (
                                         "The full v10-compatible causal suite requires the main indexed v20 run. "
                                         "Debug runs have too few disjoint examples, v21 uses digit-wise numbers, "
-                                        "and v22 removes the numeric index interventions assumed by that suite. "
+                                        "and v22/v23 remove the numeric index interventions assumed by that suite. "
                                         "Phase-transition local head interventions remain available."
                                     ),
                                 },
