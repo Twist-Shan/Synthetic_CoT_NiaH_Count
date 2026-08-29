@@ -16,6 +16,7 @@ def preset_config(preset: str = "debug", **overrides: Any) -> V24Config:
         count_tokenization="atomic",
         trace_format="separator",
         count_max_threshold=10,
+        needle_pool_frequency_threshold=10.0 / 256.0,
         final_count_loss_weight=1.0,
         cot_trace_loss_weight=1.0,
         enabled_model_variants=("rope/nonthinking", "rope/thinking"),

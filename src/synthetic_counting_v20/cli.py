@@ -108,6 +108,7 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
     version_spec = VERSION_SPECS[version]
     canonical_final_weight = version_spec.get("final_count_loss_weight")
     canonical_count_max = version_spec.get("count_max_threshold")
+    canonical_pool_threshold = version_spec.get("needle_pool_frequency_threshold")
     if (
         canonical_final_weight is not None
         and args.final_count_loss_weight is not None
@@ -124,6 +125,16 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         parser.error(
             f"{version} fixes --count-max-threshold at {canonical_count_max}"
         )
+    if (
+        canonical_pool_threshold is not None
+        and args.needle_pool_frequency_threshold is not None
+        and float(args.needle_pool_frequency_threshold)
+        != float(canonical_pool_threshold)
+    ):
+        parser.error(
+            f"{version} fixes --needle-pool-frequency-threshold at "
+            f"{canonical_pool_threshold:g}"
+        )
     overrides.update(
         version=version,
         count_tokenization=version_spec["count_tokenization"],
@@ -133,6 +144,8 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         overrides["final_count_loss_weight"] = canonical_final_weight
     if canonical_count_max is not None:
         overrides["count_max_threshold"] = canonical_count_max
+    if canonical_pool_threshold is not None:
+        overrides["needle_pool_frequency_threshold"] = canonical_pool_threshold
     if args.model_variant is not None:
         overrides["enabled_model_variants"] = tuple(args.model_variant)
     elif version == "v22":

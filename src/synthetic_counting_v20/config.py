@@ -38,6 +38,10 @@ VERSION_SPECS = {
         "count_tokenization": "atomic",
         "trace_format": "separator",
         "count_max_threshold": 10,
+        # Keep the expected target-set count within the accepted range.  The
+        # v22 cap (0.12) admits triples with ~31 expected hits per 256-char
+        # window, some of which have no valid <=10 window in a corpus split.
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
     },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
@@ -317,6 +321,16 @@ class V20Config:
         ):
             raise ValueError(
                 f"{self.version} requires count_max_threshold={canonical_count_max}"
+            )
+        canonical_pool_threshold = version_spec.get("needle_pool_frequency_threshold")
+        if (
+            canonical_pool_threshold is not None
+            and float(self.needle_pool_frequency_threshold)
+            != float(canonical_pool_threshold)
+        ):
+            raise ValueError(
+                f"{self.version} requires needle_pool_frequency_threshold="
+                f"{canonical_pool_threshold:g}"
             )
         if type(self.max_steps_for_language_pred) is not int or self.max_steps_for_language_pred < 0:
             raise ValueError("max_steps_for_language_pred must be a nonnegative integer")

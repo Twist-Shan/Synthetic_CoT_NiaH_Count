@@ -41,9 +41,12 @@ def build() -> Path:
 This is a capacity/class-resolution control for v22. It keeps the 256-character
 Shakespeare context, three-character query, RoPE model, atomic final answer,
 separator trace, unit loss weights, seed, optimizer, and 10,000-step schedule.
-The only task change is that the accepted total target-character count is 1–10
-instead of 1–30. Because that changes the training distribution, both
-Non-thinking and Thinking are retrained from the same seed.
+The accepted total target-character count is 1–10 instead of 1–30. The
+needle-set frequency cap is correspondingly set to 10/256, so every selected
+triple has at most ten expected hits per context; this avoids conditioning the
+low-count experiment on extremely rare low-count windows from common triples.
+Because these changes alter the data distribution, both Non-thinking and
+Thinking are retrained from the same seed and pool.
 
 After training, the notebook computes running-count and final-count NCC
 separately for both modes. Layer selection and centroids use discovery data;
@@ -55,6 +58,11 @@ reported NCC uses a disjoint confirmation set. Dense snapshots are saved every
     _replace(notebook, "run_v22", "run_v24", expected=1)
     _replace(notebook, 'VERSION = "v22"', 'VERSION = "v24"')
     _replace(notebook, "COUNT_MAX_THRESHOLD = 30", "COUNT_MAX_THRESHOLD = 10")
+    _replace(
+        notebook,
+        "NEEDLE_POOL_FREQUENCY_THRESHOLD = 0.12",
+        "NEEDLE_POOL_FREQUENCY_THRESHOLD = 10.0 / 256.0",
+    )
     _replace(notebook, "    COUNT_MAX_THRESHOLD = 4\n", "")
     _replace(
         notebook,
@@ -63,6 +71,7 @@ reported NCC uses a disjoint confirmation set. Dense snapshots are saved every
         '    "rope/nonthinking", "rope/thinking"\n'
         ")\n"
         "assert PLANNED_CONFIG.count_max_threshold == 10\n"
+        "assert PLANNED_CONFIG.needle_pool_frequency_threshold == 10.0 / 256.0\n"
         "assert PLANNED_CONFIG.final_count_loss_weight == 1.0\n"
         "assert PLANNED_CONFIG.cot_trace_loss_weight == 1.0",
     )
