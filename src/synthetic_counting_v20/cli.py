@@ -59,9 +59,8 @@ def build_parser(version: str = "v20") -> argparse.ArgumentParser:
         choices=ALL_MODEL_VARIANTS,
         default=None,
     )
-    parser.add_argument(
-        "--out-root", default=f"runs/synthetic_counting_{version.replace('-', '_')}"
-    )
+    safe_version = version.replace("-", "_").replace(".", "_")
+    parser.add_argument("--out-root", default=f"runs/synthetic_counting_{safe_version}")
     parser.add_argument("--run-name", default=None)
     parser.add_argument("--checkpoint-sync-root", default=None)
     parser.add_argument("--skip-completed", action="store_true")
@@ -109,6 +108,7 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
     canonical_final_weight = version_spec.get("final_count_loss_weight")
     canonical_count_max = version_spec.get("count_max_threshold")
     canonical_pool_threshold = version_spec.get("needle_pool_frequency_threshold")
+    canonical_count_distribution = version_spec.get("training_count_distribution")
     if (
         canonical_final_weight is not None
         and args.final_count_loss_weight is not None
@@ -135,6 +135,15 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
             f"{version} fixes --needle-pool-frequency-threshold at "
             f"{canonical_pool_threshold:g}"
         )
+    if (
+        canonical_count_distribution is not None
+        and args.training_count_distribution is not None
+        and args.training_count_distribution != canonical_count_distribution
+    ):
+        parser.error(
+            f"{version} fixes --training-count-distribution at "
+            f"{canonical_count_distribution}"
+        )
     overrides.update(
         version=version,
         count_tokenization=version_spec["count_tokenization"],
@@ -146,13 +155,15 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         overrides["count_max_threshold"] = canonical_count_max
     if canonical_pool_threshold is not None:
         overrides["needle_pool_frequency_threshold"] = canonical_pool_threshold
+    if canonical_count_distribution is not None:
+        overrides["training_count_distribution"] = canonical_count_distribution
     if args.model_variant is not None:
         overrides["enabled_model_variants"] = tuple(args.model_variant)
     elif version == "v22":
         # The nonthinking objective is identical to v20, so the canonical v22
         # run trains only the changed separator-trace Thinking model.
         overrides["enabled_model_variants"] = ("rope/thinking",)
-    elif version in {"v23", "v24"}:
+    elif version in {"v23", "v24", "v24.2"}:
         # Both objectives are retrained whenever the loss or count distribution
         # changes so the within-version Thinking/Non-thinking comparison stays
         # controlled.

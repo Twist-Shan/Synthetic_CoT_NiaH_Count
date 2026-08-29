@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Clean running-count and final-count NCC for the paired v24 models."""
+"""Clean running-count and final-count NCC for paired v24-family models."""
 
 from __future__ import annotations
 
@@ -45,14 +45,13 @@ from synthetic_counting_v20.training import load_v20_checkpoint_model  # noqa: E
 @dataclass(frozen=True)
 class ModeSpec:
     label: str
-    run_prefix: str
     mode: str
     expected_trace_format: str
 
 
 SPECS = (
-    ModeSpec("nonthinking", "v24_main_", "nonthinking", "separator"),
-    ModeSpec("thinking", "v24_main_", "thinking", "separator"),
+    ModeSpec("nonthinking", "nonthinking", "separator"),
+    ModeSpec("thinking", "thinking", "separator"),
 )
 
 
@@ -105,6 +104,7 @@ def analyze_mode(
     run_dir: Path,
     spec: ModeSpec,
     *,
+    expected_version: str,
     device: str,
     discovery_per_label: int,
     confirmation_per_label: int,
@@ -113,9 +113,9 @@ def analyze_mode(
     cfg, vocab, train_examples, reporting_examples = _load_bundle(
         run_dir, device=device
     )
-    if cfg.version != "v24" or cfg.count_max_threshold != 10:
+    if cfg.version != expected_version or cfg.count_max_threshold != 10:
         raise ValueError(
-            f"{spec.label}: expected a v24 count-1..10 run, got "
+            f"{spec.label}: expected a {expected_version} count-1..10 run, got "
             f"{cfg.version} count-1..{cfg.count_max_threshold}"
         )
     if cfg.position_encodings != ("rope",) or cfg.count_tokenization != "atomic":
@@ -203,6 +203,8 @@ def main() -> None:
         "--output", type=Path, default=ROOT / "work" / "ncc_v24_thinking_vs_nonthinking"
     )
     parser.add_argument("--device", default="cpu")
+    parser.add_argument("--run-prefix", default="v24_main_")
+    parser.add_argument("--expected-version", default="v24")
     parser.add_argument("--discovery-per-label", type=int, default=10)
     parser.add_argument("--confirmation-per-label", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=32)
@@ -215,11 +217,12 @@ def main() -> None:
     example_payloads = {}
     source_runs = set()
     for spec in SPECS:
-        run_dir = _unique_run(args.results_root.resolve(), spec.run_prefix)
+        run_dir = _unique_run(args.results_root.resolve(), args.run_prefix)
         source_runs.add(run_dir.resolve())
         metrics, selections, layers, train_examples, reporting_examples = analyze_mode(
             run_dir,
             spec,
+            expected_version=args.expected_version,
             device=args.device,
             discovery_per_label=args.discovery_per_label,
             confirmation_per_label=args.confirmation_per_label,
@@ -235,9 +238,13 @@ def main() -> None:
         gc.collect()
 
     if len(source_runs) != 1:
-        raise RuntimeError(f"v24 modes must come from one paired run, got {source_runs}")
+        raise RuntimeError(
+            f"{args.expected_version} modes must come from one paired run, got {source_runs}"
+        )
     if example_payloads["nonthinking"] != example_payloads["thinking"]:
-        raise RuntimeError("v24 Non-thinking and Thinking do not share exact examples")
+        raise RuntimeError(
+            f"{args.expected_version} Non-thinking and Thinking do not share exact examples"
+        )
 
     metrics = pd.concat(all_metrics, ignore_index=True)
     chance = 1.0 / 10.0

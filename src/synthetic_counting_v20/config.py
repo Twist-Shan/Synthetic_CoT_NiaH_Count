@@ -43,6 +43,16 @@ VERSION_SPECS = {
         # window, some of which have no valid <=10 window in a corpus split.
         "needle_pool_frequency_threshold": 10.0 / 256.0,
     },
+    # v24.2 is the single-variable count-balance control for v24.  It keeps
+    # the model, separator grammar, loss weights, count support, pool, seed,
+    # and schedule fixed while drawing semantic counts uniformly from 1..10.
+    "v24.2": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 10,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "uniform",
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = ("natural", "uniform")
@@ -54,7 +64,7 @@ def _float_tag(value: float) -> str:
 
 @dataclass(frozen=True)
 class V20Config:
-    """Shared v20/v21/v22/v23/v24 configuration.
+    """Shared v20/v21/v22/v23/v24/v24.2 configuration.
 
     v20 and v21 are deliberately paired.  The only task-grammar difference is
     ``count_tokenization``: v20 uses one atomic token per integer, whereas v21
@@ -63,7 +73,8 @@ class V20Config:
     replacing every explicit trace index with the same separator token.
     v23 keeps that separator trace and trains both modes with an 8x final-count
     loss weight. v24 returns to unit loss weights and retrains both modes on the
-    smaller count range 1..10.
+    smaller count range 1..10. v24.2 changes only v24's training count
+    distribution from natural to uniform.
     """
 
     version: str = "v20"
@@ -216,9 +227,14 @@ class V20Config:
                 f"{self.version} requires trace_format={expected_trace_format!r}"
             )
         if self.query_layout != "query_first":
-            raise ValueError("v20/v21/v22/v23 require query-first sequence construction")
+            raise ValueError(
+                "v20/v21/v22/v23/v24/v24.2 require query-first sequence construction"
+            )
         if self.needle_set_size != 3:
-            raise ValueError("v20/v21/v22/v23 require exactly three distinct characters per needle set")
+            raise ValueError(
+                "v20/v21/v22/v23/v24/v24.2 require exactly three distinct "
+                "characters per needle set"
+            )
         if self.needle_pool_size <= 0 or self.needle_pool_frequency_bins <= 0:
             raise ValueError("needle pool size and number of bins must be positive")
         if not 0.0 < self.needle_pool_frequency_threshold <= 1.0:
@@ -246,7 +262,10 @@ class V20Config:
         if self.seq_len < 2:
             raise ValueError("seq_len must be at least two")
         if (self.n_layer, self.n_head, self.n_embd, self.n_inner) != (4, 4, 256, 1024):
-            raise ValueError("v20/v21/v22/v23 require 4 layers, 4 heads, d_model=256, MLP=1024")
+            raise ValueError(
+                "v20/v21/v22/v23/v24/v24.2 require 4 layers, 4 heads, "
+                "d_model=256, MLP=1024"
+            )
         if self.n_embd % self.n_head:
             raise ValueError("n_embd must be divisible by n_head")
         if self.max_render_len > self.n_positions:
@@ -287,11 +306,12 @@ class V20Config:
             )
         if self.noise_source != "shakespeare_char" or self.task_type != "target_character_set":
             raise ValueError(
-                "v20/v21/v22/v23/v24 require the Shakespeare target-character-set task"
+                "v20/v21/v22/v23/v24/v24.2 require the Shakespeare "
+                "target-character-set task"
             )
         if self.loss_scope != "all_sequence":
             raise ValueError(
-                "v20/v21/v22/v23/v24 require all-sequence next-token loss metadata"
+                "v20/v21/v22/v23/v24/v24.2 require all-sequence next-token loss metadata"
             )
         if self.precision not in {"float32", "bf16"}:
             raise ValueError("precision must be float32 or bf16")
@@ -331,6 +351,15 @@ class V20Config:
             raise ValueError(
                 f"{self.version} requires needle_pool_frequency_threshold="
                 f"{canonical_pool_threshold:g}"
+            )
+        canonical_count_distribution = version_spec.get("training_count_distribution")
+        if (
+            canonical_count_distribution is not None
+            and self.training_count_distribution != canonical_count_distribution
+        ):
+            raise ValueError(
+                f"{self.version} requires training_count_distribution="
+                f"{canonical_count_distribution!r}"
             )
         if type(self.max_steps_for_language_pred) is not int or self.max_steps_for_language_pred < 0:
             raise ValueError("max_steps_for_language_pred must be a nonnegative integer")
