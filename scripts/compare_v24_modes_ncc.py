@@ -238,6 +238,14 @@ def main() -> None:
         raise RuntimeError("v24 Non-thinking and Thinking do not share exact examples")
 
     metrics = pd.concat(all_metrics, ignore_index=True)
+    chance = 1.0 / 10.0
+    metrics["chance_balanced_accuracy"] = chance
+    metrics["confirmation_logistic_above_chance"] = (
+        metrics["confirmation_logistic_balanced_accuracy"] - chance
+    ) / (1.0 - chance)
+    metrics["confirmation_ncc_above_chance"] = (
+        metrics["confirmation_ncc_balanced_accuracy"] - chance
+    ) / (1.0 - chance)
     selections = pd.concat(all_selections, ignore_index=True)
     metrics.to_csv(args.output / "geometry_site_layer_metrics.csv", index=False)
     selections.to_csv(

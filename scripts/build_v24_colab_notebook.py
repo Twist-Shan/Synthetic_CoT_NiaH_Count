@@ -122,8 +122,10 @@ run_streaming([
     diagnostic_cell += """
 display(pd.read_csv(NCC_OUTPUT / "selected_confirmation_summary.csv")[[
     "comparison_mode", "endpoint", "layer",
+    "chance_balanced_accuracy",
     "confirmation_logistic_balanced_accuracy",
     "confirmation_ncc_balanced_accuracy",
+    "confirmation_ncc_above_chance",
 ]])
 """
     _set_cell_source(notebook["cells"][14], diagnostic_cell)

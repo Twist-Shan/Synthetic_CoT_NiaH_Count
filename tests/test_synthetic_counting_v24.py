@@ -48,6 +48,7 @@ def test_v24_colab_notebook_is_clean_paired_and_runs_ncc():
     assert '"rope/nonthinking", "rope/thinking"' in source
     assert "compare_v24_modes_ncc.py" in source
     assert "selected_confirmation_summary.csv" in source
+    assert "confirmation_ncc_above_chance" in source
     for cell in notebook["cells"]:
         if cell["cell_type"] == "code":
             compile("".join(cell["source"]), f"{path.name}:{cell['id']}", "exec")
