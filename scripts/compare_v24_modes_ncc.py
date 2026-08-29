@@ -161,10 +161,12 @@ def analyze_mode(
     metric_frames = []
     selection_frames = []
     selected_layers = {}
+    classes = tuple(range(cfg.count_min, cfg.count_max_threshold + 1))
     for endpoint in discovery:
         metrics, selections, selected_layer = evaluate_geometry_dataset(
             combine_splits(discovery[endpoint], confirmation[endpoint]),
             endpoint=endpoint,
+            classes=classes,
         )
         for frame in (metrics, selections):
             frame.insert(0, "comparison_mode", spec.label)

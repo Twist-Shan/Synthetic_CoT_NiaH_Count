@@ -82,3 +82,11 @@ def test_v24_colab_notebook_is_clean_paired_and_runs_ncc():
     for cell in notebook["cells"]:
         if cell["cell_type"] == "code":
             compile("".join(cell["source"]), f"{path.name}:{cell['id']}", "exec")
+
+
+def test_v24_ncc_uses_the_configured_ten_class_support():
+    source = (ROOT / "scripts" / "compare_v24_modes_ncc.py").read_text(
+        encoding="utf-8"
+    )
+    assert "classes = tuple(range(cfg.count_min, cfg.count_max_threshold + 1))" in source
+    assert "classes=classes" in source
