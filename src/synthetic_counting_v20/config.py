@@ -31,6 +31,14 @@ VERSION_SPECS = {
         "trace_format": "separator",
         "final_count_loss_weight": 8.0,
     },
+    # v24 keeps the v22 objective and grammar but reduces the supported count
+    # range to 1..10.  Both modes are retrained so all geometry comparisons are
+    # made within the same data distribution.
+    "v24": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 10,
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = ("natural", "uniform")
@@ -42,7 +50,7 @@ def _float_tag(value: float) -> str:
 
 @dataclass(frozen=True)
 class V20Config:
-    """Shared v20/v21/v22/v23 configuration.
+    """Shared v20/v21/v22/v23/v24 configuration.
 
     v20 and v21 are deliberately paired.  The only task-grammar difference is
     ``count_tokenization``: v20 uses one atomic token per integer, whereas v21
@@ -50,7 +58,8 @@ class V20Config:
     v22 is a second matched control: it keeps v20's atomic final answer while
     replacing every explicit trace index with the same separator token.
     v23 keeps that separator trace and trains both modes with an 8x final-count
-    loss weight.
+    loss weight. v24 returns to unit loss weights and retrains both modes on the
+    smaller count range 1..10.
     """
 
     version: str = "v20"
@@ -273,9 +282,13 @@ class V20Config:
                 "enabled_model_variants"
             )
         if self.noise_source != "shakespeare_char" or self.task_type != "target_character_set":
-            raise ValueError("v20/v21/v22/v23 require the Shakespeare target-character-set task")
+            raise ValueError(
+                "v20/v21/v22/v23/v24 require the Shakespeare target-character-set task"
+            )
         if self.loss_scope != "all_sequence":
-            raise ValueError("v20/v21/v22/v23 require all-sequence next-token loss metadata")
+            raise ValueError(
+                "v20/v21/v22/v23/v24 require all-sequence next-token loss metadata"
+            )
         if self.precision not in {"float32", "bf16"}:
             raise ValueError("precision must be float32 or bf16")
         if self.snapshot_dtype not in {"float16", "bfloat16", "float32"}:
@@ -296,6 +309,14 @@ class V20Config:
             raise ValueError(
                 f"{self.version} requires final_count_loss_weight="
                 f"{canonical_final_weight:g}"
+            )
+        canonical_count_max = version_spec.get("count_max_threshold")
+        if (
+            canonical_count_max is not None
+            and int(self.count_max_threshold) != int(canonical_count_max)
+        ):
+            raise ValueError(
+                f"{self.version} requires count_max_threshold={canonical_count_max}"
             )
         if type(self.max_steps_for_language_pred) is not int or self.max_steps_for_language_pred < 0:
             raise ValueError("max_steps_for_language_pred must be a nonnegative integer")

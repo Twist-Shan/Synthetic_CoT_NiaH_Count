@@ -107,6 +107,7 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
     overrides = {name: getattr(args, name) for name in names if getattr(args, name) is not None}
     version_spec = VERSION_SPECS[version]
     canonical_final_weight = version_spec.get("final_count_loss_weight")
+    canonical_count_max = version_spec.get("count_max_threshold")
     if (
         canonical_final_weight is not None
         and args.final_count_loss_weight is not None
@@ -115,6 +116,14 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         parser.error(
             f"{version} fixes --final-count-loss-weight at {canonical_final_weight:g}"
         )
+    if (
+        canonical_count_max is not None
+        and args.count_max_threshold is not None
+        and int(args.count_max_threshold) != int(canonical_count_max)
+    ):
+        parser.error(
+            f"{version} fixes --count-max-threshold at {canonical_count_max}"
+        )
     overrides.update(
         version=version,
         count_tokenization=version_spec["count_tokenization"],
@@ -122,15 +131,18 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
     )
     if canonical_final_weight is not None:
         overrides["final_count_loss_weight"] = canonical_final_weight
+    if canonical_count_max is not None:
+        overrides["count_max_threshold"] = canonical_count_max
     if args.model_variant is not None:
         overrides["enabled_model_variants"] = tuple(args.model_variant)
     elif version == "v22":
         # The nonthinking objective is identical to v20, so the canonical v22
         # run trains only the changed separator-trace Thinking model.
         overrides["enabled_model_variants"] = ("rope/thinking",)
-    elif version == "v23":
-        # Both objectives are retrained at the same answer-token weight so the
-        # within-version Thinking/Non-thinking comparison remains controlled.
+    elif version in {"v23", "v24"}:
+        # Both objectives are retrained whenever the loss or count distribution
+        # changes so the within-version Thinking/Non-thinking comparison stays
+        # controlled.
         overrides["enabled_model_variants"] = (
             "rope/nonthinking",
             "rope/thinking",
