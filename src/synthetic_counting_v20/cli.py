@@ -45,6 +45,8 @@ def build_parser(version: str = "v20") -> argparse.ArgumentParser:
     parser.add_argument("--phase-head-selection-examples-per-count", type=int, default=None)
     parser.add_argument("--final-count-loss-weight", type=float, default=None)
     parser.add_argument("--cot-trace-loss-weight", type=float, default=None)
+    parser.add_argument("--answer-query-contrastive-weight", type=float, default=None)
+    parser.add_argument("--answer-query-contrastive-temperature", type=float, default=None)
     parser.add_argument("--seq-len", type=int, default=None)
     parser.add_argument("--n-positions", type=int, default=None)
     parser.add_argument("--count-max-threshold", type=int, default=None)
@@ -103,6 +105,8 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         "phase_head_selection_examples_per_count",
         "final_count_loss_weight",
         "cot_trace_loss_weight",
+        "answer_query_contrastive_weight",
+        "answer_query_contrastive_temperature",
         "seq_len",
         "n_positions",
         "count_max_threshold",
@@ -124,6 +128,12 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
     canonical_count_distribution = version_spec.get("training_count_distribution")
     canonical_task_output_reduction = version_spec.get("task_output_loss_reduction")
     canonical_tying = version_spec.get("tie_word_embeddings")
+    canonical_contrastive_weight = version_spec.get(
+        "answer_query_contrastive_weight"
+    )
+    canonical_contrastive_temperature = version_spec.get(
+        "answer_query_contrastive_temperature"
+    )
     if (
         canonical_final_weight is not None
         and args.final_count_loss_weight is not None
@@ -174,6 +184,26 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
             f"{version} fixes --task-output-loss-reduction at "
             f"{canonical_task_output_reduction}"
         )
+    if (
+        canonical_contrastive_weight is not None
+        and args.answer_query_contrastive_weight is not None
+        and float(args.answer_query_contrastive_weight)
+        != float(canonical_contrastive_weight)
+    ):
+        parser.error(
+            f"{version} fixes --answer-query-contrastive-weight at "
+            f"{canonical_contrastive_weight:g}"
+        )
+    if (
+        canonical_contrastive_temperature is not None
+        and args.answer_query_contrastive_temperature is not None
+        and float(args.answer_query_contrastive_temperature)
+        != float(canonical_contrastive_temperature)
+    ):
+        parser.error(
+            f"{version} fixes --answer-query-contrastive-temperature at "
+            f"{canonical_contrastive_temperature:g}"
+        )
     overrides.update(
         version=version,
         count_tokenization=version_spec["count_tokenization"],
@@ -193,13 +223,19 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         overrides["task_output_loss_reduction"] = canonical_task_output_reduction
     if canonical_tying is not None:
         overrides["tie_word_embeddings"] = canonical_tying
+    if canonical_contrastive_weight is not None:
+        overrides["answer_query_contrastive_weight"] = canonical_contrastive_weight
+    if canonical_contrastive_temperature is not None:
+        overrides["answer_query_contrastive_temperature"] = (
+            canonical_contrastive_temperature
+        )
     if args.model_variant is not None:
         overrides["enabled_model_variants"] = tuple(args.model_variant)
     elif version == "v22":
         # The nonthinking objective is identical to v20, so the canonical v22
         # run trains only the changed separator-trace Thinking model.
         overrides["enabled_model_variants"] = ("rope/thinking",)
-    elif version in {"v23", "v24", "v24.2", "v24.3"}:
+    elif version in {"v23", "v24", "v24.2", "v24.3", "v24.4", "v24.5", "v24.6", "v24.7"}:
         # Both objectives are retrained whenever the loss or count distribution
         # changes so the within-version Thinking/Non-thinking comparison stays
         # controlled.

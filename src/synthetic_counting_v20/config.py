@@ -104,6 +104,23 @@ VERSION_SPECS = {
         "task_output_loss_reduction": "component_normalized",
         "tie_word_embeddings": False,
     },
+    # v24.7 keeps the complete v24.6 data/model/readout setting and adds one
+    # training-only representation objective after the language-model phase.
+    # At the <Ans> query, same-count examples are pulled together and
+    # different-count examples are separated.  Inference is unchanged: the
+    # ordinary LM head must still emit the raw atomic answer token.
+    "v24.7": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 10,
+        "needle_pool_size": 20,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "maxent_set_count",
+        "task_output_loss_reduction": "component_normalized",
+        "tie_word_embeddings": False,
+        "answer_query_contrastive_weight": 0.1,
+        "answer_query_contrastive_temperature": 0.1,
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
@@ -192,6 +209,11 @@ class V20Config:
     task_output_count_weight: float = 1.0
     task_output_trace_weight: float = 1.0
     task_output_structure_weight: float = 0.1
+    # Optional training-only supervised contrastive objective on the final
+    # answer-query residual.  Zero exactly reproduces all versions through
+    # v24.6.  It never changes inference or supplies a decoder.
+    answer_query_contrastive_weight: float = 0.0
+    answer_query_contrastive_temperature: float = 0.1
 
     n_layer: int = 4
     n_head: int = 4
@@ -412,6 +434,20 @@ class V20Config:
             value = float(getattr(self, name))
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be finite and strictly positive")
+        if (
+            not math.isfinite(float(self.answer_query_contrastive_weight))
+            or self.answer_query_contrastive_weight < 0
+        ):
+            raise ValueError(
+                "answer_query_contrastive_weight must be finite and nonnegative"
+            )
+        if (
+            not math.isfinite(float(self.answer_query_contrastive_temperature))
+            or self.answer_query_contrastive_temperature <= 0
+        ):
+            raise ValueError(
+                "answer_query_contrastive_temperature must be finite and positive"
+            )
         canonical_final_weight = version_spec.get("final_count_loss_weight")
         if (
             canonical_final_weight is not None
@@ -464,6 +500,30 @@ class V20Config:
             raise ValueError(
                 f"{self.version} requires task_output_loss_reduction="
                 f"{canonical_task_output_reduction!r}"
+            )
+        canonical_contrastive_weight = version_spec.get(
+            "answer_query_contrastive_weight"
+        )
+        if (
+            canonical_contrastive_weight is not None
+            and float(self.answer_query_contrastive_weight)
+            != float(canonical_contrastive_weight)
+        ):
+            raise ValueError(
+                f"{self.version} requires answer_query_contrastive_weight="
+                f"{canonical_contrastive_weight:g}"
+            )
+        canonical_contrastive_temperature = version_spec.get(
+            "answer_query_contrastive_temperature"
+        )
+        if (
+            canonical_contrastive_temperature is not None
+            and float(self.answer_query_contrastive_temperature)
+            != float(canonical_contrastive_temperature)
+        ):
+            raise ValueError(
+                f"{self.version} requires answer_query_contrastive_temperature="
+                f"{canonical_contrastive_temperature:g}"
             )
         if type(self.max_steps_for_language_pred) is not int or self.max_steps_for_language_pred < 0:
             raise ValueError("max_steps_for_language_pred must be a nonnegative integer")
@@ -529,6 +589,14 @@ class V20Config:
         result["task_output_scope"] = {
             "nonthinking": "<Ans> through <EOS>, inclusive",
             "thinking": "<Think> through <EOS>, inclusive",
+        }
+        result["answer_query_contrastive_objective"] = {
+            "active": bool(self.answer_query_contrastive_weight > 0),
+            "activation_phase": "task_output",
+            "query_position": "<Ans> input position whose logits predict the count token",
+            "weight": self.answer_query_contrastive_weight,
+            "temperature": self.answer_query_contrastive_temperature,
+            "inference_change": False,
         }
         result["task_occurrence_ratio_definition"] = (
             "example-level probability of formatting a training corpus window as a counting task"
@@ -636,6 +704,7 @@ def config_from_dict(values: dict[str, Any]) -> V20Config:
         "sequence_layout",
         "sequence_templates",
         "checkpoint_policy",
+        "answer_query_contrastive_objective",
     ):
         data.pop(derived, None)
     data["position_encodings"] = tuple(data["position_encodings"])
@@ -653,6 +722,8 @@ def config_from_dict(values: dict[str, Any]) -> V20Config:
     data.setdefault("task_output_count_weight", 1.0)
     data.setdefault("task_output_trace_weight", 1.0)
     data.setdefault("task_output_structure_weight", 0.1)
+    data.setdefault("answer_query_contrastive_weight", 0.0)
+    data.setdefault("answer_query_contrastive_temperature", 0.1)
     data.setdefault("weight_decay", 0.01)
     # Retained only to reject accidental RPE-era configs with a clear message.
     data.setdefault("rpe_max_update", False)
@@ -706,6 +777,14 @@ def default_run_name(cfg: V20Config) -> str:
         )
     )
     readout_tag = "" if cfg.tie_word_embeddings else "_untied-lm-head"
+    contrastive_tag = (
+        ""
+        if cfg.answer_query_contrastive_weight == 0
+        else (
+            f"_answer-supcon-w{_float_tag(cfg.answer_query_contrastive_weight)}"
+            f"-t{_float_tag(cfg.answer_query_contrastive_temperature)}"
+        )
+    )
     return (
         f"{cfg.version}_{cfg.preset}_L{cfg.seq_len}_pool{cfg.needle_pool_size}x{cfg.needle_set_size}_"
         f"pf{_float_tag(cfg.needle_pool_frequency_threshold)}_count1-{cfg.count_max_threshold}{rpe_distance_tag}_"
@@ -715,7 +794,7 @@ def default_run_name(cfg: V20Config) -> str:
         f"cotw{_float_tag(cfg.cot_trace_loss_weight)}_langsteps{cfg.max_steps_for_language_pred}_"
         f"steps{cfg.train_steps}_snap{cfg.checkpoint_every}_recover{cfg.recovery_every}_"
         f"evaln{eval_size}_{variants.replace('/', '-')}_{cfg.count_tokenization}{trace_tag}"
-        f"{component_loss_tag}{readout_tag}_"
+        f"{component_loss_tag}{readout_tag}{contrastive_tag}_"
         f"query-first_{schedule_tag}_seed{cfg.seed}"
     )
 

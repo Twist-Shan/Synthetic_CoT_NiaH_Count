@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn.functional as F
 from torch.optim import AdamW
 from tqdm.auto import tqdm
 
@@ -174,6 +175,57 @@ def component_normalized_task_output_loss(
     if "trace" in region_means:
         total = total + float(cfg.task_output_trace_weight) * region_means["trace"]
     return total, region_means
+
+
+def answer_query_supervised_contrastive_loss(
+    final_hidden: torch.Tensor,
+    rendered: list[V20Rendered],
+    *,
+    temperature: float,
+) -> torch.Tensor:
+    """Compress count classes at the native ``<Ans>`` query representation.
+
+    This is a training-only supervised contrastive objective.  It adds no
+    decoder, parameters, tokens, or inference-time rule: the ordinary LM head
+    must still predict the atomic answer token from the same query state.
+    Anchors without a same-count positive in the current batch are ignored.
+    """
+
+    if final_hidden.ndim != 3 or final_hidden.shape[0] != len(rendered):
+        raise ValueError("final_hidden must be [batch, sequence, hidden]")
+    rows: list[int] = []
+    positions: list[int] = []
+    labels: list[int] = []
+    for row, item in enumerate(rendered):
+        if item.spans is None or item.count is None:
+            continue
+        rows.append(row)
+        positions.append(int(item.spans.ans_pos))
+        labels.append(int(item.count))
+    if len(rows) < 2:
+        return final_hidden.sum() * 0.0
+
+    row_index = torch.tensor(rows, device=final_hidden.device, dtype=torch.long)
+    position_index = torch.tensor(
+        positions, device=final_hidden.device, dtype=torch.long
+    )
+    label = torch.tensor(labels, device=final_hidden.device, dtype=torch.long)
+    query = final_hidden[row_index, position_index].float()
+    query = F.normalize(query, dim=-1)
+    scores = query @ query.transpose(0, 1)
+    scores = scores / float(temperature)
+    diagonal = torch.eye(len(rows), device=scores.device, dtype=torch.bool)
+    scores = scores.masked_fill(diagonal, float("-inf"))
+    log_prob = scores - torch.logsumexp(scores, dim=1, keepdim=True)
+    positives = label[:, None].eq(label[None, :]) & ~diagonal
+    positive_count = positives.sum(dim=1)
+    valid = positive_count > 0
+    if not bool(valid.any()):
+        return final_hidden.sum() * 0.0
+    positive_log_prob = torch.where(
+        positives, log_prob, torch.zeros_like(log_prob)
+    ).sum(dim=1)
+    return -(positive_log_prob[valid] / positive_count[valid]).mean()
 
 
 def _autocast_context(cfg: V20Config):
@@ -1681,8 +1733,16 @@ def train_v20_variant(
         )
         ids, labels, attention_mask = collate_v20(rendered, vocab, cfg.device)
         loss_weights = collate_v20_loss_weights(rendered, cfg, cfg.device, step=step)
+        contrastive_active = (
+            loss_phase == "task_output"
+            and cfg.answer_query_contrastive_weight > 0
+        )
         with _autocast_context(cfg):
-            output = model(input_ids=ids, attention_mask=attention_mask)
+            output = model(
+                input_ids=ids,
+                attention_mask=attention_mask,
+                output_hidden_states=contrastive_active,
+            )
             token_weighted_loss, token_losses, active = shifted_v20_token_losses(
                 output.logits, labels, loss_weights
             )
@@ -1701,6 +1761,23 @@ def train_v20_variant(
             else:
                 loss = token_weighted_loss
                 objective_region_losses = {}
+            if contrastive_active:
+                if output.hidden_states is None:
+                    raise RuntimeError(
+                        "answer-query contrastive loss requires hidden states"
+                    )
+                contrastive_loss = answer_query_supervised_contrastive_loss(
+                    model.final_norm(output.hidden_states[-1]),
+                    rendered,
+                    temperature=cfg.answer_query_contrastive_temperature,
+                )
+                loss = (
+                    loss
+                    + float(cfg.answer_query_contrastive_weight)
+                    * contrastive_loss
+                )
+            else:
+                contrastive_loss = None
         active_by_example = active.sum(dim=1).detach().cpu().numpy()
         _update_sampling_state(sampling_state, examples, active_by_example)
         optimizer.zero_grad(set_to_none=True)
@@ -1783,6 +1860,18 @@ def train_v20_variant(
                 / max(1.0, active_weight_sum),
                 "task_output_loss_reduction": cfg.task_output_loss_reduction,
                 "component_reduction_active": component_reduction_active,
+                "answer_query_contrastive_active": contrastive_active,
+                "train_answer_query_contrastive_loss": (
+                    float(contrastive_loss.detach().cpu())
+                    if contrastive_loss is not None
+                    else float("nan")
+                ),
+                "answer_query_contrastive_weight": float(
+                    cfg.answer_query_contrastive_weight
+                ),
+                "answer_query_contrastive_temperature": float(
+                    cfg.answer_query_contrastive_temperature
+                ),
                 "batch_final_count_region_coefficient_share": final_count_coefficient_share,
                 "batch_trace_region_coefficient_share": trace_coefficient_share,
                 "batch_structure_region_coefficient_share": structure_coefficient_share,
