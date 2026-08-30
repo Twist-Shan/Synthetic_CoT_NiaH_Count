@@ -201,6 +201,21 @@ VERSION_SPECS = {
         "untie_atomic_count_readout": True,
         "n_layer": 6,
     },
+    # v31 returns to the independent four-layer v29 pair and changes one
+    # scalar only: the already component-normalized final-count region receives
+    # coefficient 8 instead of 4.  Data, trace, sampler, architecture, mode
+    # separation, optimizer, and inference are unchanged.
+    "v31": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 10,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "uniform",
+        "task_output_loss_reduction": "component_normalized",
+        "task_output_count_weight": 8.0,
+        "tie_word_embeddings": True,
+        "untie_atomic_count_readout": True,
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
