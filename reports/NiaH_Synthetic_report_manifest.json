@@ -1,0 +1,21 @@
+{
+  "report": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\reports\\NiaH_Synthetic_report.html",
+  "primary_comparison": "v22 separator/no-index Thinking vs matched v20 Non-thinking",
+  "figures": {
+    "clean": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\reports\\NiaH_Synthetic_report_assets\\clean_ncc_comparison.png",
+    "tf_topk": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\reports\\NiaH_Synthetic_report_assets\\teacher_forced_topk_ncc.png",
+    "fr_topk": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\reports\\NiaH_Synthetic_report_assets\\free_running_topk.png",
+    "answer": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\reports\\NiaH_Synthetic_report_assets\\free_running_answer_transplant.png",
+    "progress": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\reports\\NiaH_Synthetic_report_assets\\free_running_progress_sufficiency.png",
+    "dynamics": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\reports\\NiaH_Synthetic_report_assets\\aligned_head_bank_training_dynamics.png",
+    "v22_roles": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\work\\v22_training_dynamics\\figures__dense_fixed_head_emergence.png",
+    "v22_causal": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\work\\v22_training_dynamics\\figures__milestone_local_head_causality.png"
+  },
+  "source_roots": {
+    "clean_ncc": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\work\\ncc_v22_thinking_vs_nonthinking",
+    "topk_ncc": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\work\\v22_topk_ncc",
+    "free_running_topk": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\work\\v22_free_running_topk",
+    "free_running_sufficiency": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\work\\v22_free_running_sufficiency",
+    "v22_training_dynamics": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\work\\v22_training_dynamics"
+  }
+}
