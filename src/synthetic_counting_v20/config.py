@@ -77,6 +77,19 @@ VERSION_SPECS = {
         "training_count_distribution": "maxent_set_count",
         "task_output_loss_reduction": "component_normalized",
     },
+    # v24.5 keeps the v24.4 sampler, loss, count support, model, seed, and
+    # schedule fixed, but reduces the needle pool from 100 sets to 20.  This
+    # gives each semantic marker five times as much supervision and makes the
+    # set x count support much closer to a complete Cartesian product.
+    "v24.5": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 10,
+        "needle_pool_size": 20,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "maxent_set_count",
+        "task_output_loss_reduction": "component_normalized",
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
@@ -93,7 +106,7 @@ def _float_tag(value: float) -> str:
 
 @dataclass(frozen=True)
 class V20Config:
-    """Shared v20/v21/v22/v23/v24/v24.2/v24.3/v24.4 configuration.
+    """Shared v20/v21/v22/v23/v24/v24.2/v24.3/v24.4/v24.5 configuration.
 
     v20 and v21 are deliberately paired.  The only task-grammar difference is
     ``count_tokenization``: v20 uses one atomic token per integer, whereas v21
@@ -105,7 +118,8 @@ class V20Config:
     smaller count range 1..10. v24.2 changes only v24's training count
     distribution from natural to uniform. v24.3 changes only v24.2's
     post-boundary task-output loss reduction. v24.4 changes only v24.3's
-    training sampler to balance both set and count marginals.
+    training sampler to balance both set and count marginals. v24.5 changes
+    only the v24.4 needle-pool size from 100 to 20.
     """
 
     version: str = "v20"
