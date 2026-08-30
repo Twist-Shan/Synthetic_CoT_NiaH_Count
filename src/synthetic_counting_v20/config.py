@@ -65,9 +65,25 @@ VERSION_SPECS = {
         "training_count_distribution": "uniform",
         "task_output_loss_reduction": "component_normalized",
     },
+    # v24.4 keeps the v24.3 loss and changes only the training sampler.  A
+    # maximum-entropy distribution over feasible (needle set, count) cells
+    # matches both the uniform set marginal and the uniform count marginal.
+    # Structural-zero cells remain at probability zero.
+    "v24.4": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 10,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "maxent_set_count",
+        "task_output_loss_reduction": "component_normalized",
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
-SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = ("natural", "uniform")
+SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
+    "natural",
+    "uniform",
+    "maxent_set_count",
+)
 SUPPORTED_TASK_OUTPUT_LOSS_REDUCTIONS = ("token_weighted_mean", "component_normalized")
 
 
@@ -77,7 +93,7 @@ def _float_tag(value: float) -> str:
 
 @dataclass(frozen=True)
 class V20Config:
-    """Shared v20/v21/v22/v23/v24/v24.2/v24.3 configuration.
+    """Shared v20/v21/v22/v23/v24/v24.2/v24.3/v24.4 configuration.
 
     v20 and v21 are deliberately paired.  The only task-grammar difference is
     ``count_tokenization``: v20 uses one atomic token per integer, whereas v21
@@ -88,7 +104,8 @@ class V20Config:
     loss weight. v24 returns to unit loss weights and retrains both modes on the
     smaller count range 1..10. v24.2 changes only v24's training count
     distribution from natural to uniform. v24.3 changes only v24.2's
-    post-boundary task-output loss reduction.
+    post-boundary task-output loss reduction. v24.4 changes only v24.3's
+    training sampler to balance both set and count marginals.
     """
 
     version: str = "v20"
@@ -251,11 +268,11 @@ class V20Config:
             )
         if self.query_layout != "query_first":
             raise ValueError(
-                "v20/v21/v22/v23/v24/v24.2/v24.3 require query-first sequence construction"
+                "v20/v21/v22/v23/v24/v24.2/v24.3/v24.4 require query-first sequence construction"
             )
         if self.needle_set_size != 3:
             raise ValueError(
-                "v20/v21/v22/v23/v24/v24.2/v24.3 require exactly three distinct "
+                "v20/v21/v22/v23/v24/v24.2/v24.3/v24.4 require exactly three distinct "
                 "characters per needle set"
             )
         if self.needle_pool_size <= 0 or self.needle_pool_frequency_bins <= 0:
@@ -291,7 +308,7 @@ class V20Config:
             raise ValueError("seq_len must be at least two")
         if (self.n_layer, self.n_head, self.n_embd, self.n_inner) != (4, 4, 256, 1024):
             raise ValueError(
-                "v20/v21/v22/v23/v24/v24.2/v24.3 require 4 layers, 4 heads, "
+                "v20/v21/v22/v23/v24/v24.2/v24.3/v24.4 require 4 layers, 4 heads, "
                 "d_model=256, MLP=1024"
             )
         if self.n_embd % self.n_head:
@@ -334,12 +351,12 @@ class V20Config:
             )
         if self.noise_source != "shakespeare_char" or self.task_type != "target_character_set":
             raise ValueError(
-                "v20/v21/v22/v23/v24/v24.2/v24.3 require the Shakespeare "
+                "v20/v21/v22/v23/v24/v24.2/v24.3/v24.4 require the Shakespeare "
                 "target-character-set task"
             )
         if self.loss_scope != "all_sequence":
             raise ValueError(
-                "v20/v21/v22/v23/v24/v24.2/v24.3 require all-sequence next-token loss metadata"
+                "v20/v21/v22/v23/v24/v24.2/v24.3/v24.4 require all-sequence next-token loss metadata"
             )
         if self.precision not in {"float32", "bf16"}:
             raise ValueError("precision must be float32 or bf16")

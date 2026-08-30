@@ -6,7 +6,7 @@ import random
 import shutil
 import time
 from contextlib import nullcontext
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from itertools import permutations
 from pathlib import Path
 from typing import Any
@@ -28,6 +28,7 @@ from .data import (
     component_target_positions,
     load_corpus_text,
     make_training_example,
+    make_v20_example,
     render_v20,
     shifted_v20_token_losses,
 )
@@ -894,6 +895,204 @@ def autoregressive_task_evaluation(
     return pd.DataFrame(rows)
 
 
+_MAX_JOINT_STARTS_PER_CELL = 8_192
+
+
+@dataclass(frozen=True)
+class _JointSetCountSampler:
+    cells: tuple[tuple[int, int], ...]
+    probabilities: tuple[float, ...]
+    starts: dict[tuple[int, int], np.ndarray]
+    plan: pd.DataFrame
+
+
+_JOINT_SET_COUNT_SAMPLER_CACHE: dict[tuple[Any, ...], _JointSetCountSampler] = {}
+
+
+def _maximum_entropy_cell_probabilities(
+    support: np.ndarray,
+    *,
+    tolerance: float = 1e-12,
+    max_iterations: int = 20_000,
+) -> np.ndarray:
+    """Return the max-entropy table with uniform row and column marginals.
+
+    ``support`` is a boolean set-by-count matrix. Structural-zero cells remain
+    zero. Iterative proportional fitting is deterministic and either reaches
+    the requested marginals or fails loudly, rather than silently dropping
+    needle sets that do not support every count.
+    """
+
+    support = np.asarray(support, dtype=bool)
+    if support.ndim != 2 or not support.size:
+        raise ValueError("set-count support must be a nonempty 2D matrix")
+    if not support.any(axis=1).all():
+        raise ValueError("every needle set must support at least one count")
+    if not support.any(axis=0).all():
+        raise ValueError("every requested count must be supported by at least one set")
+    row_target = np.full(support.shape[0], 1.0 / support.shape[0], dtype=np.float64)
+    column_target = np.full(support.shape[1], 1.0 / support.shape[1], dtype=np.float64)
+    probabilities = support.astype(np.float64)
+    probabilities /= probabilities.sum()
+    for _ in range(max_iterations):
+        row_sums = probabilities.sum(axis=1)
+        probabilities *= (row_target / row_sums)[:, None]
+        column_sums = probabilities.sum(axis=0)
+        probabilities *= (column_target / column_sums)[None, :]
+        error = max(
+            float(np.abs(probabilities.sum(axis=1) - row_target).max()),
+            float(np.abs(probabilities.sum(axis=0) - column_target).max()),
+        )
+        if error <= tolerance:
+            break
+    else:
+        raise RuntimeError(
+            "feasible set-count support did not converge to uniform marginals; "
+            f"final error={error:.3e}"
+        )
+    probabilities[~support] = 0.0
+    probabilities /= probabilities.sum()
+    return probabilities
+
+
+def _joint_set_count_sampler(
+    cfg: V20Config,
+    text: str,
+    split: CorpusSplit,
+    pool: NeedlePool,
+) -> _JointSetCountSampler:
+    key = (
+        split.corpus_sha256,
+        split.split_fingerprint,
+        pool.pool_fingerprint,
+        split.train.start,
+        split.train.end,
+        cfg.seq_len,
+        cfg.count_max_threshold,
+    )
+    cached = _JOINT_SET_COUNT_SAMPLER_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    region = split.train
+    region_text = text[region.start : region.end]
+    if len(region_text) < cfg.seq_len:
+        raise ValueError("training corpus region is shorter than seq_len")
+    codepoints = np.fromiter(
+        (ord(character) for character in region_text),
+        dtype=np.int32,
+        count=len(region_text),
+    )
+    support = np.zeros(
+        (len(pool.sets), cfg.count_max_threshold),
+        dtype=bool,
+    )
+    starts_by_cell: dict[tuple[int, int], np.ndarray] = {}
+    full_window_counts: dict[tuple[int, int], int] = {}
+    for set_index, needle_set in enumerate(pool.sets):
+        membership = np.zeros(len(codepoints), dtype=bool)
+        for character in needle_set.characters:
+            membership |= codepoints == ord(character)
+        prefix = np.empty(len(membership) + 1, dtype=np.int32)
+        prefix[0] = 0
+        np.cumsum(membership, dtype=np.int32, out=prefix[1:])
+        window_counts = prefix[cfg.seq_len :] - prefix[: -cfg.seq_len]
+        for count in range(1, cfg.count_max_threshold + 1):
+            relative_starts = np.flatnonzero(window_counts == count).astype(
+                np.int32,
+                copy=False,
+            )
+            full_window_counts[(set_index, count)] = int(relative_starts.size)
+            if not relative_starts.size:
+                continue
+            support[set_index, count - 1] = True
+            if relative_starts.size > _MAX_JOINT_STARTS_PER_CELL:
+                retained = np.linspace(
+                    0,
+                    relative_starts.size - 1,
+                    _MAX_JOINT_STARTS_PER_CELL,
+                    dtype=np.int64,
+                )
+                relative_starts = relative_starts[retained]
+            starts_by_cell[(set_index, count)] = (
+                relative_starts + int(region.start)
+            ).astype(np.int32, copy=False)
+
+    probabilities = _maximum_entropy_cell_probabilities(support)
+    cells: list[tuple[int, int]] = []
+    cell_probabilities: list[float] = []
+    rows: list[dict[str, Any]] = []
+    row_marginals = probabilities.sum(axis=1)
+    count_marginals = probabilities.sum(axis=0)
+    for set_index, needle_set in enumerate(pool.sets):
+        for count in range(1, cfg.count_max_threshold + 1):
+            cell = (set_index, count)
+            probability = float(probabilities[set_index, count - 1])
+            starts = starts_by_cell.get(cell)
+            if probability > 0:
+                if starts is None or not len(starts):
+                    raise RuntimeError("positive set-count cell has no retained starts")
+                cells.append(cell)
+                cell_probabilities.append(probability)
+            rows.append(
+                {
+                    "set_id": needle_set.set_id,
+                    "set_index": set_index,
+                    "count": count,
+                    "feasible": bool(support[set_index, count - 1]),
+                    "full_window_count": full_window_counts[cell],
+                    "retained_window_count": 0 if starts is None else int(len(starts)),
+                    "target_probability": probability,
+                    "target_set_marginal": float(row_marginals[set_index]),
+                    "target_count_marginal": float(count_marginals[count - 1]),
+                }
+            )
+    sampler = _JointSetCountSampler(
+        cells=tuple(cells),
+        probabilities=tuple(cell_probabilities),
+        starts=starts_by_cell,
+        plan=pd.DataFrame(rows),
+    )
+    _JOINT_SET_COUNT_SAMPLER_CACHE[key] = sampler
+    return sampler
+
+
+def _maxent_set_count_training_examples(
+    cfg: V20Config,
+    vocab: V20Vocab,
+    text: str,
+    split: CorpusSplit,
+    pool: NeedlePool,
+    rng: random.Random,
+) -> list[V20Example]:
+    sampler = _joint_set_count_sampler(cfg, text, split, pool)
+    selections = rng.choices(
+        range(len(sampler.cells)),
+        weights=sampler.probabilities,
+        k=cfg.batch_size,
+    )
+    examples: list[V20Example] = []
+    for selected in selections:
+        set_index, target_count = sampler.cells[selected]
+        starts = sampler.starts[(set_index, target_count)]
+        start = int(starts[rng.randrange(len(starts))])
+        example = make_v20_example(
+            cfg,
+            vocab,
+            text,
+            split,
+            pool,
+            rng,
+            region_name="train",
+            initial_start=start,
+            needle_set=pool.sets[set_index],
+        )
+        if int(example.count or 0) != target_count:
+            raise RuntimeError("joint sampler start index produced the wrong count")
+        examples.append(example)
+    return examples
+
+
 def _training_batch(
     cfg: V20Config,
     vocab: V20Vocab,
@@ -905,6 +1104,16 @@ def _training_batch(
     *,
     require_task: bool = False,
 ) -> tuple[list[V20Example], list[V20Rendered]]:
+    if cfg.training_count_distribution == "maxent_set_count":
+        examples = _maxent_set_count_training_examples(
+            cfg,
+            vocab,
+            text,
+            split,
+            pool,
+            rng,
+        )
+        return examples, [render_v20(example, vocab, mode) for example in examples]
     if cfg.training_count_distribution == "uniform":
         # Draw the desired semantic counts first, then fill all count buckets
         # from one shared stream of natural candidates.  Sharing rejected
@@ -1066,6 +1275,7 @@ def _empty_sampling_state(cfg: V20Config) -> dict[str, Any]:
         "proposed_counts": {},
         "frequency_bins": {},
         "set_ids": {},
+        "set_count_cells": {},
     }
 
 
@@ -1088,6 +1298,7 @@ def _load_sampling_state(run_dir: Path, position_encoding: str, mode: str, step:
 def _update_sampling_state(
     state: dict[str, Any], examples: list[V20Example], active_by_example: np.ndarray
 ) -> None:
+    state.setdefault("set_count_cells", {})
     for example, active_tokens in zip(examples, active_by_example):
         state["examples"] += 1
         state["active_tokens"] += int(active_tokens)
@@ -1107,6 +1318,10 @@ def _update_sampling_state(
         ):
             key = str(value)
             state[name][key] = int(state[name].get(key, 0)) + 1
+        cell_key = f"{example.set_id}|{int(example.count or 0)}"
+        state["set_count_cells"][cell_key] = (
+            int(state["set_count_cells"].get(cell_key, 0)) + 1
+        )
 
 
 def _write_evaluations(
@@ -1369,6 +1584,20 @@ def train_v20_variant(
         raise RuntimeError(
             f"refusing to overwrite existing checkpoints in {root}; "
             "use --skip-completed to resume or choose a new run name"
+        )
+    if cfg.training_count_distribution == "maxent_set_count":
+        sampler = _joint_set_count_sampler(cfg, text, split, pool)
+        plan_path = run_dir / "tables" / "training_set_count_sampler_plan.csv"
+        atomic_csv(sampler.plan, plan_path)
+        feasible = int(sampler.plan["feasible"].sum())
+        print(
+            "[sampler] maxent_set_count "
+            f"feasible_cells={feasible}/{len(sampler.plan)} "
+            f"max_set_error="
+            f"{float((sampler.plan.groupby('set_id').target_probability.sum() - 1.0 / len(pool.sets)).abs().max()):.3e} "
+            f"max_count_error="
+            f"{float((sampler.plan.groupby('count').target_probability.sum() - 1.0 / cfg.count_max_threshold).abs().max()):.3e}",
+            flush=True,
         )
     model = paired_v20_model(cfg, vocab, position_encoding)
     optimizer = AdamW(
@@ -1847,8 +2076,14 @@ def summarize_learning_tables(run_dir: Path) -> None:
         rows: list[dict[str, Any]] = []
         for _, item in final.iterrows():
             state = json.loads(item["cumulative_sampling_json"])
-            for dimension in ("accepted_counts", "proposed_counts", "frequency_bins", "set_ids"):
-                for value, count in state[dimension].items():
+            for dimension in (
+                "accepted_counts",
+                "proposed_counts",
+                "frequency_bins",
+                "set_ids",
+                "set_count_cells",
+            ):
+                for value, count in state.get(dimension, {}).items():
                     rows.append(
                         {
                             "position_encoding": item.position_encoding,
