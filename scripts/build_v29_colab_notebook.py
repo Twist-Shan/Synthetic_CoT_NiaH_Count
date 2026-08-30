@@ -33,7 +33,7 @@ def build() -> Path:
         source = source.replace('manifest["version"] == "v28"', 'manifest["version"] == "v29"')
         source = source.replace(
             "v28_partial_count_readout_L256_pool100_seed",
-            "v29_countweight4_partial_readout_L256_pool100_seed",
+            "v29_countweight4_fixed_partial_readout_L256_pool100_seed",
         )
         cell["source"] = source.splitlines(keepends=True)
 

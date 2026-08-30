@@ -181,6 +181,7 @@ VERSION_SPECS = {
         "needle_pool_frequency_threshold": 10.0 / 256.0,
         "training_count_distribution": "uniform",
         "task_output_loss_reduction": "component_normalized",
+        "task_output_count_weight": 4.0,
         "tie_word_embeddings": True,
         "untie_atomic_count_readout": True,
     },
@@ -543,6 +544,18 @@ class V20Config:
             raise ValueError(
                 f"{self.version} requires final_count_loss_weight="
                 f"{canonical_final_weight:g}"
+            )
+        canonical_task_output_count_weight = version_spec.get(
+            "task_output_count_weight"
+        )
+        if (
+            canonical_task_output_count_weight is not None
+            and float(self.task_output_count_weight)
+            != float(canonical_task_output_count_weight)
+        ):
+            raise ValueError(
+                f"{self.version} requires task_output_count_weight="
+                f"{canonical_task_output_count_weight:g}"
             )
         canonical_count_max = version_spec.get("count_max_threshold")
         if (

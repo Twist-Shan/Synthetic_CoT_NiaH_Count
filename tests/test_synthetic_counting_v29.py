@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 
 import torch
+import pytest
 
 from synthetic_counting_v20.data import V20Vocab
 from synthetic_counting_v20.model import build_model
@@ -32,6 +33,32 @@ def test_v29_changes_only_version_and_count_region_weight_from_v28() -> None:
     assert candidate.tie_word_embeddings
     assert candidate.untie_atomic_count_readout
     assert candidate.answer_query_contrastive_weight == 0.0
+
+
+def test_v29_rejects_a_noncanonical_count_region_weight() -> None:
+    candidate = preset_v29("debug", device="cpu")
+    with pytest.raises(ValueError, match="requires task_output_count_weight=4"):
+        replace(candidate, task_output_count_weight=1.0).validate()
+
+
+def test_shared_v29_cli_injects_the_canonical_weight_and_both_modes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from synthetic_counting_v20.cli import main as shared_main
+    import synthetic_counting_v20.pipeline as pipeline
+
+    captured: dict[str, object] = {}
+
+    def capture(cfg: object, **kwargs: object) -> None:
+        captured["cfg"] = cfg
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(pipeline, "run_v20_pipeline", capture)
+    shared_main(["--preset", "debug"], version="v29")
+    cfg = captured["cfg"]
+    assert cfg.version == "v29"
+    assert cfg.task_output_count_weight == 4.0
+    assert cfg.enabled_model_variants == ("rope/nonthinking", "rope/thinking")
 
 
 def test_v29_step_zero_model_matches_v28_exactly() -> None:
@@ -66,6 +93,7 @@ def test_v29_notebook_is_clean_and_audits_the_single_scalar_change() -> None:
     assert "SEEDS = (1234, 2234, 3234)" in source
     assert 'changed_fields == {"version", "task_output_count_weight"}' in source
     assert "planned.task_output_count_weight == 4.0" in source
+    assert "v29_countweight4_fixed_partial_readout" in source
     assert '"--stage", "phase,causal,extended,plots"' in source
     assert "CALIBRATION_DIR" not in source
     assert "trace_safety" not in source
