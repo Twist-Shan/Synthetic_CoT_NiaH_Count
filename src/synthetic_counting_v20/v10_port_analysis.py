@@ -608,7 +608,11 @@ def _head_rankings(ctx: RunContext) -> tuple[dict[str, list[Head]], pd.DataFrame
         )
     frame = pd.concat(parts, ignore_index=True)
     specifications = {
-        "nonthinking_broad": ("nonthinking", "final_answer", "broad_score"),
+        "nonthinking_broad": (
+            "nonthinking",
+            "final_answer",
+            "broad_attention_score",
+        ),
         "thinking_targeted": ("thinking", "trace_index", "correct_prompt_needle_mass"),
         "thinking_readout": ("thinking", "final_answer", "trace_readout_mass"),
     }
@@ -616,8 +620,6 @@ def _head_rankings(ctx: RunContext) -> tuple[dict[str, list[Head]], pd.DataFrame
     rows: list[dict[str, Any]] = []
     for role, (mode, query, metric) in specifications.items():
         subset = frame[(frame["mode"] == mode) & (frame["query_kind"] == query)].copy()
-        if role == "nonthinking_broad":
-            subset["broad_score"] = subset["prompt_needles_mass"] * subset["needle_entropy_normalized"]
         summary = subset.groupby(["layer", "head"], as_index=False)[metric].mean().sort_values(metric, ascending=False)
         result[role] = [(int(row.layer), int(row.head)) for row in summary.itertuples()]
         for rank, row in enumerate(summary.itertuples(), start=1):

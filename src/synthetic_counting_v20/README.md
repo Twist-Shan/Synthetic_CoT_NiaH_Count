@@ -72,6 +72,8 @@ Colab 入口是 [`Trace_Count_v20_Colab.ipynb`](../../notebooks/Trace_Count_v20_
 | [`extended_analysis.py`](extended_analysis.py) | 交互式 attention dynamics、高样本 AR 与扩展机制指标 |
 | [`phase_transition.py`](phase_transition.py) | 逐功能 transition 拟合、per-k/exposure 与 causal audit |
 | [`v10_port_analysis.py`](v10_port_analysis.py) | v10 causal suite 的迁移 |
+| [`aligned_geometry.py`](aligned_geometry.py) | 与 realistic reports 对齐的 discovery/confirmation geometry |
+| [`aligned_causal.py`](aligned_causal.py) | prompt-evidence restoration 与 trace-scope causal controls |
 | [`interactive_geometry.py`](interactive_geometry.py) | hidden-state manifold 的可交互 3D 展示 |
 
 ## 5. 核心指标如何计算
@@ -89,14 +91,27 @@ Colab 入口是 [`Trace_Count_v20_Colab.ipynb`](../../notebooks/Trace_Count_v20_
 
 在 marker query 位置，考察它对“继续所需位置/下一 index token”或结束 trace 所需信息的 attention/readout 倾向。role score 是正确 successor 目标相对 control/wrong 目标的归一化优势。
 
-### 5.3 定位与 identity transport
+### 5.3 Broad retrieval
+
+在最终 `<Ans>` query，令 (a_i) 为某个 head 落在第 (i) 个目标 occurrence 上的 attention，(N) 为目标 occurrence 数：
+
+\[
+M=\sum_i a_i,\qquad
+p_i=a_i/M,\qquad
+C_{\mathrm{eff}}=\frac{\exp\!\left(-\sum_i p_i\log p_i\right)}{N},\qquad
+B_{\mathrm{eff}}=M C_{\mathrm{eff}}.
+\]
+
+主 broad score 使用 (B_{\mathrm{eff}})，与 realistic-NiaH reports 的定义一致。它把均匀覆盖 (K) 个 occurrence 解释为 (K/N) coverage；因此只覆盖 2/30 个 occurrence 的 head 不会因 entropy normalization 被高估。`total_target_mass`、`effective_coverage` 和 `normalized_entropy` 分列保存，旧的 (M H/\log N) 也以 `legacy_entropy_broad_score` 保留用于审计，不再参与 head 排名。(N=1) 且 (M>0) 时约定 (C_{\mathrm{eff}}=1)，不会像旧实现那样把有效单 occurrence retrieval 记为 0。
+
+### 5.4 定位与 identity transport
 
 - attention-pattern-only patch：只替换 attention pattern，测试路由本身；
 - value-only patch：保留目标 attention pattern，只替换 value/output 内容，测试 identity transport；
 - residual-stream patch：替换指定层与位置的 residual state，测试整合后的状态是否足以恢复输出；
 - normalized recovery：\((m_{\text{patched}}-m_{\text{corrupt}})/(m_{\text{clean}}-m_{\text{corrupt}})\)，其中 \(m\) 是目标 logit margin 或其他预注册结果指标。
 
-### 5.4 每个 k 的 exposure
+### 5.5 每个 k 的 exposure
 
 若 \(N_n(t)\) 是 step \(t\) 前 count 为 \(n\) 的训练样本数，则 Thinking 中语义 index \(k\) 的累计 exposure 为
 
@@ -106,7 +121,7 @@ E_k(t)=\sum_{n\ge k}N_n(t).
 
 高 `k` 只在更长 trace 中出现，因此 exposure 更少。将横轴从 training step 换成 \(E_k(t)\)，可以区分“晚形成”究竟来自样本暴露不足，还是来自需要前置机制/curriculum。
 
-### 5.5 突然还是平滑
+### 5.6 突然还是平滑
 
 每个功能单独比较平滑 sigmoid/连续增长模型和 changepoint 模型，并报告：
 
@@ -139,7 +154,7 @@ Nonthinking 差并不意味着它完全没有看到目标字符。它更可能�
 2. **传输**：value 路径把被定位字符的 identity 带回 trace；单一 head 的 value recovery 很低，而多个 head 合并后可高恢复，说明传输是分布式的。
 3. **状态更新**：marker/index 位置的 residual stream 进入结构化的 count/occurrence manifold；MLP 和多个 attention outputs 共同更新状态。目前不能把它简化为已证明的单方向“向量 +1”。
 4. **继续或停止**：marker-successor/stop 角色帮助决定下一个 index 或 `</Think>`。
-5. **最终 readout**：答案依赖后层 residual count state。`<Ans>` attention 指向最后 index 可能参与传输，但不是“只读取最后 index”这一单一路径。
+5. **最终 readout**：答案依赖后层 residual count state。length-preserving final-index/tail conflicts 基本不改变答案；缩短 trace 后，Layer-2 `<Ans>` attention output patch 可近乎完全恢复 clean answer margin。因此当前最精确的描述是 trace-length/position-sensitive terminal bridge，而不是“只读取最后 index”或最后位置 prompt-wide broad aggregation。
 
 ## 8. Training dynamics 与逐功能 phase audit
 
@@ -160,6 +175,22 @@ marker-successor 可以称为“快速涌现的候选功能”，因为它在约
 
 Thinking AR 在 5,500→6,000 steps 由约 0.359 升至 0.532，但 targeted mass、QK margin、value transport 和 causal damage 均没有同样窄的共同跳变。一个合理解释是：若长 trace 的每一步局部成功率为 \(p\)，全局 exact success 近似含有 \(p^n\) 项；当 \(p\) 平滑提高时，长序列的 exact accuracy 可以显得很陡。
 
+参考 Anthropic induction-head work 将宏观 learning curve、逐 head 机制分数和 causal attribution 对齐到同一训练轴的组织方式，v20 的可复现绘图入口是：
+
+```powershell
+python scripts/plot_v20_anthropic_training_dynamics.py `
+  --run-dir colab_results/v20_main_RoPE_count1-30_seed1234
+```
+
+输出位于 `analysis/training_dynamics_anthropic_style/`：
+
+- `v20_training_dynamics_overview`：behavior → frozen role score → targeted routing/QK → local causal damage；
+- `v20_broad_metric_decomposition`：把 broad retrieval 拆成 total mass、effective coverage 与二者乘积；
+- `v20_per_head_role_formation`：四种 role 的全部 16 条 head trajectories；
+- `v20_head_bank_differentiation`：effective head number、top-2 share、role-map JS divergence 和最终 normalized role atlas。
+
+阴影只表示单 seed sigmoid fit 的 10–90% formation window，不应解释为跨 seed 的普适 phase transition。设计参考：[In-context Learning and Induction Heads](https://transformer-circuits.pub/2022/in-context-learning-and-induction-heads/)。
+
 ## 9. 仍欠缺的证据
 
 - 多 seed：确认快速 successor 与平滑 targeted retrieval 是否跨初始化复现。
@@ -169,3 +200,26 @@ Thinking AR 在 5,500→6,000 steps 由约 0.359 升至 0.532，但 targeted mas
 - generated-prefix 状态：检验 teacher-forced manifold 是否真正被自由生成过程使用。
 - per-k changepoint：聚合曲线可能把不同 `k` 的快速但错位形成平均成平滑曲线。
 
+## 10. 对齐大模型协议的综合报告
+
+自包含报告位于 [`reports/NiaH_Synthetic_report.html`](../../reports/NiaH_Synthetic_report.html)。它包含：
+
+- 四个对齐端点、六项 geometry metrics，以及严格分离的 discovery/confirmation layer selection；
+- non-thinking prompt evidence restoration、targeted localization/value transport、progress routing、stop scope 与 terminal bridge；
+- 线性 step 主图、log-step 补充、head-bank differentiation 和 fixed-layer geometry dynamics；
+- 每项实验的目的、简单例子、坐标轴定义、结论与 claim boundary。
+
+完整复现顺序：
+
+```powershell
+python scripts/analyze_v20_aligned_geometry.py `
+  --run-dir colab_results/v20_main_RoPE_count1-30_seed1234 `
+  --device cpu `
+  --milestones 0,500,1000,1500,2000,3000,4000,5000,6000,8000,10000
+
+python scripts/run_v20_aligned_causal.py `
+  --run-dir colab_results/v20_main_RoPE_count1-30_seed1234 `
+  --device cpu
+
+python scripts/build_v20_synthetic_report.py
+```

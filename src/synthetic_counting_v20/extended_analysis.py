@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import html
 import json
-import math
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -12,6 +10,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from .attention_metrics import broad_profile_metrics as _broad_profile_metrics
 from .config import V20Config, config_from_dict
 from .data import V20Example, V20Rendered, V20Vocab, collate_v20, load_corpus_split, load_corpus_text, load_suite_manifests, render_v20
 from .model import build_model
@@ -40,13 +39,24 @@ def _balanced_split(
 
 
 @torch.inference_mode()
-def _broad_score_matrix(
+def _broad_metric_matrices(
     model,
     cfg: V20Config,
     vocab: V20Vocab,
     items: Sequence[V20Rendered],
-) -> tuple[np.ndarray, int]:
-    total = np.zeros((cfg.n_layer, cfg.n_head), dtype=np.float64)
+) -> tuple[dict[str, np.ndarray], int]:
+    totals = {
+        name: np.zeros((cfg.n_layer, cfg.n_head), dtype=np.float64)
+        for name in (
+            "total_target_mass",
+            "effective_number",
+            "effective_coverage",
+            "normalized_entropy",
+            "broad_score",
+            "entropy_broad_score",
+            "legacy_entropy_broad_score",
+        )
+    }
     observations = 0
     batch_size = min(8, cfg.analysis_batch_size)
     for start in range(0, len(items), batch_size):
@@ -58,18 +68,32 @@ def _broad_score_matrix(
             assert item.spans is not None
             needles = list(item.prompt_needle_positions)
             for layer, weights in enumerate(output.attentions):
-                values = weights[row, :, item.spans.ans_pos, needles].detach().float().cpu().numpy()
-                mass = values.sum(axis=-1)
-                if len(needles) <= 1:
-                    entropy = np.zeros(cfg.n_head, dtype=np.float64)
-                else:
-                    probabilities = values / np.maximum(mass[:, None], 1e-12)
-                    entropy = -(
-                        probabilities * np.log(np.maximum(probabilities, 1e-12))
-                    ).sum(axis=-1) / math.log(len(needles))
-                total[layer] += mass * entropy
+                values = (
+                    weights[row, :, item.spans.ans_pos, needles]
+                    .detach()
+                    .float()
+                    .cpu()
+                    .numpy()
+                )
+                metrics = _broad_profile_metrics(values)
+                for name, metric_values in metrics.items():
+                    totals[name][layer] += metric_values
             observations += 1
-    return total / max(observations, 1), observations
+    denominator = max(observations, 1)
+    return {name: values / denominator for name, values in totals.items()}, observations
+
+
+@torch.inference_mode()
+def _broad_score_matrix(
+    model,
+    cfg: V20Config,
+    vocab: V20Vocab,
+    items: Sequence[V20Rendered],
+) -> tuple[np.ndarray, int]:
+    """Backward-compatible wrapper returning the effective-coverage score."""
+
+    metrics, observations = _broad_metric_matrices(model, cfg, vocab, items)
+    return metrics["broad_score"], observations
 
 
 def _best_head(matrix: np.ndarray) -> tuple[int, int]:
@@ -142,9 +166,10 @@ def collect_dense_attention_roles(run_dir: str | Path, *, device: str | None = N
             payload = torch.load(shard, map_location="cpu", weights_only=False)
             for step in sorted(steps):
                 model.load_state_dict(payload["model_state_dicts"][str(step)])
-                matrix, observations = _broad_score_matrix(
+                metric_matrices, observations = _broad_metric_matrices(
                     model, cfg, vocab, reporting_items
                 )
+                matrix = metric_matrices["broad_score"]
                 for layer in range(cfg.n_layer):
                     for head in range(cfg.n_head):
                         rows.append(
@@ -155,12 +180,37 @@ def collect_dense_attention_roles(run_dir: str | Path, *, device: str | None = N
                                 "layer": layer + 1,
                                 "head": head,
                                 "score": float(matrix[layer, head]),
+                                "broad_score": float(matrix[layer, head]),
+                                "total_target_mass": float(
+                                    metric_matrices["total_target_mass"][layer, head]
+                                ),
+                                "effective_number": float(
+                                    metric_matrices["effective_number"][layer, head]
+                                ),
+                                "effective_coverage": float(
+                                    metric_matrices["effective_coverage"][layer, head]
+                                ),
+                                "normalized_entropy": float(
+                                    metric_matrices["normalized_entropy"][layer, head]
+                                ),
+                                "entropy_broad_score": float(
+                                    metric_matrices["entropy_broad_score"][layer, head]
+                                ),
+                                "legacy_entropy_broad_score": float(
+                                    metric_matrices["legacy_entropy_broad_score"][
+                                        layer, head
+                                    ]
+                                ),
                                 "is_fixed_role_head": float(
                                     (layer + 1, head) == (fixed_layer, fixed_head)
                                 ),
                                 "observations": observations,
                                 "selection_split": "disjoint_final_checkpoint",
                                 "reporting_split": "heldout_reporting",
+                                "score_definition": (
+                                    "mean(total_target_mass*exp(shannon_entropy)"
+                                    "/num_target_occurrences)"
+                                ),
                             }
                         )
             del payload
@@ -205,8 +255,8 @@ def write_attention_dynamics_html(
 ) -> None:
     output = Path(output)
     roles = [
-        ("nonthinking_broad", "Nonthinking broad attention"),
-        ("thinking_broad", "Thinking broad attention"),
+        ("nonthinking_broad", "Nonthinking broad (M × effective coverage)"),
+        ("thinking_broad", "Thinking broad (M × effective coverage)"),
         ("targeted_retrieval", "Thinking targeted retrieval"),
         ("marker_successor", "Thinking successor-like"),
     ]
@@ -231,10 +281,14 @@ def write_attention_dynamics_html(
 <title>v20 attention role dynamics</title>
 <style>
 :root{{--bg:#f8fafc;--panel:#fff;--text:#13233a;--muted:#5c6b7d;--border:#d9e2ec;--accent:#145c91;--hot:#e66b3d}}*{{box-sizing:border-box}}body{{margin:0;padding:18px;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}}main{{max-width:1180px;margin:auto}}h1{{font-size:22px;margin:0 0 6px}}p{{color:var(--muted);margin:4px 0 14px}}.controls{{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;margin:14px 0 18px}}input[type=range]{{width:100%}}#stepValue{{font-variant-numeric:tabular-nums;font-weight:650}}.panels{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}}section{{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px}}h2{{font-size:16px;margin:0 0 4px}}.sub{{font-size:12px;color:var(--muted);margin-bottom:10px}}.grid{{display:grid;grid-template-columns:42px repeat(4,minmax(54px,1fr));gap:5px;align-items:stretch}}.axis{{display:grid;place-items:center;color:var(--muted);font-size:12px}}.cell{{min-height:58px;border-radius:8px;display:grid;place-items:center;border:2px solid transparent;font-variant-numeric:tabular-nums;color:#102033}}.cell.fixed{{border-color:#121826;box-shadow:inset 0 0 0 1px #fff}}.legend{{height:8px;border-radius:5px;background:linear-gradient(90deg,#edf2f7,#f4b183,#cf3f2d);margin-top:10px}}.scale{{display:flex;justify-content:space-between;color:var(--muted);font-size:11px}}.curve{{margin-top:18px;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px}}svg{{width:100%;height:230px;display:block}}.gridline{{stroke:#d9e2ec;stroke-width:1}}.cursor{{stroke:#111827;stroke-width:1.5;stroke-dasharray:4 3}}.series{{fill:none;stroke-width:2}}.point{{stroke:#fff;stroke-width:1.5}}@media(max-width:760px){{.panels{{grid-template-columns:1fr}}.controls{{grid-template-columns:1fr}}}}
-</style></head><body><main><h1>Attention head 角色随训练的变化</h1><p>拖动 training step。每个 panel 是 4 layers × 4 heads；单元格显示原始角色分数，黑框是由独立 selection split 在最终 checkpoint 选出的固定 head。每个 panel 使用自己的固定色标，跨 panel 请比较数字，不比较颜色深浅。</p>
+</style></head><body><main><h1>Attention head 角色随训练的变化</h1><p>拖动 training step。每个 panel 是 4 layers × 4 heads；broad panel 使用 B=M×exp(H)/N（effective coverage），targeted/successor panel 使用各自原始 role score。黑框是由独立 selection split 在最终 checkpoint 选出的固定 head。每个 panel 使用自己的固定色标，跨 panel 请比较数字，不比较颜色深浅。</p>
 <div class="controls"><label for="step">Training step</label><input id="step" type="range" min="0" max="{len(payload['steps'])-1}" value="{len(payload['steps'])-1}" step="1"><output id="stepValue"></output></div><div class="panels" id="panels"></div><div class="curve"><svg id="curve" role="img" aria-label="四个固定 attention head 角色分数随 training step 的折线图"></svg></div></main>
 <script>const D={data};const roles=['nonthinking_broad','thinking_broad','targeted_retrieval','marker_successor'];const colors=['#315f9f','#d97745','#6f4aa8','#16877d'];const panels=document.getElementById('panels');function color(v,max){{const t=Math.max(0,Math.min(1,v/Math.max(max,1e-9)));const a=[237,242,247],b=t<.55?[244,177,131]:[207,63,45],u=t<.55?t/.55:(t-.55)/.45,s=t<.55?a:[244,177,131];return `rgb(${{Math.round(s[0]+(b[0]-s[0])*u)}},${{Math.round(s[1]+(b[1]-s[1])*u)}},${{Math.round(s[2]+(b[2]-s[2])*u)}})`}}function renderPanels(step){{panels.innerHTML='';roles.forEach(role=>{{const r=D.roles[role],vals=r.values[String(step)],sec=document.createElement('section');const fixed=`L${{r.fixed.layer}}H${{r.fixed.head}}`;sec.innerHTML=`<h2>${{r.label}}</h2><div class="sub">score range 0–${{r.max.toFixed(3)}} · fixed ${{fixed}}</div>`;const g=document.createElement('div');g.className='grid';g.innerHTML='<div></div>'+[0,1,2,3].map(h=>`<div class="axis">H${{h}}</div>`).join('');for(let l=1;l<=4;l++){{g.insertAdjacentHTML('beforeend',`<div class="axis">L${{l}}</div>`);for(let h=0;h<4;h++){{const v=vals[(l-1)*4+h],c=document.createElement('div');c.className='cell'+(l===r.fixed.layer&&h===r.fixed.head?' fixed':'');c.style.background=color(v,r.max);c.textContent=v.toFixed(3);c.setAttribute('aria-label',`${{r.label}} layer ${{l}} head ${{h}} score ${{v.toFixed(4)}}`);g.appendChild(c)}}}}sec.appendChild(g);sec.insertAdjacentHTML('beforeend',`<div class="legend"></div><div class="scale"><span>0</span><span>${{r.max.toFixed(3)}}</span></div>`);panels.appendChild(sec)}})}}function drawCurve(step){{const svg=document.getElementById('curve'),W=1100,H=230,m={{l:58,r:20,t:44,b:36}},x=s=>m.l+(s/D.steps[D.steps.length-1])*(W-m.l-m.r),y=v=>m.t+(1-v)*(H-m.t-m.b);svg.setAttribute('viewBox',`0 0 ${{W}} ${{H}}`);let z=`<line class="gridline" x1="${{m.l}}" y1="${{y(0)}}" x2="${{W-m.r}}" y2="${{y(0)}}"/><line class="gridline" x1="${{m.l}}" y1="${{y(.5)}}" x2="${{W-m.r}}" y2="${{y(.5)}}"/><line class="gridline" x1="${{m.l}}" y1="${{y(1)}}" x2="${{W-m.r}}" y2="${{y(1)}}"/><text x="8" y="${{y(.5)+4}}" fill="#5c6b7d">role score</text>`;roles.forEach((role,i)=>{{const r=D.roles[role],idx=(r.fixed.layer-1)*4+r.fixed.head,pts=D.steps.map(s=>[x(s),y(r.values[String(s)][idx])]);z+=`<polyline class="series" stroke="${{colors[i]}}" points="${{pts.map(p=>p.join(',')).join(' ')}}"/>`;const v=r.values[String(step)][idx],legendX=m.l+(i%2)*520,legendY=14+Math.floor(i/2)*17;z+=`<circle class="point" fill="${{colors[i]}}" cx="${{x(step)}}" cy="${{y(v)}}" r="4"/><text x="${{legendX}}" y="${{legendY}}" fill="${{colors[i]}}">${{r.label}} ${{v.toFixed(3)}}</text>`}});z+=`<line class="cursor" x1="${{x(step)}}" y1="${{m.t}}" x2="${{x(step)}}" y2="${{H-m.b}}"/><text x="${{m.l}}" y="${{H-8}}">0</text><text x="${{W-m.r-36}}" y="${{H-8}}">10000</text><text x="${{W/2-40}}" y="${{H-8}}">training step</text>`;svg.innerHTML=z}}function update(){{const step=D.steps[+document.getElementById('step').value];document.getElementById('stepValue').textContent=step.toLocaleString();renderPanels(step);drawCurve(step)}}document.getElementById('step').addEventListener('input',update);update();</script></body></html>"""
     _atomic_text(output, document)
 
 
-__all__ = ["collect_dense_attention_roles", "write_attention_dynamics_html"]
+__all__ = [
+    "_broad_profile_metrics",
+    "collect_dense_attention_roles",
+    "write_attention_dynamics_html",
+]

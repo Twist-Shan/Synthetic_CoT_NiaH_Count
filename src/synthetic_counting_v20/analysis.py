@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from .attention_metrics import broad_profile_metrics
 from .config import V20Config
 from .data import V20Example, V20Rendered, V20Vocab, collate_v20, render_v20
 from .training import atomic_csv, load_final_v20_model
@@ -29,6 +30,7 @@ def _attention_categories(item: V20Rendered, weights: np.ndarray) -> dict[str, f
     prompt = list(range(spans.prompt_start, spans.prompt_end_exclusive))
     non_needles = [position for position in prompt if position not in needle_set]
     needle_weights = weights[needles] if needles else np.asarray([], dtype=np.float64)
+    broad_metrics = broad_profile_metrics(needle_weights) if needles else None
     prompt_mass = float(weights[prompt].sum()) if prompt else 0.0
     needle_fraction = float(needle_weights.sum() / prompt_mass) if prompt_mass > 1e-12 else 0.0
     uniform_fraction = len(needles) / max(1, len(prompt))
@@ -51,6 +53,22 @@ def _attention_categories(item: V20Rendered, weights: np.ndarray) -> dict[str, f
         "trace_indices_mass": float(weights[list(spans.trace_index_positions)].sum()) if spans.trace_index_positions else 0.0,
         "trace_markers_mass": float(weights[list(spans.trace_marker_positions)].sum()) if spans.trace_marker_positions else 0.0,
         "needle_entropy_normalized": _normalized_entropy(needle_weights),
+        "needle_effective_number": (
+            float(broad_metrics["effective_number"]) if broad_metrics is not None else 0.0
+        ),
+        "needle_effective_coverage": (
+            float(broad_metrics["effective_coverage"])
+            if broad_metrics is not None
+            else 0.0
+        ),
+        "broad_attention_score": (
+            float(broad_metrics["broad_score"]) if broad_metrics is not None else 0.0
+        ),
+        "legacy_entropy_broad_score": (
+            float(broad_metrics["legacy_entropy_broad_score"])
+            if broad_metrics is not None
+            else 0.0
+        ),
         "prompt_mass": prompt_mass,
         "needle_attention_enrichment": float(enrichment),
         "top_n_needle_recall": float(top_n_recall),
