@@ -185,6 +185,22 @@ VERSION_SPECS = {
         "tie_word_embeddings": True,
         "untie_atomic_count_readout": True,
     },
+    # v30 is the depth-only capacity control for v29.  It keeps the complete
+    # data, trace, objective, width, and four-head setting fixed, and adds two
+    # transformer blocks so the targeted-retrieval -> trace -> answer path has
+    # more compositional depth without adding a new loss or inference rule.
+    "v30": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 10,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "uniform",
+        "task_output_loss_reduction": "component_normalized",
+        "task_output_count_weight": 4.0,
+        "tie_word_embeddings": True,
+        "untie_atomic_count_readout": True,
+        "n_layer": 6,
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
@@ -425,9 +441,15 @@ class V20Config:
             raise ValueError("candidate_filter_max_attempts must be positive")
         if self.seq_len < 2:
             raise ValueError("seq_len must be at least two")
-        if (self.n_layer, self.n_head, self.n_embd, self.n_inner) != (4, 4, 256, 1024):
+        canonical_n_layer = int(version_spec.get("n_layer", 4))
+        if (self.n_layer, self.n_head, self.n_embd, self.n_inner) != (
+            canonical_n_layer,
+            4,
+            256,
+            1024,
+        ):
             raise ValueError(
-                "v20/v21/v22/v23/v24/v24.2/v24.3/v24.4 require 4 layers, 4 heads, "
+                f"{self.version} requires {canonical_n_layer} layers, 4 heads, "
                 "d_model=256, MLP=1024"
             )
         if self.n_embd % self.n_head:
