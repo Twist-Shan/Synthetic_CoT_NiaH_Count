@@ -61,6 +61,7 @@ packages = [
     "src/synthetic_counting_v26",
     "src/synthetic_counting_v26_1",
     "src/synthetic_counting_v27",
+    "src/synthetic_counting_v27_1",
 ]
 
 [dependency-groups]

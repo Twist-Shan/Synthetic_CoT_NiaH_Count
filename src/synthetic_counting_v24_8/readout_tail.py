@@ -46,6 +46,7 @@ class CandidateSpec:
     learning_rate: float
     steps: int
     warmup_steps: int
+    trace_safety_weight: float = 0.0
 
     def validate(self) -> None:
         if not self.name:
@@ -56,6 +57,11 @@ class CandidateSpec:
             raise ValueError("candidate steps must be positive")
         if self.warmup_steps < 0 or self.warmup_steps >= self.steps:
             raise ValueError("warmup steps must lie in [0, steps)")
+        if (
+            not math.isfinite(self.trace_safety_weight)
+            or self.trace_safety_weight < 0
+        ):
+            raise ValueError("trace safety weight must be finite and nonnegative")
 
 
 @dataclass(frozen=True)
@@ -161,6 +167,44 @@ def _answer_logits_and_targets(
         rows.append(logits[row, item.spans.count_pos - 1, number_ids])
         targets.append(int(item.count) - 1)
     return torch.stack(rows), torch.tensor(targets, dtype=torch.long, device=logits.device)
+
+
+def _trace_safety_loss(
+    logits: torch.Tensor,
+    ids: torch.Tensor,
+    rendered: list[V20Rendered],
+) -> torch.Tensor:
+    """Penalize premature count-token competition along a gold Thinking trace.
+
+    Each Thinking example contributes one mean regardless of trace length.  In
+    tied-unembedding calibration only atomic-number rows are trainable, so the
+    ordinary full-vocabulary cross entropy can only push those rows below the
+    frozen correct trace/boundary token at pre-answer positions.
+    """
+
+    row_losses: list[torch.Tensor] = []
+    for row, item in enumerate(rendered):
+        if item.mode != "thinking":
+            continue
+        if item.spans is None or item.spans.think_pos is None:
+            raise ValueError("trace safety requires complete Thinking spans")
+        target_positions = torch.arange(
+            item.spans.think_pos + 1,
+            item.spans.count_pos,
+            dtype=torch.long,
+            device=logits.device,
+        )
+        if target_positions.numel() == 0:
+            raise ValueError("Thinking trace safety region cannot be empty")
+        row_losses.append(
+            F.cross_entropy(
+                logits[row, target_positions - 1].float(),
+                ids[row, target_positions],
+            )
+        )
+    if not row_losses:
+        return logits.sum() * 0.0
+    return torch.stack(row_losses).mean()
 
 
 def _validation_examples(
@@ -337,6 +381,13 @@ def _run_candidate(
     trainable = [readout_weight]
     optimizer = AdamW(trainable, lr=0.0, betas=(0.9, 0.999), weight_decay=0.0)
     number_ids = torch.tensor(vocab.number_ids, dtype=torch.long, device=device)
+    gradient_row_mask = torch.zeros(
+        (readout_weight.shape[0], 1),
+        dtype=readout_weight.dtype,
+        device=readout_weight.device,
+    )
+    gradient_row_mask[number_ids] = 1
+    readout_weight.register_hook(lambda gradient: gradient * gradient_row_mask)
     rng = random.Random(seed)
     history_rows: list[dict[str, Any]] = []
     by_count_rows: list[pd.DataFrame] = []
@@ -394,7 +445,13 @@ def _run_candidate(
                     )
         logits = model(input_ids=ids, attention_mask=mask).logits
         answer_logits, targets = _answer_logits_and_targets(logits, rendered, number_ids)
-        loss = F.cross_entropy(answer_logits.float(), targets)
+        answer_loss = F.cross_entropy(answer_logits.float(), targets)
+        trace_safety_loss = (
+            _trace_safety_loss(logits, ids, rendered)
+            if spec.trace_safety_weight > 0
+            else logits.sum() * 0.0
+        )
+        loss = answer_loss + spec.trace_safety_weight * trace_safety_loss
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         gradient_norm = float(torch.nn.utils.clip_grad_norm_(trainable, 1.0))
@@ -405,6 +462,8 @@ def _run_candidate(
             print(
                 f"[tail] mode={mode} candidate={spec.name} step={step}/{spec.steps} "
                 f"loss={float(loss.detach().cpu()):.6f} lr={rate:.3e} "
+                f"answer_loss={float(answer_loss.detach().cpu()):.6f} "
+                f"trace_safety_loss={float(trace_safety_loss.detach().cpu()):.6f} "
                 f"grad_norm={gradient_norm:.3f}",
                 flush=True,
             )
@@ -736,6 +795,7 @@ __all__ = [
     "CandidateSpec",
     "GateSummary",
     "SUPPORTED_READOUT_MODES",
+    "_trace_safety_loss",
     "default_candidate_specs",
     "run_readout_tail",
     "summarize_gate",
