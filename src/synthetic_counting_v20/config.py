@@ -137,6 +137,21 @@ VERSION_SPECS = {
         "answer_query_contrastive_weight": 0.1,
         "answer_query_contrastive_temperature": 0.1,
     },
+    # v26 returns to the 256-character v24.3 setting where Thinking already
+    # has a held-out accuracy advantage.  Its sole training change is to
+    # untie the native LM head at initialization, so input embeddings are no
+    # longer moved by the highly asymmetric atomic-number output gradients.
+    # No contrastive/probe objective is added: count compression remains an
+    # emergent property to be measured after training.
+    "v26": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 10,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "uniform",
+        "task_output_loss_reduction": "component_normalized",
+        "tie_word_embeddings": False,
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
