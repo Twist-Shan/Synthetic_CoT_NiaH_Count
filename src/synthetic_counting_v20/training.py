@@ -79,6 +79,102 @@ def training_loss_phase(cfg: V20Config, step: int) -> str:
     return "all_sequence" if step <= cfg.max_steps_for_language_pred else "task_output"
 
 
+def component_normalized_task_output_loss(
+    token_losses: torch.Tensor,
+    active: torch.Tensor,
+    loss_weights: torch.Tensor,
+    rendered: list[V20Rendered],
+    cfg: V20Config,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Combine per-example count, trace, and structure means.
+
+    ``token_losses`` and ``active`` are shifted by one position relative to the
+    rendered sequence, whereas ``loss_weights`` is unshifted.  Only positions
+    selected by the task-output mask participate.  Trace delimiters and marker
+    identities form one region; all remaining active output tokens (tags,
+    ``<Ans>``, and ``<EOS>``) form the structure region.
+
+    Averaging within each region and example before the batch mean ensures that
+    a count token has the same objective coefficient in Non-thinking and
+    Thinking, regardless of trace length.
+    """
+
+    if token_losses.shape != active.shape:
+        raise ValueError("token_losses and active must have identical shifted shapes")
+    if loss_weights.shape != (token_losses.shape[0], token_losses.shape[1] + 1):
+        raise ValueError("loss_weights must be unshifted by exactly one target position")
+    if len(rendered) != token_losses.shape[0]:
+        raise ValueError("rendered batch size must match token_losses")
+
+    region_names = ("final_count", "trace", "structure")
+    region_masks_cpu = torch.zeros(
+        (len(region_names), token_losses.shape[0], token_losses.shape[1]),
+        dtype=torch.bool,
+    )
+    thinking_rows = 0
+    task_rows = 0
+    for row, item in enumerate(rendered):
+        if item.spans is None:
+            continue
+        task_rows += 1
+        if item.mode == "thinking":
+            thinking_rows += 1
+        count_indices = [position - 1 for position in item.spans.count_positions]
+        trace_indices = [
+            position - 1
+            for position in (
+                *(position for group in item.spans.trace_index_token_groups for position in group),
+                *item.spans.trace_marker_positions,
+            )
+        ]
+        output_start = (
+            item.spans.ans_pos
+            if item.mode == "nonthinking"
+            else item.spans.think_pos
+        )
+        if output_start is None:
+            raise ValueError("task-output rows require an output start position")
+        region_masks_cpu[0, row, count_indices] = True
+        if trace_indices:
+            region_masks_cpu[1, row, trace_indices] = True
+        region_masks_cpu[2, row, output_start - 1 : len(item.tokens) - 1] = True
+
+    # Count and trace positions were initially included in the continuous
+    # output range.  Removing them leaves tags, <Ans>, and <EOS> as structure.
+    region_masks_cpu[2] &= ~(region_masks_cpu[0] | region_masks_cpu[1])
+    cpu_valid_rows = region_masks_cpu.any(dim=-1)
+    if (
+        task_rows == 0
+        or int(cpu_valid_rows[0].sum()) != task_rows
+        or int(cpu_valid_rows[2].sum()) != task_rows
+    ):
+        raise ValueError("component-normalized task loss requires count and structure targets")
+    if thinking_rows and int(cpu_valid_rows[1].sum()) != thinking_rows:
+        raise ValueError("every Thinking row must contain an active trace region")
+
+    objective_mask = ((loss_weights[:, 1:] > 0) & active).unsqueeze(0)
+    region_masks = region_masks_cpu.to(device=token_losses.device) & objective_mask
+    region_counts = region_masks.sum(dim=-1)
+    valid_rows = region_counts > 0
+    region_row_means = (
+        (token_losses.unsqueeze(0) * region_masks.to(dtype=token_losses.dtype)).sum(dim=-1)
+        / region_counts.clamp_min(1).to(dtype=token_losses.dtype)
+    )
+    region_means = {
+        "final_count": region_row_means[0, valid_rows[0]].mean(),
+        "structure": region_row_means[2, valid_rows[2]].mean(),
+    }
+    if thinking_rows:
+        region_means["trace"] = region_row_means[1, valid_rows[1]].mean()
+    total = (
+        float(cfg.task_output_count_weight) * region_means["final_count"]
+        + float(cfg.task_output_structure_weight) * region_means["structure"]
+    )
+    if "trace" in region_means:
+        total = total + float(cfg.task_output_trace_weight) * region_means["trace"]
+    return total, region_means
+
+
 def _autocast_context(cfg: V20Config):
     if (
         cfg.precision == "bf16"
@@ -1358,9 +1454,24 @@ def train_v20_variant(
         loss_weights = collate_v20_loss_weights(rendered, cfg, cfg.device, step=step)
         with _autocast_context(cfg):
             output = model(input_ids=ids, attention_mask=attention_mask)
-            loss, token_losses, active = shifted_v20_token_losses(
+            token_weighted_loss, token_losses, active = shifted_v20_token_losses(
                 output.logits, labels, loss_weights
             )
+            component_reduction_active = (
+                loss_phase == "task_output"
+                and cfg.task_output_loss_reduction == "component_normalized"
+            )
+            if component_reduction_active:
+                loss, objective_region_losses = component_normalized_task_output_loss(
+                    token_losses,
+                    active,
+                    loss_weights,
+                    rendered,
+                    cfg,
+                )
+            else:
+                loss = token_weighted_loss
+                objective_region_losses = {}
         active_by_example = active.sum(dim=1).detach().cpu().numpy()
         _update_sampling_state(sampling_state, examples, active_by_example)
         optimizer.zero_grad(set_to_none=True)
@@ -1402,6 +1513,31 @@ def train_v20_variant(
                     )
                 )
             )
+            if component_reduction_active:
+                coefficient_denominator = (
+                    float(cfg.task_output_count_weight)
+                    + float(cfg.task_output_structure_weight)
+                    + (
+                        float(cfg.task_output_trace_weight)
+                        if "trace" in objective_region_losses
+                        else 0.0
+                    )
+                )
+                final_count_coefficient_share = (
+                    float(cfg.task_output_count_weight) / coefficient_denominator
+                )
+                trace_coefficient_share = (
+                    float(cfg.task_output_trace_weight) / coefficient_denominator
+                    if "trace" in objective_region_losses
+                    else 0.0
+                )
+                structure_coefficient_share = (
+                    float(cfg.task_output_structure_weight) / coefficient_denominator
+                )
+            else:
+                final_count_coefficient_share = float("nan")
+                trace_coefficient_share = float("nan")
+                structure_coefficient_share = float("nan")
             row: dict[str, Any] = {
                 "step": step,
                 "position_encoding": position_encoding,
@@ -1412,6 +1548,30 @@ def train_v20_variant(
                 "batch_active_weight_sum": active_weight_sum,
                 "batch_final_count_weight_share": final_count_weight_sum / max(1.0, active_weight_sum),
                 "batch_cot_trace_weight_share": trace_weight_sum / max(1.0, active_weight_sum),
+                "batch_final_count_token_weight_share": final_count_weight_sum
+                / max(1.0, active_weight_sum),
+                "batch_cot_trace_token_weight_share": trace_weight_sum
+                / max(1.0, active_weight_sum),
+                "task_output_loss_reduction": cfg.task_output_loss_reduction,
+                "component_reduction_active": component_reduction_active,
+                "batch_final_count_region_coefficient_share": final_count_coefficient_share,
+                "batch_trace_region_coefficient_share": trace_coefficient_share,
+                "batch_structure_region_coefficient_share": structure_coefficient_share,
+                "train_objective_final_count_region_mean_loss": float(
+                    objective_region_losses["final_count"].detach().cpu()
+                )
+                if "final_count" in objective_region_losses
+                else float("nan"),
+                "train_objective_trace_region_mean_loss": float(
+                    objective_region_losses["trace"].detach().cpu()
+                )
+                if "trace" in objective_region_losses
+                else float("nan"),
+                "train_objective_structure_region_mean_loss": float(
+                    objective_region_losses["structure"].detach().cpu()
+                )
+                if "structure" in objective_region_losses
+                else float("nan"),
                 "training_loss_phase": loss_phase,
                 "language_prediction_enabled": loss_phase == "all_sequence",
                 "batch_objective_active_tokens": objective_active_tokens,

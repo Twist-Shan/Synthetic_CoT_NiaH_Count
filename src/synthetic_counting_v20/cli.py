@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import argparse
 
-from .config import ALL_MODEL_VARIANTS, VERSION_SPECS, preset_config
+from .config import (
+    ALL_MODEL_VARIANTS,
+    SUPPORTED_TASK_OUTPUT_LOSS_REDUCTIONS,
+    VERSION_SPECS,
+    preset_config,
+)
 
 
 def build_parser(version: str = "v20") -> argparse.ArgumentParser:
@@ -46,6 +51,11 @@ def build_parser(version: str = "v20") -> argparse.ArgumentParser:
     parser.add_argument(
         "--training-count-distribution",
         choices=("natural", "uniform"),
+        default=None,
+    )
+    parser.add_argument(
+        "--task-output-loss-reduction",
+        choices=SUPPORTED_TASK_OUTPUT_LOSS_REDUCTIONS,
         default=None,
     )
     parser.add_argument("--needle-pool-size", type=int, default=None)
@@ -97,6 +107,7 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         "count_max_threshold",
         "task_occurrence_ratio",
         "training_count_distribution",
+        "task_output_loss_reduction",
         "needle_pool_size",
         "needle_pool_frequency_threshold",
         "needle_pool_frequency_bins",
@@ -109,6 +120,7 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
     canonical_count_max = version_spec.get("count_max_threshold")
     canonical_pool_threshold = version_spec.get("needle_pool_frequency_threshold")
     canonical_count_distribution = version_spec.get("training_count_distribution")
+    canonical_task_output_reduction = version_spec.get("task_output_loss_reduction")
     if (
         canonical_final_weight is not None
         and args.final_count_loss_weight is not None
@@ -144,6 +156,15 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
             f"{version} fixes --training-count-distribution at "
             f"{canonical_count_distribution}"
         )
+    if (
+        canonical_task_output_reduction is not None
+        and args.task_output_loss_reduction is not None
+        and args.task_output_loss_reduction != canonical_task_output_reduction
+    ):
+        parser.error(
+            f"{version} fixes --task-output-loss-reduction at "
+            f"{canonical_task_output_reduction}"
+        )
     overrides.update(
         version=version,
         count_tokenization=version_spec["count_tokenization"],
@@ -157,13 +178,15 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         overrides["needle_pool_frequency_threshold"] = canonical_pool_threshold
     if canonical_count_distribution is not None:
         overrides["training_count_distribution"] = canonical_count_distribution
+    if canonical_task_output_reduction is not None:
+        overrides["task_output_loss_reduction"] = canonical_task_output_reduction
     if args.model_variant is not None:
         overrides["enabled_model_variants"] = tuple(args.model_variant)
     elif version == "v22":
         # The nonthinking objective is identical to v20, so the canonical v22
         # run trains only the changed separator-trace Thinking model.
         overrides["enabled_model_variants"] = ("rope/thinking",)
-    elif version in {"v23", "v24", "v24.2"}:
+    elif version in {"v23", "v24", "v24.2", "v24.3"}:
         # Both objectives are retrained whenever the loss or count distribution
         # changes so the within-version Thinking/Non-thinking comparison stays
         # controlled.

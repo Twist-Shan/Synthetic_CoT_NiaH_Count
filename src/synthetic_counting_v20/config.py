@@ -53,9 +53,22 @@ VERSION_SPECS = {
         "needle_pool_frequency_threshold": 10.0 / 256.0,
         "training_count_distribution": "uniform",
     },
+    # v24.3 is the loss-only control for v24.2.  Sampling, data, model, seed,
+    # and schedule stay fixed.  Only the task-output phase changes from a
+    # token-weighted mean to separately normalized count/trace/structure
+    # regions, preventing a longer Thinking trace from diluting count loss.
+    "v24.3": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 10,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "uniform",
+        "task_output_loss_reduction": "component_normalized",
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = ("natural", "uniform")
+SUPPORTED_TASK_OUTPUT_LOSS_REDUCTIONS = ("token_weighted_mean", "component_normalized")
 
 
 def _float_tag(value: float) -> str:
@@ -64,7 +77,7 @@ def _float_tag(value: float) -> str:
 
 @dataclass(frozen=True)
 class V20Config:
-    """Shared v20/v21/v22/v23/v24/v24.2 configuration.
+    """Shared v20/v21/v22/v23/v24/v24.2/v24.3 configuration.
 
     v20 and v21 are deliberately paired.  The only task-grammar difference is
     ``count_tokenization``: v20 uses one atomic token per integer, whereas v21
@@ -74,7 +87,8 @@ class V20Config:
     v23 keeps that separator trace and trains both modes with an 8x final-count
     loss weight. v24 returns to unit loss weights and retrains both modes on the
     smaller count range 1..10. v24.2 changes only v24's training count
-    distribution from natural to uniform.
+    distribution from natural to uniform. v24.3 changes only v24.2's
+    post-boundary task-output loss reduction.
     """
 
     version: str = "v20"
@@ -124,6 +138,15 @@ class V20Config:
     max_steps_for_language_pred: int = 1_500
     final_count_loss_weight: float = 1.0
     cot_trace_loss_weight: float = 1.0
+    # These fields affect only steps after max_steps_for_language_pred.  The
+    # legacy reduction remains the default so every earlier version is exactly
+    # reproducible.  Component-normalized loss first averages each semantic
+    # region within an example, then across the batch, and finally combines the
+    # three region means with the coefficients below.
+    task_output_loss_reduction: str = "token_weighted_mean"
+    task_output_count_weight: float = 1.0
+    task_output_trace_weight: float = 1.0
+    task_output_structure_weight: float = 0.1
 
     n_layer: int = 4
     n_head: int = 4
@@ -228,11 +251,11 @@ class V20Config:
             )
         if self.query_layout != "query_first":
             raise ValueError(
-                "v20/v21/v22/v23/v24/v24.2 require query-first sequence construction"
+                "v20/v21/v22/v23/v24/v24.2/v24.3 require query-first sequence construction"
             )
         if self.needle_set_size != 3:
             raise ValueError(
-                "v20/v21/v22/v23/v24/v24.2 require exactly three distinct "
+                "v20/v21/v22/v23/v24/v24.2/v24.3 require exactly three distinct "
                 "characters per needle set"
             )
         if self.needle_pool_size <= 0 or self.needle_pool_frequency_bins <= 0:
@@ -253,6 +276,11 @@ class V20Config:
                 "controlled count distributions require task_occurrence_ratio=1 so the "
                 "requested example distribution is unambiguous"
             )
+        if self.task_output_loss_reduction not in SUPPORTED_TASK_OUTPUT_LOSS_REDUCTIONS:
+            raise ValueError(
+                "task_output_loss_reduction must be one of "
+                f"{SUPPORTED_TASK_OUTPUT_LOSS_REDUCTIONS}"
+            )
         if self.corpus_train_fraction <= 0 or self.corpus_validation_fraction <= 0:
             raise ValueError("corpus train and validation fractions must be positive")
         if self.corpus_train_fraction + self.corpus_validation_fraction >= 1:
@@ -263,7 +291,7 @@ class V20Config:
             raise ValueError("seq_len must be at least two")
         if (self.n_layer, self.n_head, self.n_embd, self.n_inner) != (4, 4, 256, 1024):
             raise ValueError(
-                "v20/v21/v22/v23/v24/v24.2 require 4 layers, 4 heads, "
+                "v20/v21/v22/v23/v24/v24.2/v24.3 require 4 layers, 4 heads, "
                 "d_model=256, MLP=1024"
             )
         if self.n_embd % self.n_head:
@@ -306,12 +334,12 @@ class V20Config:
             )
         if self.noise_source != "shakespeare_char" or self.task_type != "target_character_set":
             raise ValueError(
-                "v20/v21/v22/v23/v24/v24.2 require the Shakespeare "
+                "v20/v21/v22/v23/v24/v24.2/v24.3 require the Shakespeare "
                 "target-character-set task"
             )
         if self.loss_scope != "all_sequence":
             raise ValueError(
-                "v20/v21/v22/v23/v24/v24.2 require all-sequence next-token loss metadata"
+                "v20/v21/v22/v23/v24/v24.2/v24.3 require all-sequence next-token loss metadata"
             )
         if self.precision not in {"float32", "bf16"}:
             raise ValueError("precision must be float32 or bf16")
@@ -321,7 +349,13 @@ class V20Config:
             raise ValueError("use_sdpa must be a boolean")
         if not math.isfinite(float(self.weight_decay)) or self.weight_decay < 0:
             raise ValueError("weight_decay must be finite and nonnegative")
-        for name in ("final_count_loss_weight", "cot_trace_loss_weight"):
+        for name in (
+            "final_count_loss_weight",
+            "cot_trace_loss_weight",
+            "task_output_count_weight",
+            "task_output_trace_weight",
+            "task_output_structure_weight",
+        ):
             value = float(getattr(self, name))
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be finite and strictly positive")
@@ -360,6 +394,15 @@ class V20Config:
             raise ValueError(
                 f"{self.version} requires training_count_distribution="
                 f"{canonical_count_distribution!r}"
+            )
+        canonical_task_output_reduction = version_spec.get("task_output_loss_reduction")
+        if (
+            canonical_task_output_reduction is not None
+            and self.task_output_loss_reduction != canonical_task_output_reduction
+        ):
+            raise ValueError(
+                f"{self.version} requires task_output_loss_reduction="
+                f"{canonical_task_output_reduction!r}"
             )
         if type(self.max_steps_for_language_pred) is not int or self.max_steps_for_language_pred < 0:
             raise ValueError("max_steps_for_language_pred must be a nonnegative integer")
@@ -545,6 +588,10 @@ def config_from_dict(values: dict[str, Any]) -> V20Config:
         )
     data.setdefault("final_count_loss_weight", 1.0)
     data.setdefault("cot_trace_loss_weight", 1.0)
+    data.setdefault("task_output_loss_reduction", "token_weighted_mean")
+    data.setdefault("task_output_count_weight", 1.0)
+    data.setdefault("task_output_trace_weight", 1.0)
+    data.setdefault("task_output_structure_weight", 0.1)
     data.setdefault("weight_decay", 0.01)
     # Retained only to reject accidental RPE-era configs with a clear message.
     data.setdefault("rpe_max_update", False)
@@ -586,6 +633,16 @@ def default_run_name(cfg: V20Config) -> str:
         else "all_sequence"
     )
     trace_tag = "" if cfg.trace_format == "indexed" else f"_trace-{cfg.trace_format}"
+    component_loss_tag = (
+        ""
+        if cfg.task_output_loss_reduction == "token_weighted_mean"
+        else (
+            f"_taskloss-{cfg.task_output_loss_reduction}"
+            f"-c{_float_tag(cfg.task_output_count_weight)}"
+            f"-t{_float_tag(cfg.task_output_trace_weight)}"
+            f"-s{_float_tag(cfg.task_output_structure_weight)}"
+        )
+    )
     return (
         f"{cfg.version}_{cfg.preset}_L{cfg.seq_len}_pool{cfg.needle_pool_size}x{cfg.needle_set_size}_"
         f"pf{_float_tag(cfg.needle_pool_frequency_threshold)}_count1-{cfg.count_max_threshold}{rpe_distance_tag}_"
@@ -594,7 +651,8 @@ def default_run_name(cfg: V20Config) -> str:
         f"fcw{_float_tag(cfg.final_count_loss_weight)}_"
         f"cotw{_float_tag(cfg.cot_trace_loss_weight)}_langsteps{cfg.max_steps_for_language_pred}_"
         f"steps{cfg.train_steps}_snap{cfg.checkpoint_every}_recover{cfg.recovery_every}_"
-        f"evaln{eval_size}_{variants.replace('/', '-')}_{cfg.count_tokenization}{trace_tag}_"
+        f"evaln{eval_size}_{variants.replace('/', '-')}_{cfg.count_tokenization}{trace_tag}"
+        f"{component_loss_tag}_"
         f"query-first_{schedule_tag}_seed{cfg.seed}"
     )
 
