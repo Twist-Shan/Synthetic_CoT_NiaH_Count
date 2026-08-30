@@ -108,6 +108,10 @@ if probe.returncode:
     os.kill(os.getpid(), signal.SIGKILL)
     raise RuntimeError("Scientific ABI repaired. Reconnect and rerun all cells.")
 subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--no-deps", "-e", "."], check=True)
+src_root = str(repo / "src")
+if src_root not in sys.path:
+    sys.path.insert(0, src_root)
+os.environ["PYTHONPATH"] = src_root + os.pathsep + os.environ.get("PYTHONPATH", "")
 
 import pandas as pd
 import torch
