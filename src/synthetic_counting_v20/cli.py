@@ -120,8 +120,10 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
     canonical_final_weight = version_spec.get("final_count_loss_weight")
     canonical_count_max = version_spec.get("count_max_threshold")
     canonical_pool_threshold = version_spec.get("needle_pool_frequency_threshold")
+    canonical_pool_size = version_spec.get("needle_pool_size")
     canonical_count_distribution = version_spec.get("training_count_distribution")
     canonical_task_output_reduction = version_spec.get("task_output_loss_reduction")
+    canonical_tying = version_spec.get("tie_word_embeddings")
     if (
         canonical_final_weight is not None
         and args.final_count_loss_weight is not None
@@ -148,6 +150,12 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
             f"{version} fixes --needle-pool-frequency-threshold at "
             f"{canonical_pool_threshold:g}"
         )
+    if (
+        canonical_pool_size is not None
+        and args.needle_pool_size is not None
+        and int(args.needle_pool_size) != int(canonical_pool_size)
+    ):
+        parser.error(f"{version} fixes --needle-pool-size at {canonical_pool_size}")
     if (
         canonical_count_distribution is not None
         and args.training_count_distribution is not None
@@ -177,10 +185,14 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         overrides["count_max_threshold"] = canonical_count_max
     if canonical_pool_threshold is not None:
         overrides["needle_pool_frequency_threshold"] = canonical_pool_threshold
+    if canonical_pool_size is not None:
+        overrides["needle_pool_size"] = canonical_pool_size
     if canonical_count_distribution is not None:
         overrides["training_count_distribution"] = canonical_count_distribution
     if canonical_task_output_reduction is not None:
         overrides["task_output_loss_reduction"] = canonical_task_output_reduction
+    if canonical_tying is not None:
+        overrides["tie_word_embeddings"] = canonical_tying
     if args.model_variant is not None:
         overrides["enabled_model_variants"] = tuple(args.model_variant)
     elif version == "v22":

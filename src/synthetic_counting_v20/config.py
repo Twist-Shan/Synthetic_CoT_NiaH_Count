@@ -90,6 +90,20 @@ VERSION_SPECS = {
         "training_count_distribution": "maxent_set_count",
         "task_output_loss_reduction": "component_normalized",
     },
+    # v24.6 is the readout-bridge control for v24.5.  The input embedding and
+    # output projection start numerically identical, but their parameters are
+    # no longer tied after initialization.  All data, objective, model width,
+    # sampler, seed, and schedule settings remain fixed.
+    "v24.6": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 10,
+        "needle_pool_size": 20,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "maxent_set_count",
+        "task_output_loss_reduction": "component_normalized",
+        "tie_word_embeddings": False,
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
@@ -207,6 +221,7 @@ class V20Config:
     count_tokenization: str = "atomic"
     trace_format: str = "indexed"
     use_sdpa: bool = True
+    tie_word_embeddings: bool = True
 
     @property
     def count_min(self) -> int:
@@ -378,6 +393,13 @@ class V20Config:
             raise ValueError("snapshot_dtype must be float16, bfloat16, or float32")
         if type(self.use_sdpa) is not bool:
             raise ValueError("use_sdpa must be a boolean")
+        if type(self.tie_word_embeddings) is not bool:
+            raise ValueError("tie_word_embeddings must be a boolean")
+        canonical_tying = version_spec.get("tie_word_embeddings")
+        if canonical_tying is not None and self.tie_word_embeddings is not canonical_tying:
+            raise ValueError(
+                f"{self.version} requires tie_word_embeddings={canonical_tying}"
+            )
         if not math.isfinite(float(self.weight_decay)) or self.weight_decay < 0:
             raise ValueError("weight_decay must be finite and nonnegative")
         for name in (
@@ -416,6 +438,14 @@ class V20Config:
             raise ValueError(
                 f"{self.version} requires needle_pool_frequency_threshold="
                 f"{canonical_pool_threshold:g}"
+            )
+        canonical_pool_size = version_spec.get("needle_pool_size")
+        if (
+            canonical_pool_size is not None
+            and int(self.needle_pool_size) != int(canonical_pool_size)
+        ):
+            raise ValueError(
+                f"{self.version} requires needle_pool_size={canonical_pool_size}"
             )
         canonical_count_distribution = version_spec.get("training_count_distribution")
         if (
@@ -644,6 +674,7 @@ def config_from_dict(values: dict[str, Any]) -> V20Config:
     data.setdefault("count_tokenization", version_spec["count_tokenization"])
     data.setdefault("trace_format", version_spec["trace_format"])
     data.setdefault("use_sdpa", True)
+    data.setdefault("tie_word_embeddings", True)
     data.setdefault("training_count_distribution", "natural")
     if legacy_loss_schedule:
         data["max_steps_for_language_pred"] = int(data["train_steps"])
@@ -674,6 +705,7 @@ def default_run_name(cfg: V20Config) -> str:
             f"-s{_float_tag(cfg.task_output_structure_weight)}"
         )
     )
+    readout_tag = "" if cfg.tie_word_embeddings else "_untied-lm-head"
     return (
         f"{cfg.version}_{cfg.preset}_L{cfg.seq_len}_pool{cfg.needle_pool_size}x{cfg.needle_set_size}_"
         f"pf{_float_tag(cfg.needle_pool_frequency_threshold)}_count1-{cfg.count_max_threshold}{rpe_distance_tag}_"
@@ -683,7 +715,7 @@ def default_run_name(cfg: V20Config) -> str:
         f"cotw{_float_tag(cfg.cot_trace_loss_weight)}_langsteps{cfg.max_steps_for_language_pred}_"
         f"steps{cfg.train_steps}_snap{cfg.checkpoint_every}_recover{cfg.recovery_every}_"
         f"evaln{eval_size}_{variants.replace('/', '-')}_{cfg.count_tokenization}{trace_tag}"
-        f"{component_loss_tag}_"
+        f"{component_loss_tag}{readout_tag}_"
         f"query-first_{schedule_tag}_seed{cfg.seed}"
     )
 

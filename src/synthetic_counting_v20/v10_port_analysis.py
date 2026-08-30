@@ -22,7 +22,7 @@ from __future__ import annotations
 # making their absence explicit avoids noisy binary-compatibility tracebacks.
 import sys
 
-for _optional in ("pyarrow", "numexpr", "bottleneck"):
+for _optional in ("numexpr", "bottleneck"):
     sys.modules.setdefault(_optional, None)
 
 import contextlib
@@ -584,7 +584,7 @@ def _capture_sublayer_states(
 def _logit_lens_margin(model: torch.nn.Module, states: torch.Tensor, target: int, alternative: int) -> np.ndarray:
     with torch.inference_mode():
         normalized = model.final_norm(states)
-        direction = model.token_embedding.weight[target] - model.token_embedding.weight[alternative]
+        direction = model.unembedding_weight[target] - model.unembedding_weight[alternative]
         return (normalized @ direction).detach().float().cpu().numpy()
 
 
@@ -1099,8 +1099,8 @@ def run_successor_patching(
         for component in ("attn_component", "mlp_component"):
             for index, (target, example) in enumerate(zip(targets, reporting_examples, strict=True)):
                 direction = (
-                    ctx.models["thinking"].token_embedding.weight[target]
-                    - ctx.models["thinking"].token_embedding.weight[close_id]
+                    ctx.models["thinking"].unembedding_weight[target]
+                    - ctx.models["thinking"].unembedding_weight[close_id]
                 ).detach()
                 clean_value = float((clean_states[(layer, component)][index] @ direction).detach().cpu())
                 short_value = float((short_states[(layer, component)][index] @ direction).detach().cpu())
@@ -1672,8 +1672,8 @@ def run_successor_mlp_features(
         weight = ctx.models["thinking"].layers[layer - 1].mlp[2].weight.detach()
         for target in sel_targets:
             direction = (
-                ctx.models["thinking"].token_embedding.weight[target]
-                - ctx.models["thinking"].token_embedding.weight[close_id]
+                ctx.models["thinking"].unembedding_weight[target]
+                - ctx.models["thinking"].unembedding_weight[close_id]
             ).detach()
             coefficients.append(weight.T @ direction)
         coefficient = torch.stack(coefficients)

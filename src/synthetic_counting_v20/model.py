@@ -145,6 +145,11 @@ class TinyPositionCausalLM(nn.Module):
         super().__init__()
         self.position_encoding = "rope"
         self.token_embedding = nn.Embedding(len(vocab.id_to_token), cfg.n_embd)
+        self.lm_head = (
+            None
+            if cfg.tie_word_embeddings
+            else nn.Linear(cfg.n_embd, len(vocab.id_to_token), bias=False)
+        )
         self.position_embedding = None
         self.layers = nn.ModuleList(TransformerLayer(cfg) for _ in range(cfg.n_layer))
         self.final_norm = nn.LayerNorm(cfg.n_embd)
@@ -159,7 +164,14 @@ class TinyPositionCausalLM(nn.Module):
             output_attentions=False,
             output_hidden_states=False,
             use_cache=False,
+            tie_word_embeddings=cfg.tie_word_embeddings,
         )
+
+    @property
+    def unembedding_weight(self) -> torch.Tensor:
+        if self.lm_head is None:
+            return self.token_embedding.weight
+        return self.lm_head.weight
 
     def forward(
         self,
@@ -191,7 +203,7 @@ class TinyPositionCausalLM(nn.Module):
                 hidden_states.append(hidden)
             if attentions is not None and weights is not None:
                 attentions.append(weights)
-        logits = F.linear(self.final_norm(hidden), self.token_embedding.weight)
+        logits = F.linear(self.final_norm(hidden), self.unembedding_weight)
         return CausalLMOutput(
             logits,
             tuple(attentions) if attentions is not None else None,
@@ -223,6 +235,10 @@ def initialize_model(model: TinyPositionCausalLM, seed: int) -> None:
             elif isinstance(module, nn.LayerNorm):
                 module.weight.fill_(1.0)
                 module.bias.zero_()
+        # Untying is an optimization constraint change, not a step-zero
+        # function change: both variants begin with exactly the same logits.
+        if model.lm_head is not None:
+            model.lm_head.weight.copy_(model.token_embedding.weight)
 
 
 def build_model(
