@@ -39,6 +39,39 @@ def build() -> Path:
 
     _set_source(
         notebook,
+        "drive-login",
+        '''from pathlib import Path
+
+DRIVE_RESULTS_ROOT = Path(
+    "/content/drive/MyDrive/Colab_Notebooks/CoT_Counting/"
+    "Synthetic_CoT_NiaH_Count/colab_results"
+)
+DRIVE_READY = False
+if Path("/content").exists():
+    from google.colab import drive
+    if not Path("/content/drive/MyDrive").exists():
+        try:
+            drive.mount("/content/drive", timeout_ms=300000)
+        except ValueError:
+            # A stale DriveFS process occasionally survives a Colab reconnect.
+            # Clear it and retry once without changing any scientific state.
+            try:
+                drive.flush_and_unmount()
+            except Exception:
+                pass
+            drive.mount(
+                "/content/drive", force_remount=True, timeout_ms=300000
+            )
+    DRIVE_RESULTS_ROOT.mkdir(parents=True, exist_ok=True)
+    DRIVE_READY = True
+    print("Drive ready:", DRIVE_RESULTS_ROOT)
+else:
+    print("Local runtime: Drive mount skipped")
+''',
+    )
+
+    _set_source(
+        notebook,
         "title",
         """# Trace Count v28: minimal partial count-readout control
 
