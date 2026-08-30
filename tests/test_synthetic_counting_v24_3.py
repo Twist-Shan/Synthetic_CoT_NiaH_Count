@@ -165,6 +165,7 @@ def test_v24_3_colab_notebook_is_clean_and_audits_loss_only_change():
     )
     source = "\n".join("".join(cell["source"]) for cell in notebook["cells"])
     assert 'VERSION = "v24.3"' in source
+    assert 'RUN_NAME = "v24.3_componentloss_count1-10_seed1234"' in source
     assert 'TASK_OUTPUT_LOSS_REDUCTION = "component_normalized"' in source
     assert '"--task-output-loss-reduction", TASK_OUTPUT_LOSS_REDUCTION' in source
     assert 'changed_fields == {"version", "task_output_loss_reduction"}' in source

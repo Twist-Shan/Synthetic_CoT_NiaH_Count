@@ -46,6 +46,11 @@ def build() -> Path:
     _replace(notebook, 'VERSION = "v24.2"', 'VERSION = "v24.3"')
     _replace(
         notebook,
+        "RUN_NAME = None",
+        'RUN_NAME = "v24.3_componentloss_count1-10_seed1234"',
+    )
+    _replace(
+        notebook,
         'PRESET = "main"                 # change to debug for a short end-to-end check',
         'PRESET = "main"                 # fixed: count 1-10 requires the matched 256-char setting',
     )
