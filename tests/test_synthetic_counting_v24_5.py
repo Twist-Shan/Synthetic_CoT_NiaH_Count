@@ -47,6 +47,8 @@ def test_v24_5_colab_notebook_is_clean_and_auditable() -> None:
     assert 'changed_fields == {"version", "needle_pool_size"}' in source
     assert 'RUN_NAME = "v24.5_pool20_maxent_count1-10_seed1234"' in source
     assert "success_criteria_met" in source
+    assert "trace_readout_success_criteria_met" in source
+    assert 'DRIVE_RUN_DIR / "tables" / "trace_readout_summary.csv"' in source
     for cell in notebook["cells"]:
         if cell["cell_type"] == "code":
             compile("".join(cell["source"]), f"{path.name}:{cell['id']}", "exec")

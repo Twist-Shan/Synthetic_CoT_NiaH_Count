@@ -87,6 +87,41 @@ print("Controlled difference from v24.4:", sorted(changed_fields))
         'assert (set_exposure["training_share"] - 0.05).abs().max() < 0.001',
     )
 
+    diagnostics = "".join(notebook["cells"][14]["source"])
+    diagnostics += """
+
+trace_readout_summary = pd.read_csv(RUN_DIR / "tables" / "trace_readout_summary.csv")
+trace_readout_by_count = pd.read_csv(RUN_DIR / "tables" / "trace_readout_by_count.csv")
+thinking_trace_readout = trace_readout_summary[
+    trace_readout_summary["mode"].eq("thinking")
+].iloc[-1]
+trace_readout_success_criteria_met = str(
+    thinking_trace_readout["success_criteria_met"]
+).strip().lower() in {"true", "1", "1.0"}
+print({
+    "trace_readout_success_criteria_met": trace_readout_success_criteria_met,
+    "trace_readout_accuracy": float(thinking_trace_readout["trace_readout_accuracy"]),
+    "minimum_count_accuracy": float(thinking_trace_readout["minimum_count_accuracy"]),
+    "count_accuracy_spread": float(thinking_trace_readout["count_accuracy_spread"]),
+    "raw_ar_accuracy": float(thinking_trace_readout["raw_ar_accuracy"]),
+    "trace_exact": float(thinking_trace_readout["trace_exact"]),
+})
+display(trace_readout_by_count[[
+    "count", "raw_ar_accuracy", "trace_readout_accuracy",
+    "trace_readout_answer_rate", "trace_exact",
+]])
+"""
+    _set_cell_source(notebook["cells"][14], diagnostics)
+
+    _replace(
+        notebook,
+        '    DRIVE_RUN_DIR / "tables" / "training_set_count_sampler_plan.csv",\n',
+        '    DRIVE_RUN_DIR / "tables" / "training_set_count_sampler_plan.csv",\n'
+        '    DRIVE_RUN_DIR / "tables" / "trace_readout_summary.csv",\n'
+        '    DRIVE_RUN_DIR / "tables" / "trace_readout_by_count.csv",\n'
+        '    DRIVE_RUN_DIR / "analysis" / "trace_readout" / "manifest.json",\n',
+    )
+
     _set_cell_source(
         notebook["cells"][0],
         """# Trace Count v24.5: 20-set maximum-entropy control

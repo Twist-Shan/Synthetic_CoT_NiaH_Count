@@ -35,6 +35,7 @@ from .plots import make_all_v20_plots
 from .phase_transition import run_phase_transition_analysis
 from .training import sync_tree, train_v20_models
 from .timing import timed_event
+from .trace_readout import write_trace_readout_analysis
 from .v10_port_analysis import run_v10_port_analysis
 
 
@@ -294,6 +295,10 @@ def run_v20_pipeline(
                     elif current == "extended":
                         collect_dense_attention_roles(run_dir, device=cfg.device)
                     elif current == "plots":
+                        write_trace_readout_analysis(
+                            run_dir,
+                            count_max_threshold=cfg.count_max_threshold,
+                        )
                         make_all_v20_plots(cfg, run_dir)
         except Exception:
             _update_manifest(run_dir, cfg, current, "failed")
