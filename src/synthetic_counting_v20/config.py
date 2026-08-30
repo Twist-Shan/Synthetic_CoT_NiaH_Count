@@ -201,6 +201,29 @@ VERSION_SPECS = {
         "untie_atomic_count_readout": True,
         "n_layer": 6,
     },
+    # v31 returns to the four-layer v29 model and changes only how the two
+    # output modes are trained.  One shared model receives two renderings of
+    # every sampled semantic example: the unchanged answer-only rendering and
+    # the unchanged separator-trace rendering.  The two per-mode objectives
+    # are averaged equally, matching two modes of one large language model
+    # without adding a decoder, auxiliary loss, calibration phase, or
+    # inference-time update.
+    "v31": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 10,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "uniform",
+        "task_output_loss_reduction": "component_normalized",
+        "task_output_count_weight": 4.0,
+        "tie_word_embeddings": True,
+        "untie_atomic_count_readout": True,
+        "training_mode_coupling": "paired_joint",
+        # This is 128 shared semantic examples rendered in both modes.  Thus
+        # each mode still contributes 128 rows per optimizer step, exactly as
+        # in the independent v29 runs.
+        "batch_size": 256,
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
@@ -209,6 +232,7 @@ SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
     "maxent_set_count",
 )
 SUPPORTED_TASK_OUTPUT_LOSS_REDUCTIONS = ("token_weighted_mean", "component_normalized")
+SUPPORTED_TRAINING_MODE_COUPLINGS = ("independent", "paired_joint")
 
 
 def _float_tag(value: float) -> str:
@@ -253,6 +277,10 @@ class V20Config:
     # tokenization rather than position encoding.
     position_encodings: tuple[str, ...] = ("rope",)
     enabled_model_variants: tuple[str, ...] = REFERENCE_MODEL_VARIANTS
+    # ``paired_joint`` means one checkpoint is shared by both output modes.
+    # Every semantic sample is rendered once per mode and the two mode losses
+    # are averaged equally.  The legacy independent behavior remains default.
+    training_mode_coupling: str = "independent"
 
     train_steps: int = 10_000
     batch_size: int = 128
@@ -490,6 +518,27 @@ class V20Config:
                 "position_encodings must equal the position encodings used by "
                 "enabled_model_variants"
             )
+        if self.training_mode_coupling not in SUPPORTED_TRAINING_MODE_COUPLINGS:
+            raise ValueError(
+                "training_mode_coupling must be one of "
+                f"{SUPPORTED_TRAINING_MODE_COUPLINGS}"
+            )
+        canonical_mode_coupling = version_spec.get(
+            "training_mode_coupling", "independent"
+        )
+        if self.training_mode_coupling != canonical_mode_coupling:
+            raise ValueError(
+                f"{self.version} requires training_mode_coupling="
+                f"{canonical_mode_coupling!r}"
+            )
+        if self.training_mode_coupling == "paired_joint":
+            if self.enabled_model_variants != REFERENCE_MODEL_VARIANTS:
+                raise ValueError(
+                    "paired_joint training requires exactly rope/nonthinking and "
+                    "rope/thinking in canonical order"
+                )
+            if self.batch_size % 2:
+                raise ValueError("paired_joint training requires an even batch_size")
         if self.noise_source != "shakespeare_char" or self.task_type != "target_character_set":
             raise ValueError(
                 "v20/v21/v22/v23/v24/v24.2/v24.3/v24.4 require the Shakespeare "
@@ -623,6 +672,14 @@ class V20Config:
                 f"{self.version} requires task_output_loss_reduction="
                 f"{canonical_task_output_reduction!r}"
             )
+        canonical_batch_size = version_spec.get("batch_size")
+        if (
+            canonical_batch_size is not None
+            and int(self.batch_size) != int(canonical_batch_size)
+        ):
+            raise ValueError(
+                f"{self.version} requires batch_size={canonical_batch_size}"
+            )
         canonical_contrastive_weight = version_spec.get(
             "answer_query_contrastive_weight"
         )
@@ -747,6 +804,21 @@ class V20Config:
             if self.untie_atomic_count_readout
             else ("fully_tied" if self.tie_word_embeddings else "fully_untied")
         )
+        result["mode_training_design"] = {
+            "coupling": self.training_mode_coupling,
+            "shared_checkpoint": self.training_mode_coupling == "paired_joint",
+            "semantic_examples_per_step": (
+                self.batch_size // 2
+                if self.training_mode_coupling == "paired_joint"
+                else self.batch_size
+            ),
+            "rendered_rows_per_step": self.batch_size,
+            "mode_objective_reduction": (
+                "equal_mean_of_nonthinking_and_thinking_losses"
+                if self.training_mode_coupling == "paired_joint"
+                else "single_mode_loss"
+            ),
+        }
         return result
 
 
@@ -833,6 +905,7 @@ def config_from_dict(values: dict[str, Any]) -> V20Config:
         "checkpoint_policy",
         "answer_query_contrastive_objective",
         "readout_parameterization",
+        "mode_training_design",
     ):
         data.pop(derived, None)
     data["position_encodings"] = tuple(data["position_encodings"])
@@ -876,6 +949,7 @@ def config_from_dict(values: dict[str, Any]) -> V20Config:
     data.setdefault("tie_word_embeddings", True)
     data.setdefault("untie_atomic_count_readout", False)
     data.setdefault("training_count_distribution", "natural")
+    data.setdefault("training_mode_coupling", "independent")
     if legacy_loss_schedule:
         data["max_steps_for_language_pred"] = int(data["train_steps"])
     cfg = V20Config(**data)
@@ -918,6 +992,11 @@ def default_run_name(cfg: V20Config) -> str:
             f"-t{_float_tag(cfg.answer_query_contrastive_temperature)}"
         )
     )
+    coupling_tag = (
+        "_paired-joint-modes"
+        if cfg.training_mode_coupling == "paired_joint"
+        else ""
+    )
     return (
         f"{cfg.version}_{cfg.preset}_L{cfg.seq_len}_pool{cfg.needle_pool_size}x{cfg.needle_set_size}_"
         f"pf{_float_tag(cfg.needle_pool_frequency_threshold)}_count1-{cfg.count_max_threshold}{rpe_distance_tag}_"
@@ -927,7 +1006,7 @@ def default_run_name(cfg: V20Config) -> str:
         f"cotw{_float_tag(cfg.cot_trace_loss_weight)}_langsteps{cfg.max_steps_for_language_pred}_"
         f"steps{cfg.train_steps}_snap{cfg.checkpoint_every}_recover{cfg.recovery_every}_"
         f"evaln{eval_size}_{variants.replace('/', '-')}_{cfg.count_tokenization}{trace_tag}"
-        f"{component_loss_tag}{readout_tag}{contrastive_tag}_"
+        f"{component_loss_tag}{readout_tag}{contrastive_tag}{coupling_tag}_"
         f"query-first_{schedule_tag}_seed{cfg.seed}"
     )
 
