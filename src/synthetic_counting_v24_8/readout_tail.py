@@ -154,7 +154,7 @@ def _answer_logits_and_targets(
         if item.spans is None or item.count is None:
             raise ValueError("readout calibration requires counting-task rows")
         if len(item.spans.count_positions) != 1:
-            raise ValueError("v24.8 requires one atomic final-count token")
+            raise ValueError("native-head calibration requires one atomic final-count token")
         rows.append(logits[row, item.spans.count_pos - 1, number_ids])
         targets.append(int(item.count) - 1)
     return torch.stack(rows), torch.tensor(targets, dtype=torch.long, device=logits.device)
@@ -207,10 +207,12 @@ def _summary_row(
     candidate: str,
     step: int,
     split: str,
+    experiment: str = "v24.8",
+    source_version: str = "v24.7",
 ) -> dict[str, Any]:
     return {
-        "experiment": "v24.8",
-        "source_version": "v24.7",
+        "experiment": experiment,
+        "source_version": source_version,
         "mode": mode,
         "candidate": candidate,
         "step": int(step),
@@ -229,13 +231,15 @@ def _save_model(
     candidate: CandidateSpec,
     step: int,
     validation_summary: GateSummary,
+    experiment: str = "v24.8",
+    source_version: str = "v24.7",
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     torch.save(
         {
-            "experiment": "v24.8",
-            "source_version": "v24.7",
+            "experiment": experiment,
+            "source_version": source_version,
             "source_run": str(source_run),
             "mode": mode,
             "position_encoding": "rope",
@@ -264,6 +268,8 @@ def _run_candidate(
     eval_every: int,
     validation_per_count: int,
     seed: int,
+    experiment: str = "v24.8",
+    expected_source_version: str = "v24.7",
 ) -> dict[str, Any]:
     spec.validate()
     cfg, vocab, pool, split, model = load_v20_checkpoint_model(
@@ -273,12 +279,19 @@ def _run_candidate(
         label="final",
         device=device,
     )
-    if cfg.version != "v24.7":
-        raise ValueError(f"v24.8 requires a v24.7 source checkpoint, got {cfg.version}")
+    if cfg.version != expected_source_version:
+        raise ValueError(
+            f"{experiment} requires a {expected_source_version} source checkpoint, "
+            f"got {cfg.version}"
+        )
     if cfg.trace_format != "separator" or cfg.count_tokenization != "atomic":
-        raise ValueError("v24.8 requires the unchanged atomic separator-trace setting")
+        raise ValueError(
+            f"{experiment} requires the unchanged atomic separator-trace setting"
+        )
     if model.lm_head is None:
-        raise ValueError("v24.8 requires v24.7's untied native LM head")
+        raise ValueError(
+            f"{experiment} requires {expected_source_version}'s untied native LM head"
+        )
     text = load_corpus_text()
     _, _, curve_suites, _ = _load_prepared_v20_data(cfg, vocab, text, source_run)
     validation = _validation_examples(
@@ -314,6 +327,8 @@ def _run_candidate(
             candidate=spec.name,
             step=0,
             split="validation",
+            experiment=experiment,
+            source_version=expected_source_version,
         )
     )
     initial_by_count = initial_by_count.assign(
@@ -366,6 +381,8 @@ def _run_candidate(
                     candidate=spec.name,
                     step=step,
                     split="validation",
+                    experiment=experiment,
+                    source_version=expected_source_version,
                 )
             )
             by_count_rows.append(
@@ -401,6 +418,8 @@ def _run_candidate(
                     candidate=spec,
                     step=step,
                     validation_summary=summary,
+                    experiment=experiment,
+                    source_version=expected_source_version,
                 )
     model.load_state_dict(best_state)
     candidate_dir = output_dir / "candidates" / spec.name / mode
@@ -416,6 +435,8 @@ def _run_candidate(
         candidate=spec,
         step=best_step,
         validation_summary=best_summary,
+        experiment=experiment,
+        source_version=expected_source_version,
     )
     return {
         "model": model,
@@ -425,6 +446,8 @@ def _run_candidate(
         "best_step": best_step,
         "candidate": spec,
         "duration_seconds": time.perf_counter() - started,
+        "experiment": experiment,
+        "source_version": expected_source_version,
     }
 
 
@@ -468,6 +491,8 @@ def _final_test(
                     candidate=result["candidate"].name,
                     step=int(result["best_step"]),
                     split="test",
+                    experiment=str(result["experiment"]),
+                    source_version=str(result["source_version"]),
                 )
             ]
         ),
@@ -486,6 +511,8 @@ def _final_test(
         candidate=result["candidate"],
         step=int(result["best_step"]),
         validation_summary=result["best_summary"],
+        experiment=str(result["experiment"]),
+        source_version=str(result["source_version"]),
     )
     return {
         "mode": mode,
@@ -506,20 +533,26 @@ def run_readout_tail(
     validation_per_count: int = 10,
     seed: int = 2478,
     candidates: tuple[CandidateSpec, ...] | None = None,
+    experiment: str = "v24.8",
+    expected_source_version: str = "v24.7",
 ) -> Path:
     source_run = Path(source_run).resolve()
     output_dir = Path(output_dir).resolve()
     if not source_run.exists():
-        raise FileNotFoundError(f"source v24.7 run does not exist: {source_run}")
+        raise FileNotFoundError(
+            f"source {expected_source_version} run does not exist: {source_run}"
+        )
     if batch_size <= 0 or eval_every <= 0 or validation_per_count <= 0:
         raise ValueError("batch size, eval interval, and validation count must be positive")
+    if not experiment or not expected_source_version:
+        raise ValueError("experiment and expected source version must be nonempty")
     output_dir.mkdir(parents=True, exist_ok=True)
     candidate_specs = candidates or default_candidate_specs()
     for spec in candidate_specs:
         spec.validate()
     manifest: dict[str, Any] = {
-        "experiment": "v24.8",
-        "source_version": "v24.7",
+        "experiment": experiment,
+        "source_version": expected_source_version,
         "source_run": str(source_run),
         "trace_change": False,
         "inference_change": False,
@@ -551,6 +584,8 @@ def run_readout_tail(
             eval_every=eval_every,
             validation_per_count=validation_per_count,
             seed=seed,
+            experiment=experiment,
+            expected_source_version=expected_source_version,
         )
         thinking_results.append(result)
         if selected is None or (
@@ -574,6 +609,8 @@ def run_readout_tail(
         eval_every=eval_every,
         validation_per_count=validation_per_count,
         seed=seed,
+        experiment=experiment,
+        expected_source_version=expected_source_version,
     )
     final_results = [
         _final_test(selected, source_run, output_dir, mode="thinking"),
@@ -603,7 +640,8 @@ def run_readout_tail(
         output_dir / "final_summary.csv",
     )
     print(json.dumps(final_results, indent=2, sort_keys=True), flush=True)
-    print(f"V24_8_OUTPUT_DIR={output_dir}", flush=True)
+    output_label = experiment.upper().replace(".", "_").replace("-", "_")
+    print(f"{output_label}_OUTPUT_DIR={output_dir}", flush=True)
     return output_dir
 
 

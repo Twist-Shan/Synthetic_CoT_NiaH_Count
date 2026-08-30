@@ -121,6 +121,22 @@ VERSION_SPECS = {
         "answer_query_contrastive_weight": 0.1,
         "answer_query_contrastive_temperature": 0.1,
     },
+    # v25 is the retrieval-pressure setting.  It preserves the complete
+    # v24.7 objective and separator trace, but its public wrapper supplies a
+    # 1,024-character context (and the corresponding position budget and
+    # frequency cap).  Count support stays at 1..10, so the experimental
+    # pressure comes from searching a four-times-longer prompt rather than
+    # from adding new answer classes or lengthening the trace.
+    "v25": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "needle_pool_size": 20,
+        "training_count_distribution": "maxent_set_count",
+        "task_output_loss_reduction": "component_normalized",
+        "tie_word_embeddings": False,
+        "answer_query_contrastive_weight": 0.1,
+        "answer_query_contrastive_temperature": 0.1,
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
@@ -608,9 +624,9 @@ class V20Config:
             else "(number marker)*n"
         )
         result["sequence_templates"] = {
-            "nonthinking": "<BOS> query[5] data[256] <Ans> number <EOS>",
+            "nonthinking": f"<BOS> query[5] data[{self.seq_len}] <Ans> number <EOS>",
             "thinking": (
-                f"<BOS> query[5] data[256] <Think> {thinking_trace} "
+                f"<BOS> query[5] data[{self.seq_len}] <Think> {thinking_trace} "
                 "</Think> <Ans> number <EOS>"
             ),
         }
