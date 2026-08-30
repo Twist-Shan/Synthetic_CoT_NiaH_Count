@@ -135,10 +135,6 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
     canonical_pool_size = version_spec.get("needle_pool_size")
     canonical_count_distribution = version_spec.get("training_count_distribution")
     canonical_task_output_reduction = version_spec.get("task_output_loss_reduction")
-    canonical_batch_size = version_spec.get("batch_size")
-    canonical_mode_coupling = version_spec.get(
-        "training_mode_coupling", "independent"
-    )
     canonical_tying = version_spec.get("tie_word_embeddings")
     canonical_partial_untie = version_spec.get("untie_atomic_count_readout")
     canonical_contrastive_weight = version_spec.get(
@@ -214,12 +210,6 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
             f"{canonical_task_output_reduction}"
         )
     if (
-        canonical_batch_size is not None
-        and args.batch_size is not None
-        and int(args.batch_size) != int(canonical_batch_size)
-    ):
-        parser.error(f"{version} fixes --batch-size at {canonical_batch_size}")
-    if (
         canonical_contrastive_weight is not None
         and args.answer_query_contrastive_weight is not None
         and float(args.answer_query_contrastive_weight)
@@ -260,9 +250,6 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         overrides["training_count_distribution"] = canonical_count_distribution
     if canonical_task_output_reduction is not None:
         overrides["task_output_loss_reduction"] = canonical_task_output_reduction
-    if canonical_batch_size is not None:
-        overrides["batch_size"] = canonical_batch_size
-    overrides["training_mode_coupling"] = canonical_mode_coupling
     if canonical_tying is not None:
         overrides["tie_word_embeddings"] = canonical_tying
     if canonical_partial_untie is not None:
@@ -279,7 +266,7 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         # The nonthinking objective is identical to v20, so the canonical v22
         # run trains only the changed separator-trace Thinking model.
         overrides["enabled_model_variants"] = ("rope/thinking",)
-    elif version in {"v23", "v24", "v24.2", "v24.3", "v24.4", "v24.5", "v24.6", "v24.7", "v25", "v26", "v28", "v29", "v30", "v31"}:
+    elif version in {"v23", "v24", "v24.2", "v24.3", "v24.4", "v24.5", "v24.6", "v24.7", "v25", "v26", "v28", "v29", "v30"}:
         # Both objectives are retrained whenever the loss or count distribution
         # changes so the within-version Thinking/Non-thinking comparison stays
         # controlled.

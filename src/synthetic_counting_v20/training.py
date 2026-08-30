@@ -251,24 +251,6 @@ def _checkpoint_root(run_dir: Path, position_encoding: str, mode: str) -> Path:
     return run_dir / "checkpoints" / position_encoding / mode
 
 
-def _checkpoint_storage_mode(cfg: V20Config, requested_mode: str) -> str:
-    """Map a conditional evaluation mode to its physical checkpoint bank."""
-
-    if cfg.training_mode_coupling == "paired_joint":
-        return "thinking"
-    return requested_mode
-
-
-def _run_checkpoint_storage_mode(run_dir: Path, requested_mode: str) -> str:
-    """Resolve shared-checkpoint routing from a persisted run config."""
-
-    config_path = run_dir / "config.json"
-    if not config_path.exists():
-        return requested_mode
-    cfg = config_from_dict(json.loads(config_path.read_text(encoding="utf-8")))
-    return _checkpoint_storage_mode(cfg, requested_mode)
-
-
 def _latest_checkpoint(root: Path) -> tuple[int, Path] | None:
     path = root / "recovery" / "latest.pt"
     metadata = root / "latest.json"
@@ -283,9 +265,7 @@ def checkpoint_steps(
 ) -> list[tuple[int, Path]]:
     """Return dense scientific snapshots as ``(step, shard_path)`` pairs."""
 
-    run_dir = Path(run_dir)
-    storage_mode = _run_checkpoint_storage_mode(run_dir, mode)
-    root = _checkpoint_root(run_dir, position_encoding, storage_mode)
+    root = _checkpoint_root(Path(run_dir), position_encoding, mode)
     index = root / "snapshot_index.csv"
     if not index.exists():
         return []
@@ -422,9 +402,7 @@ def load_dense_snapshot_state(
     mode: str,
     step: int,
 ) -> dict[str, torch.Tensor]:
-    run_dir = Path(run_dir)
-    storage_mode = _run_checkpoint_storage_mode(run_dir, mode)
-    root = _checkpoint_root(run_dir, position_encoding, storage_mode)
+    root = _checkpoint_root(Path(run_dir), position_encoding, mode)
     index = pd.read_csv(root / "snapshot_index.csv")
     row = index[index["step"].astype(int) == int(step)]
     if row.empty:
@@ -433,10 +411,7 @@ def load_dense_snapshot_state(
     payload = torch.load(path, map_location="cpu", weights_only=False)
     if payload.get("format") != "v20_dense_model_snapshot_shard":
         raise ValueError(f"unrecognized dense snapshot format in {path}")
-    if (
-        payload.get("position_encoding") != position_encoding
-        or payload.get("mode") != storage_mode
-    ):
+    if payload.get("position_encoding") != position_encoding or payload.get("mode") != mode:
         raise ValueError("dense snapshot shard identity does not match its index path")
     if int(step) not in {int(value) for value in payload.get("steps", ())}:
         raise ValueError(f"dense snapshot shard {path} does not declare step {step}")
@@ -1229,100 +1204,6 @@ def _training_batch(
     raise RuntimeError("could not sample a counting task for task-output-only training")
 
 
-def paired_joint_training_batch(
-    cfg: V20Config,
-    vocab: V20Vocab,
-    text: str,
-    split: CorpusSplit,
-    pool: NeedlePool,
-    rng: random.Random,
-    *,
-    require_task: bool = False,
-) -> tuple[list[V20Example], list[V20Rendered]]:
-    """Render every sampled semantic example in both unchanged output modes.
-
-    ``cfg.batch_size`` counts physical rendered rows.  Adjacent rows share the
-    exact same semantic example and differ only in whether they use the
-    answer-only or separator-trace grammar.  This pairing rules out sampler
-    noise as an explanation for a conditional mode difference.
-    """
-
-    if cfg.training_mode_coupling != "paired_joint":
-        raise ValueError("paired_joint_training_batch requires paired_joint config")
-    if cfg.batch_size % 2:
-        raise ValueError("paired_joint batch_size must be even")
-    semantic_cfg = replace(cfg, batch_size=cfg.batch_size // 2)
-    semantic_examples, _ = _training_batch(
-        semantic_cfg,
-        vocab,
-        text,
-        split,
-        pool,
-        "nonthinking",
-        rng,
-        require_task=require_task,
-    )
-    examples: list[V20Example] = []
-    rendered: list[V20Rendered] = []
-    for example in semantic_examples:
-        for mode in ("nonthinking", "thinking"):
-            examples.append(example)
-            rendered.append(render_v20(example, vocab, mode))
-    if len(rendered) != cfg.batch_size:
-        raise RuntimeError("paired_joint rendering produced the wrong physical batch size")
-    return examples, rendered
-
-
-def equal_mode_training_loss(
-    token_losses: torch.Tensor,
-    active: torch.Tensor,
-    loss_weights: torch.Tensor,
-    rendered: list[V20Rendered],
-    cfg: V20Config,
-    *,
-    component_reduction_active: bool,
-) -> tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor]]:
-    """Average the complete Non-thinking and Thinking objectives equally.
-
-    Computing a single token mean over the concatenated batch would give the
-    longer trace rendering more weight.  Here each mode first receives exactly
-    the same loss it would have received in an independent v29 run; the two
-    scalar objectives are then averaged.  Region means are returned only for
-    transparent diagnostics and never alter the objective.
-    """
-
-    mode_losses: dict[str, torch.Tensor] = {}
-    region_values: dict[str, list[torch.Tensor]] = {}
-    for mode in ("nonthinking", "thinking"):
-        indices = [index for index, item in enumerate(rendered) if item.mode == mode]
-        if len(indices) * 2 != len(rendered):
-            raise ValueError("paired_joint loss requires equal rows from both modes")
-        mode_rendered = [rendered[index] for index in indices]
-        mode_token_losses = token_losses[indices]
-        mode_active = active[indices]
-        mode_loss_weights = loss_weights[indices]
-        if component_reduction_active:
-            mode_loss, mode_regions = component_normalized_task_output_loss(
-                mode_token_losses,
-                mode_active,
-                mode_loss_weights,
-                mode_rendered,
-                cfg,
-            )
-            for name, value in mode_regions.items():
-                region_values.setdefault(name, []).append(value)
-        else:
-            weighted_active = mode_loss_weights[:, 1:] * mode_active
-            denominator = weighted_active.sum().clamp_min(1)
-            mode_loss = (mode_token_losses * weighted_active).sum() / denominator
-        mode_losses[mode] = mode_loss
-    loss = torch.stack(tuple(mode_losses.values())).mean()
-    region_means = {
-        name: torch.stack(values).mean() for name, values in region_values.items()
-    }
-    return loss, region_means, mode_losses
-
-
 @torch.no_grad()
 def prefix_permutation_consistency_evaluation(
     model: TinyPositionCausalLM,
@@ -1711,11 +1592,6 @@ def train_v20_variant(
     sync_run_dir: Path | None,
     skip_completed: bool,
 ) -> None:
-    joint_modes = cfg.training_mode_coupling == "paired_joint"
-    evaluation_modes = ("nonthinking", "thinking") if joint_modes else (mode,)
-    training_log_mode = "joint" if joint_modes else mode
-    if joint_modes and mode != "thinking":
-        raise ValueError("paired_joint checkpoints use rope/thinking as their storage bank")
     root = _checkpoint_root(run_dir, position_encoding, mode)
     final_path = root / "final" / "checkpoint.pt"
     required_test = run_dir / "tables" / "test_loss_summary.csv"
@@ -1732,41 +1608,27 @@ def train_v20_variant(
         test_table = _read_table(required_test)
         permutation_table = _read_table(required_permutation)
         final_ar_table = _read_table(required_final_ar)
-        mode_completeness: list[bool] = []
-        for evaluation_mode in evaluation_modes:
-            test_rows = test_table[
-                (test_table.position_encoding == position_encoding)
-                & (test_table["mode"] == evaluation_mode)
-            ]
-            permutation_rows = permutation_table[
-                (permutation_table.position_encoding == position_encoding)
-                & (permutation_table["mode"] == evaluation_mode)
-            ]
-            final_ar_rows = final_ar_table[
-                (final_ar_table.position_encoding == position_encoding)
-                & (final_ar_table["mode"] == evaluation_mode)
-            ]
-            mode_completeness.append(
-                set(test_rows.get("suite", pd.Series(dtype=str)).astype(str))
-                >= {"raw", "task", "mixture"}
-                and len(permutation_rows) == len(permutation_examples)
-                and {
-                    "ar_permutation_accuracy",
-                    "tf_permutation_accuracy",
-                }.issubset(permutation_rows.columns)
-                and len(final_ar_rows)
-                == int(cfg.final_examples_per_count * cfg.count_max_threshold)
-                and final_ar_rows.groupby("count")
-                .size()
-                .eq(cfg.final_examples_per_count)
-                .all()
-            )
-        outputs_complete = all(mode_completeness)
-    if skip_completed and final_path.exists() and outputs_complete:
-        print(
-            f"[skip] {position_encoding}/{training_log_mode}: final checkpoint exists",
-            flush=True,
+        test_rows = test_table[
+            (test_table.position_encoding == position_encoding) & (test_table["mode"] == mode)
+        ]
+        permutation_rows = permutation_table[
+            (permutation_table.position_encoding == position_encoding)
+            & (permutation_table["mode"] == mode)
+        ]
+        final_ar_rows = final_ar_table[
+            (final_ar_table.position_encoding == position_encoding)
+            & (final_ar_table["mode"] == mode)
+        ]
+        outputs_complete = (
+            set(test_rows.get("suite", pd.Series(dtype=str)).astype(str)) >= {"raw", "task", "mixture"}
+            and len(permutation_rows) == len(permutation_examples)
+            and {"ar_permutation_accuracy", "tf_permutation_accuracy"}.issubset(permutation_rows.columns)
+            and len(final_ar_rows)
+            == int(cfg.final_examples_per_count * cfg.count_max_threshold)
+            and final_ar_rows.groupby("count").size().eq(cfg.final_examples_per_count).all()
         )
+    if skip_completed and final_path.exists() and outputs_complete:
+        print(f"[skip] {position_encoding}/{mode}: final checkpoint exists", flush=True)
         return
     if not skip_completed and root.exists() and (
         (root / "recovery" / "latest.pt").exists() or (root / "snapshot_index.csv").exists()
@@ -1816,10 +1678,7 @@ def train_v20_variant(
             mode,
             start_step,
         )
-        print(
-            f"[resume] {position_encoding}/{training_log_mode} from step {start_step}",
-            flush=True,
-        )
+        print(f"[resume] {position_encoding}/{mode} from step {start_step}", flush=True)
     else:
         _save_checkpoint(
             model,
@@ -1837,25 +1696,16 @@ def train_v20_variant(
         )
         snapshots.add(model, 0, force=True)
     sampling_state = restored_sampling_state or _load_sampling_state(
-        run_dir, position_encoding, training_log_mode, start_step, cfg
+        run_dir, position_encoding, mode, start_step, cfg
     )
 
     if start_step == 0:
-        for evaluation_mode in evaluation_modes:
-            _write_evaluations(
-                model,
-                cfg,
-                vocab,
-                curve_suites,
-                run_dir,
-                position_encoding,
-                evaluation_mode,
-                0,
-                run_ar=False,
-            )
+        _write_evaluations(
+            model, cfg, vocab, curve_suites, run_dir, position_encoding, mode, 0, run_ar=False
+        )
     progress = tqdm(
         range(start_step + 1, cfg.train_steps + 1),
-        desc=f"{cfg.version} {position_encoding}/{training_log_mode}",
+        desc=f"{cfg.version} {position_encoding}/{mode}",
         initial=start_step,
         total=cfg.train_steps,
     )
@@ -1868,31 +1718,19 @@ def train_v20_variant(
         loss_phase = training_loss_phase(cfg, step)
         if step == cfg.max_steps_for_language_pred + 1:
             print(
-                f"[train] {position_encoding}/{training_log_mode}: "
-                f"switching to task-output-only loss at step {step}",
+                f"[train] {position_encoding}/{mode}: switching to task-output-only loss at step {step}",
                 flush=True,
             )
-        if joint_modes:
-            examples, rendered = paired_joint_training_batch(
-                cfg,
-                vocab,
-                text,
-                split,
-                pool,
-                rng,
-                require_task=loss_phase == "task_output",
-            )
-        else:
-            examples, rendered = _training_batch(
-                cfg,
-                vocab,
-                text,
-                split,
-                pool,
-                mode,
-                rng,
-                require_task=loss_phase == "task_output",
-            )
+        examples, rendered = _training_batch(
+            cfg,
+            vocab,
+            text,
+            split,
+            pool,
+            mode,
+            rng,
+            require_task=loss_phase == "task_output",
+        )
         ids, labels, attention_mask = collate_v20(rendered, vocab, cfg.device)
         loss_weights = collate_v20_loss_weights(rendered, cfg, cfg.device, step=step)
         contrastive_active = (
@@ -1912,18 +1750,7 @@ def train_v20_variant(
                 loss_phase == "task_output"
                 and cfg.task_output_loss_reduction == "component_normalized"
             )
-            if joint_modes:
-                loss, objective_region_losses, per_mode_objective_losses = (
-                    equal_mode_training_loss(
-                        token_losses,
-                        active,
-                        loss_weights,
-                        rendered,
-                        cfg,
-                        component_reduction_active=component_reduction_active,
-                    )
-                )
-            elif component_reduction_active:
+            if component_reduction_active:
                 loss, objective_region_losses = component_normalized_task_output_loss(
                     token_losses,
                     active,
@@ -1931,11 +1758,9 @@ def train_v20_variant(
                     rendered,
                     cfg,
                 )
-                per_mode_objective_losses = {mode: loss}
             else:
                 loss = token_weighted_loss
                 objective_region_losses = {}
-                per_mode_objective_losses = {mode: loss}
             if contrastive_active:
                 if output.hidden_states is None:
                     raise RuntimeError(
@@ -1995,22 +1820,20 @@ def train_v20_variant(
                 )
             )
             if component_reduction_active:
-                effective_trace_coefficient = (
-                    float(cfg.task_output_trace_weight)
-                    * (0.5 if joint_modes else 1.0)
-                    if "trace" in objective_region_losses
-                    else 0.0
-                )
                 coefficient_denominator = (
                     float(cfg.task_output_count_weight)
                     + float(cfg.task_output_structure_weight)
-                    + effective_trace_coefficient
+                    + (
+                        float(cfg.task_output_trace_weight)
+                        if "trace" in objective_region_losses
+                        else 0.0
+                    )
                 )
                 final_count_coefficient_share = (
                     float(cfg.task_output_count_weight) / coefficient_denominator
                 )
                 trace_coefficient_share = (
-                    effective_trace_coefficient / coefficient_denominator
+                    float(cfg.task_output_trace_weight) / coefficient_denominator
                     if "trace" in objective_region_losses
                     else 0.0
                 )
@@ -2024,27 +1847,7 @@ def train_v20_variant(
             row: dict[str, Any] = {
                 "step": step,
                 "position_encoding": position_encoding,
-                "mode": training_log_mode,
-                "training_mode_coupling": cfg.training_mode_coupling,
-                "mode_objective_reduction": (
-                    "equal_mean" if joint_modes else "single_mode"
-                ),
-                "batch_nonthinking_rows": sum(
-                    item.mode == "nonthinking" for item in rendered
-                ),
-                "batch_thinking_rows": sum(
-                    item.mode == "thinking" for item in rendered
-                ),
-                "train_nonthinking_objective_loss": float(
-                    per_mode_objective_losses["nonthinking"].detach().cpu()
-                )
-                if "nonthinking" in per_mode_objective_losses
-                else float("nan"),
-                "train_thinking_objective_loss": float(
-                    per_mode_objective_losses["thinking"].detach().cpu()
-                )
-                if "thinking" in per_mode_objective_losses
-                else float("nan"),
+                "mode": mode,
                 "train_total_loss": float(loss.detach().cpu()),
                 "train_weighted_objective_loss": float(loss.detach().cpu()),
                 "train_unweighted_token_loss": unweighted_loss,
@@ -2114,7 +1917,7 @@ def train_v20_variant(
             )
             progress.set_postfix(loss=f"{loss.item():.4f}", task=f"{is_task.mean():.2f}")
             print(
-                f"[train] {position_encoding}/{training_log_mode} "
+                f"[train] {position_encoding}/{mode} "
                 f"step={step}/{cfg.train_steps} loss={loss.item():.4f} "
                 f"lr={rate:.3e} grad_norm={gradient_norm:.3f} "
                 f"task_ratio={is_task.mean():.2f}",
@@ -2131,7 +1934,7 @@ def train_v20_variant(
                 block="optimizer_interval",
                 duration_seconds=optimizer_interval_seconds,
                 position_encoding=position_encoding,
-                mode=training_log_mode,
+                mode=mode,
                 step=step,
                 device=cfg.device,
                 num_examples=optimizer_interval_steps * cfg.batch_size,
@@ -2139,20 +1942,17 @@ def train_v20_variant(
             )
             optimizer_interval_seconds = 0.0
             optimizer_interval_steps = 0
-            for evaluation_mode in evaluation_modes:
-                _write_evaluations(
-                    model,
-                    cfg,
-                    vocab,
-                    curve_suites,
-                    run_dir,
-                    position_encoding,
-                    evaluation_mode,
-                    step,
-                    run_ar=(
-                        step % cfg.ar_eval_every == 0 or step == cfg.train_steps
-                    ),
-                )
+            _write_evaluations(
+                model,
+                cfg,
+                vocab,
+                curve_suites,
+                run_dir,
+                position_encoding,
+                mode,
+                step,
+                run_ar=(step % cfg.ar_eval_every == 0 or step == cfg.train_steps),
+            )
         if step in numeric_checkpoint_steps:
             snapshots.add(model, step)
         if (
@@ -2197,48 +1997,39 @@ def train_v20_variant(
         model, optimizer, cfg, vocab, pool, split, position_encoding, mode, cfg.train_steps,
         rng, run_dir, sync_run_dir, label="final", sampling_state=sampling_state,
     )
-    for evaluation_mode in evaluation_modes:
-        with timed_event(
-            run_dir,
-            scope="training",
-            block="final_test",
+    with timed_event(
+        run_dir,
+        scope="training",
+        block="final_test",
+        position_encoding=position_encoding,
+        mode=mode,
+        step=cfg.train_steps,
+        device=cfg.device,
+        num_examples=sum(len(values) for values in test_suites.values()),
+    ):
+        _write_final_test(model, cfg, vocab, test_suites, run_dir, position_encoding, mode)
+    with timed_event(
+        run_dir,
+        scope="training",
+        block="prefix_permutation_evaluation",
+        position_encoding=position_encoding,
+        mode=mode,
+        step=cfg.train_steps,
+        device=cfg.device,
+    ):
+        permutation = prefix_permutation_consistency_evaluation(
+            model,
+            cfg,
+            vocab,
+            permutation_examples,
             position_encoding=position_encoding,
-            mode=evaluation_mode,
-            step=cfg.train_steps,
-            device=cfg.device,
-            num_examples=sum(len(values) for values in test_suites.values()),
-        ):
-            _write_final_test(
-                model,
-                cfg,
-                vocab,
-                test_suites,
-                run_dir,
-                position_encoding,
-                evaluation_mode,
-            )
-        with timed_event(
-            run_dir,
-            scope="training",
-            block="prefix_permutation_evaluation",
-            position_encoding=position_encoding,
-            mode=evaluation_mode,
-            step=cfg.train_steps,
-            device=cfg.device,
-        ):
-            permutation = prefix_permutation_consistency_evaluation(
-                model,
-                cfg,
-                vocab,
-                permutation_examples,
-                position_encoding=position_encoding,
-                mode=evaluation_mode,
-            )
-            _append_unique(
-                run_dir / "tables" / "prefix_permutation_consistency.csv",
-                permutation,
-                ["position_encoding", "mode", "example_id"],
-            )
+            mode=mode,
+        )
+        _append_unique(
+            run_dir / "tables" / "prefix_permutation_consistency.csv",
+            permutation,
+            ["position_encoding", "mode", "example_id"],
+        )
 
 
 def summarize_learning_tables(run_dir: Path) -> None:
@@ -2416,7 +2207,6 @@ def train_v20_models(
     specifications: list[dict[str, Any]] = []
     for position_encoding, mode in cfg.model_variants:
         probe = paired_v20_model(cfg, vocab, position_encoding)
-        storage_mode = _checkpoint_storage_mode(cfg, mode)
         specifications.append(
             {
                 "position_encoding": position_encoding,
@@ -2426,48 +2216,26 @@ def train_v20_models(
                 "n_head": cfg.n_head,
                 "n_embd": cfg.n_embd,
                 "n_inner": cfg.n_inner,
-                "training_mode_coupling": cfg.training_mode_coupling,
-                "shared_checkpoint": cfg.training_mode_coupling == "paired_joint",
-                "checkpoint_storage_mode": storage_mode,
             }
         )
         del probe
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-    if cfg.training_mode_coupling == "paired_joint":
-        for position_encoding in cfg.position_encodings:
-            print(f"[train] {position_encoding}/joint", flush=True)
-            train_v20_variant(
-                cfg,
-                vocab,
-                text,
-                split,
-                pool,
-                curve_suites,
-                test_suites,
-                position_encoding,
-                "thinking",
-                run_dir,
-                sync_run_dir=sync_run_dir,
-                skip_completed=skip_completed,
-            )
-    else:
-        for position_encoding, mode in cfg.model_variants:
-            print(f"[train] {position_encoding}/{mode}", flush=True)
-            train_v20_variant(
-                cfg,
-                vocab,
-                text,
-                split,
-                pool,
-                curve_suites,
-                test_suites,
-                position_encoding,
-                mode,
-                run_dir,
-                sync_run_dir=sync_run_dir,
-                skip_completed=skip_completed,
-            )
+        print(f"[train] {position_encoding}/{mode}", flush=True)
+        train_v20_variant(
+            cfg,
+            vocab,
+            text,
+            split,
+            pool,
+            curve_suites,
+            test_suites,
+            position_encoding,
+            mode,
+            run_dir,
+            sync_run_dir=sync_run_dir,
+            skip_completed=skip_completed,
+        )
     atomic_csv(pd.DataFrame(specifications), run_dir / "tables" / "model_specifications.csv")
     summarize_learning_tables(run_dir)
     if sync_run_dir is not None:
@@ -2491,7 +2259,6 @@ def load_v20_checkpoint_model(
     cfg = config_from_dict(json.loads((run_dir / "config.json").read_text(encoding="utf-8")))
     if device is not None:
         cfg = replace(cfg, device=device)
-    storage_mode = _checkpoint_storage_mode(cfg, mode)
     text = load_corpus_text()
     from .data import load_corpus_split
 
@@ -2504,12 +2271,12 @@ def load_v20_checkpoint_model(
         vocab_fingerprint=vocab.fingerprint,
     )
     model = build_model(cfg, vocab, position_encoding, cfg.device)
-    checkpoint_root = _checkpoint_root(run_dir, position_encoding, storage_mode)
+    checkpoint_root = _checkpoint_root(run_dir, position_encoding, mode)
     selected = label if label is not None else f"step_{int(step):06d}"
     path = checkpoint_root / selected / "checkpoint.pt"
     if label == "final" and not path.exists():
         numeric_final = (
-            _checkpoint_root(run_dir, position_encoding, storage_mode)
+            _checkpoint_root(run_dir, position_encoding, mode)
             / f"step_{cfg.train_steps:06d}"
             / "checkpoint.pt"
         )
@@ -2525,10 +2292,7 @@ def load_v20_checkpoint_model(
     payload_cfg = config_from_dict(dict(payload.get("config", {})))
     if payload_cfg != config_from_dict(json.loads((run_dir / "config.json").read_text(encoding="utf-8"))):
         raise ValueError("checkpoint config does not match run config")
-    if (
-        payload.get("position_encoding") != position_encoding
-        or payload.get("mode") != storage_mode
-    ):
+    if payload.get("position_encoding") != position_encoding or payload.get("mode") != mode:
         raise ValueError("checkpoint position encoding/mode does not match requested variant")
     expected_step = cfg.train_steps if label == "final" else int(step)
     if int(payload.get("step", -1)) != expected_step:
