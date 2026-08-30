@@ -150,6 +150,16 @@ class TinyPositionCausalLM(nn.Module):
             if cfg.tie_word_embeddings
             else nn.Linear(cfg.n_embd, len(vocab.id_to_token), bias=False)
         )
+        self.count_lm_head = (
+            nn.Linear(cfg.n_embd, len(vocab.number_ids), bias=False)
+            if cfg.untie_atomic_count_readout
+            else None
+        )
+        self.register_buffer(
+            "_atomic_count_ids",
+            torch.tensor(vocab.number_ids, dtype=torch.long),
+            persistent=False,
+        )
         self.position_embedding = None
         self.layers = nn.ModuleList(TransformerLayer(cfg) for _ in range(cfg.n_layer))
         self.final_norm = nn.LayerNorm(cfg.n_embd)
@@ -165,13 +175,26 @@ class TinyPositionCausalLM(nn.Module):
             output_hidden_states=False,
             use_cache=False,
             tie_word_embeddings=cfg.tie_word_embeddings,
+            untie_atomic_count_readout=cfg.untie_atomic_count_readout,
         )
 
     @property
     def unembedding_weight(self) -> torch.Tensor:
-        if self.lm_head is None:
-            return self.token_embedding.weight
-        return self.lm_head.weight
+        weight = (
+            self.token_embedding.weight
+            if self.lm_head is None
+            else self.lm_head.weight
+        )
+        if self.count_lm_head is None:
+            return weight
+        # ``index_copy`` gives the count rows only to ``count_lm_head`` during
+        # backpropagation; the corresponding input-embedding rows do not
+        # receive answer-unembedding gradients.  All other rows remain tied.
+        return weight.index_copy(
+            0,
+            self._atomic_count_ids,
+            self.count_lm_head.weight,
+        )
 
     def forward(
         self,
@@ -239,6 +262,12 @@ def initialize_model(model: TinyPositionCausalLM, seed: int) -> None:
         # function change: both variants begin with exactly the same logits.
         if model.lm_head is not None:
             model.lm_head.weight.copy_(model.token_embedding.weight)
+        if model.count_lm_head is not None:
+            model.count_lm_head.weight.copy_(
+                model.token_embedding.weight.index_select(
+                    0, model._atomic_count_ids
+                )
+            )
 
 
 def build_model(

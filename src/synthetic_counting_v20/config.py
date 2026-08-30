@@ -152,6 +152,23 @@ VERSION_SPECS = {
         "task_output_loss_reduction": "component_normalized",
         "tie_word_embeddings": False,
     },
+    # v28 is the minimal from-scratch readout-decoupling control for v24.3.
+    # The full transformer and the original separator trace are trained
+    # end-to-end with the unchanged v24.3 objective.  Only the ten atomic count
+    # tokens use output vectors that are independent of their input embeddings;
+    # every other vocabulary row remains tied.  This preserves trace copying
+    # while removing the diagnosed count-input/count-output optimization
+    # conflict, without a post-hoc calibration phase or auxiliary objective.
+    "v28": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 10,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "uniform",
+        "task_output_loss_reduction": "component_normalized",
+        "tie_word_embeddings": True,
+        "untie_atomic_count_readout": True,
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
@@ -275,6 +292,10 @@ class V20Config:
     trace_format: str = "indexed"
     use_sdpa: bool = True
     tie_word_embeddings: bool = True
+    # If true, only the atomic count-token output vectors are independent of
+    # the input embedding.  The complete model is still trained end-to-end;
+    # this is an architectural parameterization, not a frozen readout tail.
+    untie_atomic_count_readout: bool = False
 
     @property
     def count_min(self) -> int:
@@ -452,6 +473,26 @@ class V20Config:
         if canonical_tying is not None and self.tie_word_embeddings is not canonical_tying:
             raise ValueError(
                 f"{self.version} requires tie_word_embeddings={canonical_tying}"
+            )
+        if type(self.untie_atomic_count_readout) is not bool:
+            raise ValueError("untie_atomic_count_readout must be a boolean")
+        canonical_partial_untie = version_spec.get("untie_atomic_count_readout")
+        if (
+            canonical_partial_untie is not None
+            and self.untie_atomic_count_readout is not canonical_partial_untie
+        ):
+            raise ValueError(
+                f"{self.version} requires untie_atomic_count_readout="
+                f"{canonical_partial_untie}"
+            )
+        if self.untie_atomic_count_readout and not self.tie_word_embeddings:
+            raise ValueError(
+                "untie_atomic_count_readout requires the remaining vocabulary rows "
+                "to stay tied"
+            )
+        if self.untie_atomic_count_readout and self.count_tokenization != "atomic":
+            raise ValueError(
+                "untie_atomic_count_readout requires atomic count tokenization"
             )
         if not math.isfinite(float(self.weight_decay)) or self.weight_decay < 0:
             raise ValueError("weight_decay must be finite and nonnegative")
@@ -651,6 +692,11 @@ class V20Config:
             "snapshot_shard_every": self.snapshot_shard_every,
             "snapshot_dtype": self.snapshot_dtype,
         }
+        result["readout_parameterization"] = (
+            "atomic_count_rows_untied; all_other_rows_tied"
+            if self.untie_atomic_count_readout
+            else ("fully_tied" if self.tie_word_embeddings else "fully_untied")
+        )
         return result
 
 
@@ -736,6 +782,7 @@ def config_from_dict(values: dict[str, Any]) -> V20Config:
         "sequence_templates",
         "checkpoint_policy",
         "answer_query_contrastive_objective",
+        "readout_parameterization",
     ):
         data.pop(derived, None)
     data["position_encodings"] = tuple(data["position_encodings"])
@@ -777,6 +824,7 @@ def config_from_dict(values: dict[str, Any]) -> V20Config:
     data.setdefault("trace_format", version_spec["trace_format"])
     data.setdefault("use_sdpa", True)
     data.setdefault("tie_word_embeddings", True)
+    data.setdefault("untie_atomic_count_readout", False)
     data.setdefault("training_count_distribution", "natural")
     if legacy_loss_schedule:
         data["max_steps_for_language_pred"] = int(data["train_steps"])
@@ -807,7 +855,11 @@ def default_run_name(cfg: V20Config) -> str:
             f"-s{_float_tag(cfg.task_output_structure_weight)}"
         )
     )
-    readout_tag = "" if cfg.tie_word_embeddings else "_untied-lm-head"
+    readout_tag = (
+        "_untied-count-readout"
+        if cfg.untie_atomic_count_readout
+        else ("" if cfg.tie_word_embeddings else "_untied-lm-head")
+    )
     contrastive_tag = (
         ""
         if cfg.answer_query_contrastive_weight == 0

@@ -128,6 +128,7 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
     canonical_count_distribution = version_spec.get("training_count_distribution")
     canonical_task_output_reduction = version_spec.get("task_output_loss_reduction")
     canonical_tying = version_spec.get("tie_word_embeddings")
+    canonical_partial_untie = version_spec.get("untie_atomic_count_readout")
     canonical_contrastive_weight = version_spec.get(
         "answer_query_contrastive_weight"
     )
@@ -223,6 +224,8 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         overrides["task_output_loss_reduction"] = canonical_task_output_reduction
     if canonical_tying is not None:
         overrides["tie_word_embeddings"] = canonical_tying
+    if canonical_partial_untie is not None:
+        overrides["untie_atomic_count_readout"] = canonical_partial_untie
     if canonical_contrastive_weight is not None:
         overrides["answer_query_contrastive_weight"] = canonical_contrastive_weight
     if canonical_contrastive_temperature is not None:
@@ -235,7 +238,7 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         # The nonthinking objective is identical to v20, so the canonical v22
         # run trains only the changed separator-trace Thinking model.
         overrides["enabled_model_variants"] = ("rope/thinking",)
-    elif version in {"v23", "v24", "v24.2", "v24.3", "v24.4", "v24.5", "v24.6", "v24.7", "v25", "v26"}:
+    elif version in {"v23", "v24", "v24.2", "v24.3", "v24.4", "v24.5", "v24.6", "v24.7", "v25", "v26", "v28"}:
         # Both objectives are retrained whenever the loss or count distribution
         # changes so the within-version Thinking/Non-thinking comparison stays
         # controlled.
