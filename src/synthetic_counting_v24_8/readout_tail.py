@@ -29,6 +29,9 @@ from synthetic_counting_v20.training import (
 )
 
 
+SUPPORTED_READOUT_MODES = ("untied_lm_head", "tied_unembedding")
+
+
 def _load_prepared_v20_data(*args: Any, **kwargs: Any) -> Any:
     # Importing the complete pipeline also imports plotting dependencies. Keep
     # that optional dependency boundary out of lightweight gate/unit tests.
@@ -233,6 +236,8 @@ def _save_model(
     validation_summary: GateSummary,
     experiment: str = "v24.8",
     source_version: str = "v24.7",
+    readout_mode: str = "untied_lm_head",
+    trainable_parameters: str = "existing native lm_head number-token rows only",
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -245,7 +250,8 @@ def _save_model(
             "position_encoding": "rope",
             "tail_candidate": asdict(candidate),
             "tail_step": int(step),
-            "trainable_parameters": "existing native lm_head number-token rows only",
+            "readout_mode": readout_mode,
+            "trainable_parameters": trainable_parameters,
             "validation_summary": asdict(validation_summary),
             "source_config": asdict(source_config),
             "model_state_dict": {
@@ -270,6 +276,7 @@ def _run_candidate(
     seed: int,
     experiment: str = "v24.8",
     expected_source_version: str = "v24.7",
+    readout_mode: str = "untied_lm_head",
 ) -> dict[str, Any]:
     spec.validate()
     cfg, vocab, pool, split, model = load_v20_checkpoint_model(
@@ -288,9 +295,26 @@ def _run_candidate(
         raise ValueError(
             f"{experiment} requires the unchanged atomic separator-trace setting"
         )
-    if model.lm_head is None:
+    if readout_mode not in SUPPORTED_READOUT_MODES:
         raise ValueError(
-            f"{experiment} requires {expected_source_version}'s untied native LM head"
+            f"unsupported readout mode {readout_mode!r}; "
+            f"choose one of {SUPPORTED_READOUT_MODES}"
+        )
+    if readout_mode == "untied_lm_head":
+        if model.lm_head is None:
+            raise ValueError(
+                f"{experiment} requires {expected_source_version}'s untied native LM head"
+            )
+        readout_weight = model.lm_head.weight
+        trainable_parameters = "existing native lm_head number-token rows only"
+    else:
+        if model.lm_head is not None:
+            raise ValueError(
+                f"{experiment} tied-unembedding calibration requires a tied source model"
+            )
+        readout_weight = model.token_embedding.weight
+        trainable_parameters = (
+            "existing tied token_embedding/unembedding atomic-number rows only"
         )
     text = load_corpus_text()
     _, _, curve_suites, _ = _load_prepared_v20_data(cfg, vocab, text, source_run)
@@ -309,8 +333,8 @@ def _run_candidate(
     )
     for parameter in model.parameters():
         parameter.requires_grad_(False)
-    model.lm_head.weight.requires_grad_(True)
-    trainable = [model.lm_head.weight]
+    readout_weight.requires_grad_(True)
+    trainable = [readout_weight]
     optimizer = AdamW(trainable, lr=0.0, betas=(0.9, 0.999), weight_decay=0.0)
     number_ids = torch.tensor(vocab.number_ids, dtype=torch.long, device=device)
     rng = random.Random(seed)
@@ -354,6 +378,20 @@ def _run_candidate(
             require_task=True,
         )
         ids, _, mask = collate_v20(rendered, vocab, device)
+        if readout_mode == "tied_unembedding":
+            # Atomic answer tokens are deliberately absent from every causal
+            # prefix used to predict the answer.  Therefore the shared rows
+            # receive only unembedding-side gradients even though the source
+            # model remains tied; no prompt/trace embedding is altered.
+            for row, item in enumerate(rendered):
+                if item.spans is None:
+                    raise ValueError("tied readout calibration requires task spans")
+                prefix = ids[row, : item.spans.count_pos]
+                if torch.isin(prefix, number_ids).any():
+                    raise ValueError(
+                        "atomic number token appeared before the answer target; "
+                        "cannot isolate tied unembedding gradients"
+                    )
         logits = model(input_ids=ids, attention_mask=mask).logits
         answer_logits, targets = _answer_logits_and_targets(logits, rendered, number_ids)
         loss = F.cross_entropy(answer_logits.float(), targets)
@@ -420,6 +458,8 @@ def _run_candidate(
                     validation_summary=summary,
                     experiment=experiment,
                     source_version=expected_source_version,
+                    readout_mode=readout_mode,
+                    trainable_parameters=trainable_parameters,
                 )
     model.load_state_dict(best_state)
     candidate_dir = output_dir / "candidates" / spec.name / mode
@@ -437,6 +477,8 @@ def _run_candidate(
         validation_summary=best_summary,
         experiment=experiment,
         source_version=expected_source_version,
+        readout_mode=readout_mode,
+        trainable_parameters=trainable_parameters,
     )
     return {
         "model": model,
@@ -448,6 +490,8 @@ def _run_candidate(
         "duration_seconds": time.perf_counter() - started,
         "experiment": experiment,
         "source_version": expected_source_version,
+        "readout_mode": readout_mode,
+        "trainable_parameters": trainable_parameters,
     }
 
 
@@ -513,6 +557,8 @@ def _final_test(
         validation_summary=result["best_summary"],
         experiment=str(result["experiment"]),
         source_version=str(result["source_version"]),
+        readout_mode=str(result["readout_mode"]),
+        trainable_parameters=str(result["trainable_parameters"]),
     )
     return {
         "mode": mode,
@@ -535,6 +581,7 @@ def run_readout_tail(
     candidates: tuple[CandidateSpec, ...] | None = None,
     experiment: str = "v24.8",
     expected_source_version: str = "v24.7",
+    readout_mode: str = "untied_lm_head",
 ) -> Path:
     source_run = Path(source_run).resolve()
     output_dir = Path(output_dir).resolve()
@@ -546,6 +593,16 @@ def run_readout_tail(
         raise ValueError("batch size, eval interval, and validation count must be positive")
     if not experiment or not expected_source_version:
         raise ValueError("experiment and expected source version must be nonempty")
+    if readout_mode not in SUPPORTED_READOUT_MODES:
+        raise ValueError(
+            f"unsupported readout mode {readout_mode!r}; "
+            f"choose one of {SUPPORTED_READOUT_MODES}"
+        )
+    trainable_parameters = (
+        "existing native lm_head number-token rows only"
+        if readout_mode == "untied_lm_head"
+        else "existing tied token_embedding/unembedding atomic-number rows only"
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     candidate_specs = candidates or default_candidate_specs()
     for spec in candidate_specs:
@@ -557,7 +614,8 @@ def run_readout_tail(
         "trace_change": False,
         "inference_change": False,
         "auxiliary_decoder": False,
-        "trainable_parameters": "existing native lm_head number-token rows only",
+        "readout_mode": readout_mode,
+        "trainable_parameters": trainable_parameters,
         "selection_split": "validation",
         "test_used_for_selection": False,
         "batch_size": batch_size,
@@ -586,6 +644,7 @@ def run_readout_tail(
             seed=seed,
             experiment=experiment,
             expected_source_version=expected_source_version,
+            readout_mode=readout_mode,
         )
         thinking_results.append(result)
         if selected is None or (
@@ -611,6 +670,7 @@ def run_readout_tail(
         seed=seed,
         experiment=experiment,
         expected_source_version=expected_source_version,
+        readout_mode=readout_mode,
     )
     final_results = [
         _final_test(selected, source_run, output_dir, mode="thinking"),
@@ -675,6 +735,7 @@ def main(argv: list[str] | None = None) -> None:
 __all__ = [
     "CandidateSpec",
     "GateSummary",
+    "SUPPORTED_READOUT_MODES",
     "default_candidate_specs",
     "run_readout_tail",
     "summarize_gate",
