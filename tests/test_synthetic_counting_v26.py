@@ -52,6 +52,8 @@ def test_v26_notebook_is_clean_and_audits_pairing() -> None:
     source = "\n".join("".join(cell["source"]) for cell in notebook["cells"])
     assert 'VERSION = "v26"' in source
     assert 'assert changed_fields == {"version", "tie_word_embeddings"}' in source
+    assert 'accepted["value"] = accepted["value"].astype(int)' in source
+    assert 'assert list(count_table.columns) == list(range(1, 11))' in source
     assert "paired_sampling_exactly_matched" in source
     assert "maximum_count_relative_error" in source
     assert "thinking_minus_nonthinking" in source

@@ -132,8 +132,9 @@ print(f"Paired training block: {time.perf_counter() - training_started:.1f} seco
 
 sampling = pd.read_csv(RUN_DIR / "tables" / "training_sampling_distribution.csv")
 accepted = sampling[sampling["dimension"].eq("accepted_counts")].copy()
+accepted["value"] = accepted["value"].astype(int)
 count_table = accepted.pivot(index="mode", columns="value", values="examples").sort_index(axis=1)
-assert list(count_table.columns.astype(int)) == list(range(1, 11))
+assert list(count_table.columns) == list(range(1, 11))
 assert count_table.loc["nonthinking"].equals(count_table.loc["thinking"])
 count_relative_error = (
     count_table.sub(count_table.mean(axis=1), axis=0)
