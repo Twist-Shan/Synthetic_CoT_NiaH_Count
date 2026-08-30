@@ -169,6 +169,21 @@ VERSION_SPECS = {
         "tie_word_embeddings": True,
         "untie_atomic_count_readout": True,
     },
+    # v29 is the single-scalar readout correction for v28.  The data, model,
+    # partial count-only untying, separator trace, and schedule are unchanged.
+    # Only the already component-normalized final-count region receives a 4x
+    # coefficient during the task-output phase; the trace region keeps its
+    # independent coefficient of 1 rather than being diluted token-wise.
+    "v29": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 10,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "uniform",
+        "task_output_loss_reduction": "component_normalized",
+        "tie_word_embeddings": True,
+        "untie_atomic_count_readout": True,
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
