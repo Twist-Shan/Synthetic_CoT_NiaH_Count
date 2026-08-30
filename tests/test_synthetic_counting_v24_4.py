@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
+from synthetic_counting_v20.cli import build_parser
 from synthetic_counting_v20.config import config_from_dict
 from synthetic_counting_v20.training import _maximum_entropy_cell_probabilities
 from synthetic_counting_v24_3.config import preset_config as preset_v24_3
@@ -41,6 +42,13 @@ def test_maxent_sampler_matches_both_marginals_with_structural_zeros() -> None:
     np.testing.assert_allclose(probabilities.sum(axis=1), np.full(3, 1 / 3), atol=1e-12)
     np.testing.assert_allclose(probabilities.sum(axis=0), np.full(3, 1 / 3), atol=1e-12)
     assert np.all(probabilities[~support] == 0)
+
+
+def test_shared_cli_accepts_v24_4_maxent_sampler() -> None:
+    args = build_parser("v24.4").parse_args(
+        ["--training-count-distribution", "maxent_set_count"]
+    )
+    assert args.training_count_distribution == "maxent_set_count"
 
 
 def test_v24_4_colab_notebook_is_clean_and_audits_sampler_only_change() -> None:

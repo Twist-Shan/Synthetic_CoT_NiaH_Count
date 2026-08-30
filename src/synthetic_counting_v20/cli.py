@@ -4,6 +4,7 @@ import argparse
 
 from .config import (
     ALL_MODEL_VARIANTS,
+    SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS,
     SUPPORTED_TASK_OUTPUT_LOSS_REDUCTIONS,
     VERSION_SPECS,
     preset_config,
@@ -50,7 +51,7 @@ def build_parser(version: str = "v20") -> argparse.ArgumentParser:
     parser.add_argument("--task-occurrence-ratio", type=float, default=None)
     parser.add_argument(
         "--training-count-distribution",
-        choices=("natural", "uniform"),
+        choices=SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS,
         default=None,
     )
     parser.add_argument(
