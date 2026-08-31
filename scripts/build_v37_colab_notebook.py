@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import textwrap
 
 from build_v35_colab_notebook import build as build_v35_notebook
 
@@ -187,6 +188,28 @@ def command_for(seed):
         command.append("--skip-completed")
     return command
 """,
+    )
+
+    # Make the stated behavioral gate executable, not merely descriptive.
+    # Colab's Run all must never start expensive post-hoc analyses for a
+    # rejected screen.
+    ncc_source = "".join(_cell(notebook, "results")["source"])
+    _set_source(
+        notebook,
+        "results",
+        "if not behavior_gate:\n"
+        '    print("NCC skipped: final behavioral gate failed")\n'
+        "else:\n"
+        + textwrap.indent(ncc_source, "    "),
+    )
+    mechanism_source = "".join(_cell(notebook, "mechanism")["source"])
+    _set_source(
+        notebook,
+        "mechanism",
+        "if not behavior_gate:\n"
+        '    print("Mechanism analyses skipped: final behavioral gate failed")\n'
+        "else:\n"
+        + textwrap.indent(mechanism_source, "    "),
     )
 
     notebook["metadata"]["colab"]["name"] = TARGET.name

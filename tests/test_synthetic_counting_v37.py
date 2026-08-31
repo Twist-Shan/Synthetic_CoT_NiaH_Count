@@ -89,6 +89,9 @@ def test_v37_screen_notebook_is_clean_and_predeclares_endpoint() -> None:
     assert 'role_table["step"].eq(8000)' in source
     assert "v37_lowtail1em5_steps8000_independent_L256_pool100_seed" in source
     assert '"--stage", "phase,causal,extended,plots"' in source
+    assert "if not behavior_gate:" in source
+    assert "NCC skipped: final behavioral gate failed" in source
+    assert "Mechanism analyses skipped: final behavioral gate failed" in source
     assert "shared_checkpoint" not in source
     assert "CALIBRATION_DIR" not in source
     for cell in notebook["cells"]:
