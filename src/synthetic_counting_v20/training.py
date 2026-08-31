@@ -73,7 +73,8 @@ def learning_rate(cfg: V20Config, step: int) -> float:
         return cfg.lr * step / max(1, cfg.warmup_steps)
     decay_steps = cfg.train_steps if cfg.lr_decay_steps is None else cfg.lr_decay_steps
     progress = (step - cfg.warmup_steps) / max(1, decay_steps - cfg.warmup_steps)
-    return cfg.lr * 0.5 * (1.0 + math.cos(math.pi * min(1.0, progress)))
+    cosine = 0.5 * (1.0 + math.cos(math.pi * min(1.0, progress)))
+    return cfg.min_lr + (cfg.lr - cfg.min_lr) * cosine
 
 
 def training_loss_phase(cfg: V20Config, step: int) -> str:

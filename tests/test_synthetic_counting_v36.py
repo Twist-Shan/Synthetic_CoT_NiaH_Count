@@ -58,7 +58,7 @@ def test_v36_rejects_noncanonical_or_short_decay_horizon() -> None:
     with pytest.raises(ValueError, match="lr_decay_steps=10000"):
         replace(candidate, lr_decay_steps=9_000).validate()
     baseline = preset_v35("main", device="cpu")
-    with pytest.raises(ValueError, match="at least train_steps"):
+    with pytest.raises(ValueError, match="requires positive min_lr"):
         replace(baseline, lr_decay_steps=5_999).validate()
 
 
