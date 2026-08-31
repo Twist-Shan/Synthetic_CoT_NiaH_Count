@@ -532,6 +532,44 @@ VERSION_SPECS = {
             6_000,
         ),
     },
+    # v42 changes only the optimization horizon on top of v41.  The wider
+    # model's behavioral transition occurred late in v41, so both independently
+    # trained modes are restarted from random initialization and trained for
+    # 8,000 updates with the same cosine rule (hence an 8,000-step horizon).
+    # Data, trace, targets, architecture, loss coefficients, warmup, peak LR,
+    # clipping, and inference remain unchanged.
+    "v42": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 5,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "maxent_set_count",
+        "task_output_loss_reduction": "component_normalized",
+        "task_output_count_weight": 8.0,
+        "task_output_trace_weight": 8.0,
+        "task_output_structure_weight": 8.0,
+        "tie_word_embeddings": True,
+        "untie_atomic_count_readout": True,
+        "n_layer": 4,
+        "n_head": 6,
+        "n_embd": 384,
+        "n_inner": 1536,
+        "train_steps": 8_000,
+        "phase_cloud_steps": (
+            0,
+            1_000,
+            1_500,
+            2_000,
+            2_500,
+            3_000,
+            3_500,
+            4_000,
+            5_000,
+            6_000,
+            7_000,
+            8_000,
+        ),
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
