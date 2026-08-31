@@ -496,6 +496,42 @@ VERSION_SPECS = {
             6_000,
         ),
     },
+    # v41 is the model-width screen on top of v40.  It leaves the four-layer
+    # serial depth, 256-character prompt, count support, data, trace, loss,
+    # optimizer, and independent mode-specific training fixed.  The residual
+    # width grows 256 -> 384 while preserving a 64-dimensional attention head
+    # (4 -> 6 heads) and the 4x MLP ratio (1024 -> 1536).  This adds parallel
+    # retrieval capacity without giving Non-thinking extra serial depth.
+    "v41": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 5,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "maxent_set_count",
+        "task_output_loss_reduction": "component_normalized",
+        "task_output_count_weight": 8.0,
+        "task_output_trace_weight": 8.0,
+        "task_output_structure_weight": 8.0,
+        "tie_word_embeddings": True,
+        "untie_atomic_count_readout": True,
+        "n_layer": 4,
+        "n_head": 6,
+        "n_embd": 384,
+        "n_inner": 1536,
+        "train_steps": 6_000,
+        "phase_cloud_steps": (
+            0,
+            1_000,
+            1_500,
+            2_000,
+            2_500,
+            3_000,
+            3_500,
+            4_000,
+            5_000,
+            6_000,
+        ),
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
@@ -750,15 +786,19 @@ class V20Config:
         if self.seq_len < 2:
             raise ValueError("seq_len must be at least two")
         canonical_n_layer = int(version_spec.get("n_layer", 4))
+        canonical_n_head = int(version_spec.get("n_head", 4))
+        canonical_n_embd = int(version_spec.get("n_embd", 256))
+        canonical_n_inner = int(version_spec.get("n_inner", 1024))
         if (self.n_layer, self.n_head, self.n_embd, self.n_inner) != (
             canonical_n_layer,
-            4,
-            256,
-            1024,
+            canonical_n_head,
+            canonical_n_embd,
+            canonical_n_inner,
         ):
             raise ValueError(
-                f"{self.version} requires {canonical_n_layer} layers, 4 heads, "
-                "d_model=256, MLP=1024"
+                f"{self.version} requires {canonical_n_layer} layers, "
+                f"{canonical_n_head} heads, d_model={canonical_n_embd}, "
+                f"MLP={canonical_n_inner}"
             )
         if self.n_embd % self.n_head:
             raise ValueError("n_embd must be divisible by n_head")

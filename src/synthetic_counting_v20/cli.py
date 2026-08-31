@@ -61,6 +61,9 @@ def build_parser(version: str = "v20") -> argparse.ArgumentParser:
     parser.add_argument("--n-positions", type=int, default=None)
     parser.add_argument("--count-max-threshold", type=int, default=None)
     parser.add_argument("--n-layer", type=int, default=None)
+    parser.add_argument("--n-head", type=int, default=None)
+    parser.add_argument("--n-embd", type=int, default=None)
+    parser.add_argument("--n-inner", type=int, default=None)
     parser.add_argument("--task-occurrence-ratio", type=float, default=None)
     parser.add_argument(
         "--training-count-distribution",
@@ -128,6 +131,9 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         "n_positions",
         "count_max_threshold",
         "n_layer",
+        "n_head",
+        "n_embd",
+        "n_inner",
         "task_occurrence_ratio",
         "training_count_distribution",
         "task_output_loss_reduction",
@@ -151,6 +157,9 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
     )
     canonical_count_max = version_spec.get("count_max_threshold")
     canonical_n_layer = version_spec.get("n_layer")
+    canonical_n_head = version_spec.get("n_head")
+    canonical_n_embd = version_spec.get("n_embd")
+    canonical_n_inner = version_spec.get("n_inner")
     canonical_pool_threshold = version_spec.get("needle_pool_frequency_threshold")
     canonical_pool_size = version_spec.get("needle_pool_size")
     canonical_count_distribution = version_spec.get("training_count_distribution")
@@ -222,6 +231,24 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         and int(args.n_layer) != int(canonical_n_layer)
     ):
         parser.error(f"{version} fixes --n-layer at {canonical_n_layer}")
+    if (
+        canonical_n_head is not None
+        and args.n_head is not None
+        and int(args.n_head) != int(canonical_n_head)
+    ):
+        parser.error(f"{version} fixes --n-head at {canonical_n_head}")
+    if (
+        canonical_n_embd is not None
+        and args.n_embd is not None
+        and int(args.n_embd) != int(canonical_n_embd)
+    ):
+        parser.error(f"{version} fixes --n-embd at {canonical_n_embd}")
+    if (
+        canonical_n_inner is not None
+        and args.n_inner is not None
+        and int(args.n_inner) != int(canonical_n_inner)
+    ):
+        parser.error(f"{version} fixes --n-inner at {canonical_n_inner}")
     if (
         canonical_pool_threshold is not None
         and args.needle_pool_frequency_threshold is not None
@@ -325,6 +352,12 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         overrides["count_max_threshold"] = canonical_count_max
     if canonical_n_layer is not None:
         overrides["n_layer"] = canonical_n_layer
+    if canonical_n_head is not None:
+        overrides["n_head"] = canonical_n_head
+    if canonical_n_embd is not None:
+        overrides["n_embd"] = canonical_n_embd
+    if canonical_n_inner is not None:
+        overrides["n_inner"] = canonical_n_inner
     if canonical_pool_threshold is not None:
         overrides["needle_pool_frequency_threshold"] = canonical_pool_threshold
     if canonical_pool_size is not None:
@@ -361,7 +394,7 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         # The nonthinking objective is identical to v20, so the canonical v22
         # run trains only the changed separator-trace Thinking model.
         overrides["enabled_model_variants"] = ("rope/thinking",)
-    elif version in {"v23", "v24", "v24.2", "v24.3", "v24.4", "v24.5", "v24.6", "v24.7", "v25", "v26", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37"}:
+    elif version in {"v23", "v24", "v24.2", "v24.3", "v24.4", "v24.5", "v24.6", "v24.7", "v25", "v26", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40", "v41"}:
         # Both objectives are retrained whenever the loss or count distribution
         # changes so the within-version Thinking/Non-thinking comparison stays
         # controlled.
