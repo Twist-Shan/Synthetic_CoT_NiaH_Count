@@ -898,6 +898,47 @@ VERSION_SPECS = {
             20_000,
         ),
     },
+    # v51 returns to v49's fixed 10k schedule and changes one loss coefficient:
+    # grammar/structure has weight 16 instead of 8.  This targets v49's nearly
+    # symmetric +/-1 trace-length errors without changing tokens, marker loss,
+    # data, architecture, or inference.
+    "v51": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 10,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "maxent_set_count",
+        "joint_sampler_max_starts_per_cell": None,
+        "permute_task_context_tokens": True,
+        "task_output_loss_reduction": "component_normalized",
+        "task_output_count_weight": 8.0,
+        "task_output_trace_weight": 8.0,
+        "task_output_structure_weight": 16.0,
+        "task_output_trace_delimiters_as_structure": True,
+        "tie_word_embeddings": True,
+        "untie_atomic_count_readout": True,
+        "n_layer": 4,
+        "n_head": 4,
+        "n_embd": 256,
+        "n_inner": 1024,
+        "train_steps": 10_000,
+        "phase_cloud_steps": (
+            0,
+            1_000,
+            1_500,
+            2_000,
+            2_500,
+            3_000,
+            3_500,
+            4_000,
+            5_000,
+            6_000,
+            7_000,
+            8_000,
+            9_000,
+            10_000,
+        ),
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
