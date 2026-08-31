@@ -327,6 +327,39 @@ VERSION_SPECS = {
             6_000,
         ),
     },
+    # v36 is the schedule-only control for v35.  It still performs exactly
+    # 6,000 optimizer updates, but evaluates the cosine schedule against the
+    # original v32 10,000-step horizon.  Thus the learning rate is not forced
+    # to zero at the screening endpoint.  Data, trace, loss, architecture,
+    # initialization, teacher forcing, and the two independent model runs are
+    # unchanged.
+    "v36": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 10,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "maxent_set_count",
+        "task_output_loss_reduction": "component_normalized",
+        "task_output_count_weight": 8.0,
+        "task_output_trace_weight": 8.0,
+        "task_output_structure_weight": 8.0,
+        "tie_word_embeddings": True,
+        "untie_atomic_count_readout": True,
+        "train_steps": 6_000,
+        "lr_decay_steps": 10_000,
+        "phase_cloud_steps": (
+            0,
+            1_000,
+            1_500,
+            2_000,
+            2_500,
+            3_000,
+            3_500,
+            4_000,
+            5_000,
+            6_000,
+        ),
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
@@ -387,6 +420,10 @@ class V20Config:
     adam_beta1: float = 0.9
     adam_beta2: float = 0.999
     warmup_steps: int = 500
+    # Optional horizon for cosine decay, independent of the number of
+    # optimizer updates actually executed.  None preserves the historical
+    # behavior where the schedule reaches zero at ``train_steps``.
+    lr_decay_steps: int | None = None
     grad_clip: float = 1.0
     precision: str = "bf16"
     log_every: int = 50
@@ -836,6 +873,21 @@ class V20Config:
             raise ValueError(
                 f"{self.version} requires train_steps={canonical_train_steps}"
             )
+        if self.lr_decay_steps is not None:
+            if type(self.lr_decay_steps) is not int:
+                raise ValueError("lr_decay_steps must be an integer or None")
+            if self.lr_decay_steps <= self.warmup_steps:
+                raise ValueError("lr_decay_steps must be greater than warmup_steps")
+            if self.lr_decay_steps < self.train_steps:
+                raise ValueError("lr_decay_steps must be at least train_steps")
+        canonical_lr_decay_steps = version_spec.get("lr_decay_steps")
+        if (
+            canonical_lr_decay_steps is not None
+            and self.lr_decay_steps != int(canonical_lr_decay_steps)
+        ):
+            raise ValueError(
+                f"{self.version} requires lr_decay_steps={canonical_lr_decay_steps}"
+            )
         if type(self.max_steps_for_language_pred) is not int or self.max_steps_for_language_pred < 0:
             raise ValueError("max_steps_for_language_pred must be a nonnegative integer")
         if self.max_steps_for_language_pred < self.train_steps and self.task_occurrence_ratio == 0:
@@ -1057,6 +1109,7 @@ def config_from_dict(values: dict[str, Any]) -> V20Config:
     data.setdefault("answer_query_contrastive_temperature", 0.1)
     data.setdefault("task_output_scheduled_sampling_max_probability", 0.0)
     data.setdefault("weight_decay", 0.01)
+    data.setdefault("lr_decay_steps", None)
     # Retained only to reject accidental RPE-era configs with a clear message.
     data.setdefault("rpe_max_update", False)
     # Before revision 5, the main cadence was 1,000 steps. Preserve that value
@@ -1130,6 +1183,9 @@ def default_run_name(cfg: V20Config) -> str:
             f"{_float_tag(cfg.task_output_scheduled_sampling_max_probability)}"
         )
     )
+    lr_decay_tag = (
+        "" if cfg.lr_decay_steps is None else f"_lrdecay{cfg.lr_decay_steps}"
+    )
     return (
         f"{cfg.version}_{cfg.preset}_L{cfg.seq_len}_pool{cfg.needle_pool_size}x{cfg.needle_set_size}_"
         f"pf{_float_tag(cfg.needle_pool_frequency_threshold)}_count1-{cfg.count_max_threshold}{rpe_distance_tag}_"
@@ -1137,7 +1193,7 @@ def default_run_name(cfg: V20Config) -> str:
         f"countdist-{cfg.training_count_distribution}_"
         f"fcw{_float_tag(cfg.final_count_loss_weight)}_"
         f"cotw{_float_tag(cfg.cot_trace_loss_weight)}_langsteps{cfg.max_steps_for_language_pred}_"
-        f"steps{cfg.train_steps}_snap{cfg.checkpoint_every}_recover{cfg.recovery_every}_"
+        f"steps{cfg.train_steps}{lr_decay_tag}_snap{cfg.checkpoint_every}_recover{cfg.recovery_every}_"
         f"evaln{eval_size}_{variants.replace('/', '-')}_{cfg.count_tokenization}{trace_tag}"
         f"{component_loss_tag}{readout_tag}{contrastive_tag}{scheduled_sampling_tag}_"
         f"query-first_{schedule_tag}_seed{cfg.seed}"

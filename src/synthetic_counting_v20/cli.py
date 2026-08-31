@@ -27,6 +27,7 @@ def build_parser(version: str = "v20") -> argparse.ArgumentParser:
     parser.add_argument("--device", default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--train-steps", type=int, default=None)
+    parser.add_argument("--lr-decay-steps", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--precision", choices=("float32", "bf16"), default=None)
     parser.add_argument("--checkpoint-every", type=int, default=None)
@@ -96,6 +97,7 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         "device",
         "seed",
         "train_steps",
+        "lr_decay_steps",
         "batch_size",
         "precision",
         "checkpoint_every",
@@ -163,6 +165,7 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         "task_output_scheduled_sampling_max_probability"
     )
     canonical_train_steps = version_spec.get("train_steps")
+    canonical_lr_decay_steps = version_spec.get("lr_decay_steps")
     canonical_phase_cloud_steps = version_spec.get("phase_cloud_steps")
     if (
         canonical_final_weight is not None
@@ -286,6 +289,14 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         and int(args.train_steps) != int(canonical_train_steps)
     ):
         parser.error(f"{version} fixes --train-steps at {canonical_train_steps}")
+    if (
+        canonical_lr_decay_steps is not None
+        and args.lr_decay_steps is not None
+        and int(args.lr_decay_steps) != int(canonical_lr_decay_steps)
+    ):
+        parser.error(
+            f"{version} fixes --lr-decay-steps at {canonical_lr_decay_steps}"
+        )
     overrides.update(
         version=version,
         count_tokenization=version_spec["count_tokenization"],
@@ -329,6 +340,8 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         )
     if canonical_train_steps is not None:
         overrides["train_steps"] = canonical_train_steps
+    if canonical_lr_decay_steps is not None:
+        overrides["lr_decay_steps"] = canonical_lr_decay_steps
     if canonical_phase_cloud_steps is not None:
         overrides["phase_cloud_steps"] = tuple(canonical_phase_cloud_steps)
     if args.model_variant is not None:
@@ -337,7 +350,7 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         # The nonthinking objective is identical to v20, so the canonical v22
         # run trains only the changed separator-trace Thinking model.
         overrides["enabled_model_variants"] = ("rope/thinking",)
-    elif version in {"v23", "v24", "v24.2", "v24.3", "v24.4", "v24.5", "v24.6", "v24.7", "v25", "v26", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35"}:
+    elif version in {"v23", "v24", "v24.2", "v24.3", "v24.4", "v24.5", "v24.6", "v24.7", "v25", "v26", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36"}:
         # Both objectives are retrained whenever the loss or count distribution
         # changes so the within-version Thinking/Non-thinking comparison stays
         # controlled.
