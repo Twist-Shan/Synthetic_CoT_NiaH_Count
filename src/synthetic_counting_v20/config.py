@@ -216,6 +216,22 @@ VERSION_SPECS = {
         "tie_word_embeddings": True,
         "untie_atomic_count_readout": True,
     },
+    # v32 is the sampler-only control for v31.  The two modes remain separate
+    # models and keep the same no-index trace, architecture, objective, seed,
+    # and schedule.  Only the accepted training distribution changes to the
+    # audited maximum-entropy distribution over feasible (set, count) cells,
+    # sharply reducing the set-identity shortcut while retaining all 100 sets.
+    "v32": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 10,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "maxent_set_count",
+        "task_output_loss_reduction": "component_normalized",
+        "task_output_count_weight": 8.0,
+        "tie_word_embeddings": True,
+        "untie_atomic_count_readout": True,
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
