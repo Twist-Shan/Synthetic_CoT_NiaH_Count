@@ -688,6 +688,42 @@ VERSION_SPECS = {
             8_000,
         ),
     },
+    # v46 returns to v35's deliberately small 4L/4H/256D capacity and keeps
+    # the corrected full-support set x count sampler introduced in v43.  Its
+    # task-only intervention is a fresh random permutation of each selected
+    # 256-character counting window.  The character multiset, target count,
+    # query, no-index separator trace, answer, optimizer, and independent
+    # mode-specific training are unchanged.  This destroys corpus-window and
+    # local n-gram shortcuts while preserving the broad-versus-serial retrieval
+    # problem exactly at the token-multiset level.
+    "v46": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 10,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "maxent_set_count",
+        "joint_sampler_max_starts_per_cell": None,
+        "permute_task_context_tokens": True,
+        "task_output_loss_reduction": "component_normalized",
+        "task_output_count_weight": 8.0,
+        "task_output_trace_weight": 8.0,
+        "task_output_structure_weight": 8.0,
+        "tie_word_embeddings": True,
+        "untie_atomic_count_readout": True,
+        "train_steps": 6_000,
+        "phase_cloud_steps": (
+            0,
+            1_000,
+            1_500,
+            2_000,
+            2_500,
+            3_000,
+            3_500,
+            4_000,
+            5_000,
+            6_000,
+        ),
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
@@ -741,6 +777,11 @@ class V20Config:
     # versions through v42 and old serialized configs.
     joint_sampler_max_starts_per_cell: int | None = 8_192
     shuffle_needle_set_order: bool = True
+    # If true, each accepted counting-task source window is independently
+    # permuted before rendering.  Counts and character multiplicities are
+    # invariant, but contiguous-corpus and absolute-start shortcuts disappear.
+    # Raw language-model examples retain their natural order.
+    permute_task_context_tokens: bool = False
     # v20/v21 are intentionally RoPE-only so the comparison isolates output
     # tokenization rather than position encoding.
     position_encodings: tuple[str, ...] = ("rope",)
@@ -951,6 +992,8 @@ class V20Config:
             raise ValueError(
                 "joint_sampler_max_starts_per_cell must be a positive integer or None"
             )
+        if type(self.permute_task_context_tokens) is not bool:
+            raise ValueError("permute_task_context_tokens must be a boolean")
         if self.seq_len < 2:
             raise ValueError("seq_len must be at least two")
         canonical_n_layer = int(version_spec.get("n_layer", 4))
@@ -1175,6 +1218,17 @@ class V20Config:
                     f"{self.version} requires joint_sampler_max_starts_per_cell="
                     f"{canonical_joint_sampler_cap!r}"
                 )
+        canonical_context_permutation = version_spec.get(
+            "permute_task_context_tokens"
+        )
+        if (
+            canonical_context_permutation is not None
+            and self.permute_task_context_tokens is not canonical_context_permutation
+        ):
+            raise ValueError(
+                f"{self.version} requires permute_task_context_tokens="
+                f"{canonical_context_permutation}"
+            )
         canonical_task_output_reduction = version_spec.get("task_output_loss_reduction")
         if (
             canonical_task_output_reduction is not None
@@ -1348,6 +1402,11 @@ class V20Config:
                 f"{self.joint_sampler_max_starts_per_cell}"
             )
         )
+        result["task_context_order"] = (
+            "fresh_random_permutation_of_each_selected_source_window"
+            if self.permute_task_context_tokens
+            else "natural_contiguous_source_window"
+        )
         result["sequence_layout"] = "query_first"
         thinking_trace = (
             "(<Sep> marker)*n"
@@ -1460,6 +1519,7 @@ def config_from_dict(values: dict[str, Any]) -> V20Config:
         "scheduled_sampling_objective",
         "readout_parameterization",
         "joint_sampler_within_cell_policy",
+        "task_context_order",
     ):
         data.pop(derived, None)
     data["position_encodings"] = tuple(data["position_encodings"])
@@ -1507,6 +1567,7 @@ def config_from_dict(values: dict[str, Any]) -> V20Config:
     data.setdefault("untie_atomic_count_readout", False)
     data.setdefault("training_count_distribution", "natural")
     data.setdefault("joint_sampler_max_starts_per_cell", 8_192)
+    data.setdefault("permute_task_context_tokens", False)
     if legacy_loss_schedule:
         data["max_steps_for_language_pred"] = int(data["train_steps"])
     cfg = V20Config(**data)
@@ -1557,6 +1618,9 @@ def default_run_name(cfg: V20Config) -> str:
             f"{_float_tag(cfg.task_output_scheduled_sampling_max_probability)}"
         )
     )
+    context_order_tag = (
+        "_taskctx-permuted" if cfg.permute_task_context_tokens else ""
+    )
     lr_decay_tag = (
         "" if cfg.lr_decay_steps is None else f"_lrdecay{cfg.lr_decay_steps}"
     )
@@ -1570,7 +1634,8 @@ def default_run_name(cfg: V20Config) -> str:
         f"cotw{_float_tag(cfg.cot_trace_loss_weight)}_langsteps{cfg.max_steps_for_language_pred}_"
         f"steps{cfg.train_steps}{lr_decay_tag}{min_lr_tag}_snap{cfg.checkpoint_every}_recover{cfg.recovery_every}_"
         f"evaln{eval_size}_{variants.replace('/', '-')}_{cfg.count_tokenization}{trace_tag}"
-        f"{component_loss_tag}{readout_tag}{contrastive_tag}{scheduled_sampling_tag}_"
+        f"{component_loss_tag}{readout_tag}{contrastive_tag}{scheduled_sampling_tag}"
+        f"{context_order_tag}_"
         f"query-first_{schedule_tag}_seed{cfg.seed}"
     )
 

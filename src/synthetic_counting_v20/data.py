@@ -376,6 +376,14 @@ def _window_start(region: CorpusRegion, seq_len: int, rng: random.Random) -> int
     return rng.randrange(region.start, region.end - seq_len + 1)
 
 
+def permute_task_window(window: str, rng: random.Random) -> str:
+    """Return a fresh order permutation while preserving every character count."""
+
+    indices = list(range(len(window)))
+    rng.shuffle(indices)
+    return "".join(window[index] for index in indices)
+
+
 def make_raw_example(
     cfg: V20Config,
     vocab: V20Vocab,
@@ -438,6 +446,13 @@ def make_v20_example(
         if proposed_count is None:
             proposed_count = count
         if 1 <= count <= cfg.count_max_threshold:
+            if cfg.permute_task_context_tokens:
+                window = permute_task_window(window, rng)
+                positions = tuple(
+                    index for index, char in enumerate(window) if char in character_set
+                )
+                if len(positions) != count:
+                    raise RuntimeError("task-context permutation changed the target count")
             markers = tuple(character_token(window[position]) for position in positions)
             canonical = selected_set.characters
             order = tuple(rng.sample(list(canonical), len(canonical))) if cfg.shuffle_needle_set_order else canonical

@@ -120,7 +120,8 @@ def run_preflight(
         "audit_table": str(audit_path.resolve()),
         "passed": True,
     }
-    output = root / "analysis" / "preflight_v44.json"
+    safe_version = expected_version.replace(".", "_")
+    output = root / "analysis" / f"preflight_{safe_version}.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".tmp")
     temporary.write_text(json.dumps(result, indent=2), encoding="utf-8")
