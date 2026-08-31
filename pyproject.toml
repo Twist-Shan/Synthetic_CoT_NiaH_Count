@@ -82,6 +82,7 @@ packages = [
     "src/synthetic_counting_v50",
     "src/synthetic_counting_v51",
     "src/synthetic_counting_v52",
+    "src/synthetic_counting_v53",
 ]
 
 [dependency-groups]
