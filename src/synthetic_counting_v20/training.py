@@ -81,6 +81,93 @@ def training_loss_phase(cfg: V20Config, step: int) -> str:
     return "all_sequence" if step <= cfg.max_steps_for_language_pred else "task_output"
 
 
+def scheduled_sampling_probability(cfg: V20Config, step: int, mode: str) -> float:
+    """Return the predeclared linear roll-in probability for this update.
+
+    Non-thinking has no generated continuation input between its fixed
+    ``<Ans>`` prefix and the answer target, so the same rule degenerates to
+    ordinary teacher forcing for that mode.  Thinking ramps linearly from zero
+    immediately after the language-model phase to the configured maximum at
+    the final optimizer step.
+    """
+
+    maximum = float(cfg.task_output_scheduled_sampling_max_probability)
+    if mode != "thinking" or maximum == 0.0 or step <= cfg.max_steps_for_language_pred:
+        return 0.0
+    task_steps = max(1, cfg.train_steps - cfg.max_steps_for_language_pred)
+    progress = (step - cfg.max_steps_for_language_pred) / task_steps
+    return maximum * min(1.0, max(0.0, float(progress)))
+
+
+@torch.no_grad()
+def scheduled_sampling_inputs(
+    model: TinyPositionCausalLM,
+    ids: torch.Tensor,
+    attention_mask: torch.Tensor,
+    rendered: list[V20Rendered],
+    probability: float,
+) -> tuple[torch.Tensor, dict[str, float | int]]:
+    """Roll model predictions into generated continuation input positions.
+
+    The first pass predicts token ``t`` from the original prefix through
+    ``t-1``.  Selected continuation inputs are replaced by that prediction;
+    the second, gradient-carrying pass still uses the original gold labels.
+    Thus neither the serialized trace nor any supervision target changes.
+
+    Eligible positions begin immediately after the fixed ``<Think>`` prefix
+    and end at ``<Ans>`` (inclusive).  The final count itself is a target, not
+    a roll-in input.  Non-thinking examples have no eligible positions.
+    """
+
+    value = float(probability)
+    if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        raise ValueError("scheduled-sampling probability must be finite and in [0, 1]")
+    if ids.shape != attention_mask.shape or ids.ndim != 2:
+        raise ValueError("ids and attention_mask must be identically shaped rank-2 tensors")
+    if ids.shape[0] != len(rendered):
+        raise ValueError("rendered batch size must match ids")
+
+    eligible = torch.zeros_like(ids, dtype=torch.bool)
+    for row, item in enumerate(rendered):
+        if item.spans is None or item.mode != "thinking":
+            continue
+        if item.spans.think_pos is None:
+            raise ValueError("Thinking rows require a <Think> position")
+        start = int(item.spans.think_pos) + 1
+        stop = int(item.spans.ans_pos) + 1
+        eligible[row, start:stop] = True
+    eligible &= attention_mask.bool()
+    eligible_count = int(eligible.sum().item())
+    empty_stats: dict[str, float | int] = {
+        "eligible_tokens": eligible_count,
+        "selected_tokens": 0,
+        "changed_tokens": 0,
+        "changed_fraction": 0.0,
+    }
+    if value == 0.0 or eligible_count == 0:
+        return ids, empty_stats
+
+    logits = model(input_ids=ids, attention_mask=attention_mask).logits
+    if logits.shape[:2] != ids.shape:
+        raise ValueError("model logits must align with ids in batch and sequence dimensions")
+    predicted_next = logits[:, :-1].argmax(dim=-1)
+    rollin_ids = torch.empty_like(ids)
+    rollin_ids[:, 0] = ids[:, 0]
+    rollin_ids[:, 1:] = predicted_next
+    selected = eligible & (torch.rand(ids.shape, device=ids.device) < value)
+    corrupted = ids.clone()
+    corrupted[selected] = rollin_ids[selected]
+    changed = selected & corrupted.ne(ids)
+    selected_count = int(selected.sum().item())
+    changed_count = int(changed.sum().item())
+    return corrupted, {
+        "eligible_tokens": eligible_count,
+        "selected_tokens": selected_count,
+        "changed_tokens": changed_count,
+        "changed_fraction": changed_count / max(1, eligible_count),
+    }
+
+
 def component_normalized_task_output_loss(
     token_losses: torch.Tensor,
     active: torch.Tensor,
@@ -1733,13 +1820,30 @@ def train_v20_variant(
         )
         ids, labels, attention_mask = collate_v20(rendered, vocab, cfg.device)
         loss_weights = collate_v20_loss_weights(rendered, cfg, cfg.device, step=step)
+        rollin_probability = scheduled_sampling_probability(cfg, step, mode)
+        model_input_ids = ids
+        rollin_stats: dict[str, float | int] = {
+            "eligible_tokens": 0,
+            "selected_tokens": 0,
+            "changed_tokens": 0,
+            "changed_fraction": 0.0,
+        }
+        if rollin_probability > 0.0:
+            with _autocast_context(cfg):
+                model_input_ids, rollin_stats = scheduled_sampling_inputs(
+                    model,
+                    ids,
+                    attention_mask,
+                    rendered,
+                    rollin_probability,
+                )
         contrastive_active = (
             loss_phase == "task_output"
             and cfg.answer_query_contrastive_weight > 0
         )
         with _autocast_context(cfg):
             output = model(
-                input_ids=ids,
+                input_ids=model_input_ids,
                 attention_mask=attention_mask,
                 output_hidden_states=contrastive_active,
             )
@@ -1872,6 +1976,19 @@ def train_v20_variant(
                 "answer_query_contrastive_temperature": float(
                     cfg.answer_query_contrastive_temperature
                 ),
+                "scheduled_sampling_probability": rollin_probability,
+                "scheduled_sampling_eligible_tokens": int(
+                    rollin_stats["eligible_tokens"]
+                ),
+                "scheduled_sampling_selected_tokens": int(
+                    rollin_stats["selected_tokens"]
+                ),
+                "scheduled_sampling_changed_tokens": int(
+                    rollin_stats["changed_tokens"]
+                ),
+                "scheduled_sampling_changed_fraction": float(
+                    rollin_stats["changed_fraction"]
+                ),
                 "batch_final_count_region_coefficient_share": final_count_coefficient_share,
                 "batch_trace_region_coefficient_share": trace_coefficient_share,
                 "batch_structure_region_coefficient_share": structure_coefficient_share,
@@ -1916,11 +2033,18 @@ def train_v20_variant(
                 ["position_encoding", "mode", "step"],
             )
             progress.set_postfix(loss=f"{loss.item():.4f}", task=f"{is_task.mean():.2f}")
+            rollin_suffix = (
+                f" rollin_p={rollin_probability:.3f} "
+                f"rollin_changed={int(rollin_stats['changed_tokens'])}/"
+                f"{int(rollin_stats['eligible_tokens'])}"
+                if rollin_probability > 0.0
+                else ""
+            )
             print(
                 f"[train] {position_encoding}/{mode} "
                 f"step={step}/{cfg.train_steps} loss={loss.item():.4f} "
                 f"lr={rate:.3e} grad_norm={gradient_norm:.3f} "
-                f"task_ratio={is_task.mean():.2f}",
+                f"task_ratio={is_task.mean():.2f}{rollin_suffix}",
                 flush=True,
             )
         if step % cfg.eval_every == 0 or step == cfg.train_steps:

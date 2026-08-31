@@ -232,6 +232,40 @@ VERSION_SPECS = {
         "tie_word_embeddings": True,
         "untie_atomic_count_readout": True,
     },
+    # v33 keeps v32's low-shortcut max-entropy data, separator trace, partial
+    # count readout, and two independently initialized model runs.  Its one
+    # new optimization mechanism addresses the observed teacher-forced /
+    # free-running trace gap: during the task-output phase, gold continuation
+    # inputs are progressively replaced by the model's own previous-token
+    # predictions, up to probability 0.5.  Targets and inference are unchanged.
+    # The fixed 6,000-step budget is chosen from the v32 control curve, before
+    # observing v33, so that the comparison measures sample-efficient learning
+    # rather than the saturated 10,000-step Non-thinking endpoint.
+    "v33": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 10,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "maxent_set_count",
+        "task_output_loss_reduction": "component_normalized",
+        "task_output_count_weight": 8.0,
+        "tie_word_embeddings": True,
+        "untie_atomic_count_readout": True,
+        "task_output_scheduled_sampling_max_probability": 0.5,
+        "train_steps": 6_000,
+        "phase_cloud_steps": (
+            0,
+            1_000,
+            1_500,
+            2_000,
+            2_500,
+            3_000,
+            3_500,
+            4_000,
+            5_000,
+            6_000,
+        ),
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
@@ -325,6 +359,12 @@ class V20Config:
     # v24.6.  It never changes inference or supplies a decoder.
     answer_query_contrastive_weight: float = 0.0
     answer_query_contrastive_temperature: float = 0.1
+    # Exposure-bias control used only after the language-model phase.  At a
+    # linearly increasing probability, a generated continuation input is
+    # replaced by the model's own previous-token prediction while its target
+    # remains the original gold token.  A zero maximum exactly reproduces all
+    # versions through v32.
+    task_output_scheduled_sampling_max_probability: float = 0.0
 
     n_layer: int = 4
     n_head: int = 4
@@ -589,6 +629,18 @@ class V20Config:
             raise ValueError(
                 "answer_query_contrastive_temperature must be finite and positive"
             )
+        if (
+            not math.isfinite(
+                float(self.task_output_scheduled_sampling_max_probability)
+            )
+            or not 0.0
+            <= float(self.task_output_scheduled_sampling_max_probability)
+            <= 1.0
+        ):
+            raise ValueError(
+                "task_output_scheduled_sampling_max_probability must be finite "
+                "and in [0, 1]"
+            )
         canonical_final_weight = version_spec.get("final_count_loss_weight")
         if (
             canonical_final_weight is not None
@@ -678,6 +730,27 @@ class V20Config:
                 f"{self.version} requires answer_query_contrastive_temperature="
                 f"{canonical_contrastive_temperature:g}"
             )
+        canonical_scheduled_sampling = version_spec.get(
+            "task_output_scheduled_sampling_max_probability"
+        )
+        if (
+            canonical_scheduled_sampling is not None
+            and float(self.task_output_scheduled_sampling_max_probability)
+            != float(canonical_scheduled_sampling)
+        ):
+            raise ValueError(
+                f"{self.version} requires "
+                "task_output_scheduled_sampling_max_probability="
+                f"{canonical_scheduled_sampling:g}"
+            )
+        canonical_train_steps = version_spec.get("train_steps")
+        if (
+            canonical_train_steps is not None
+            and int(self.train_steps) != int(canonical_train_steps)
+        ):
+            raise ValueError(
+                f"{self.version} requires train_steps={canonical_train_steps}"
+            )
         if type(self.max_steps_for_language_pred) is not int or self.max_steps_for_language_pred < 0:
             raise ValueError("max_steps_for_language_pred must be a nonnegative integer")
         if self.max_steps_for_language_pred < self.train_steps and self.task_occurrence_ratio == 0:
@@ -749,6 +822,19 @@ class V20Config:
             "query_position": "<Ans> input position whose logits predict the count token",
             "weight": self.answer_query_contrastive_weight,
             "temperature": self.answer_query_contrastive_temperature,
+            "inference_change": False,
+        }
+        result["scheduled_sampling_objective"] = {
+            "active": bool(
+                self.task_output_scheduled_sampling_max_probability > 0
+            ),
+            "activation_phase": "task_output",
+            "schedule": "linear_from_zero",
+            "maximum_probability": (
+                self.task_output_scheduled_sampling_max_probability
+            ),
+            "scope": "generated continuation inputs after the fixed prompt prefix",
+            "targets_changed": False,
             "inference_change": False,
         }
         result["task_occurrence_ratio_definition"] = (
@@ -863,6 +949,7 @@ def config_from_dict(values: dict[str, Any]) -> V20Config:
         "sequence_templates",
         "checkpoint_policy",
         "answer_query_contrastive_objective",
+        "scheduled_sampling_objective",
         "readout_parameterization",
     ):
         data.pop(derived, None)
@@ -883,6 +970,7 @@ def config_from_dict(values: dict[str, Any]) -> V20Config:
     data.setdefault("task_output_structure_weight", 0.1)
     data.setdefault("answer_query_contrastive_weight", 0.0)
     data.setdefault("answer_query_contrastive_temperature", 0.1)
+    data.setdefault("task_output_scheduled_sampling_max_probability", 0.0)
     data.setdefault("weight_decay", 0.01)
     # Retained only to reject accidental RPE-era configs with a clear message.
     data.setdefault("rpe_max_update", False)
@@ -949,6 +1037,14 @@ def default_run_name(cfg: V20Config) -> str:
             f"-t{_float_tag(cfg.answer_query_contrastive_temperature)}"
         )
     )
+    scheduled_sampling_tag = (
+        ""
+        if cfg.task_output_scheduled_sampling_max_probability == 0
+        else (
+            "_scheduled-sampling-p"
+            f"{_float_tag(cfg.task_output_scheduled_sampling_max_probability)}"
+        )
+    )
     return (
         f"{cfg.version}_{cfg.preset}_L{cfg.seq_len}_pool{cfg.needle_pool_size}x{cfg.needle_set_size}_"
         f"pf{_float_tag(cfg.needle_pool_frequency_threshold)}_count1-{cfg.count_max_threshold}{rpe_distance_tag}_"
@@ -958,7 +1054,7 @@ def default_run_name(cfg: V20Config) -> str:
         f"cotw{_float_tag(cfg.cot_trace_loss_weight)}_langsteps{cfg.max_steps_for_language_pred}_"
         f"steps{cfg.train_steps}_snap{cfg.checkpoint_every}_recover{cfg.recovery_every}_"
         f"evaln{eval_size}_{variants.replace('/', '-')}_{cfg.count_tokenization}{trace_tag}"
-        f"{component_loss_tag}{readout_tag}{contrastive_tag}_"
+        f"{component_loss_tag}{readout_tag}{contrastive_tag}{scheduled_sampling_tag}_"
         f"query-first_{schedule_tag}_seed{cfg.seed}"
     )
 

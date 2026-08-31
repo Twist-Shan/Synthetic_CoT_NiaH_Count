@@ -48,6 +48,11 @@ def build_parser(version: str = "v20") -> argparse.ArgumentParser:
     parser.add_argument("--task-output-count-weight", type=float, default=None)
     parser.add_argument("--answer-query-contrastive-weight", type=float, default=None)
     parser.add_argument("--answer-query-contrastive-temperature", type=float, default=None)
+    parser.add_argument(
+        "--task-output-scheduled-sampling-max-probability",
+        type=float,
+        default=None,
+    )
     parser.add_argument("--seq-len", type=int, default=None)
     parser.add_argument("--n-positions", type=int, default=None)
     parser.add_argument("--count-max-threshold", type=int, default=None)
@@ -110,6 +115,7 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         "task_output_count_weight",
         "answer_query_contrastive_weight",
         "answer_query_contrastive_temperature",
+        "task_output_scheduled_sampling_max_probability",
         "seq_len",
         "n_positions",
         "count_max_threshold",
@@ -143,6 +149,11 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
     canonical_contrastive_temperature = version_spec.get(
         "answer_query_contrastive_temperature"
     )
+    canonical_scheduled_sampling = version_spec.get(
+        "task_output_scheduled_sampling_max_probability"
+    )
+    canonical_train_steps = version_spec.get("train_steps")
+    canonical_phase_cloud_steps = version_spec.get("phase_cloud_steps")
     if (
         canonical_final_weight is not None
         and args.final_count_loss_weight is not None
@@ -229,6 +240,22 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
             f"{version} fixes --answer-query-contrastive-temperature at "
             f"{canonical_contrastive_temperature:g}"
         )
+    if (
+        canonical_scheduled_sampling is not None
+        and args.task_output_scheduled_sampling_max_probability is not None
+        and float(args.task_output_scheduled_sampling_max_probability)
+        != float(canonical_scheduled_sampling)
+    ):
+        parser.error(
+            f"{version} fixes --task-output-scheduled-sampling-max-probability "
+            f"at {canonical_scheduled_sampling:g}"
+        )
+    if (
+        canonical_train_steps is not None
+        and args.train_steps is not None
+        and int(args.train_steps) != int(canonical_train_steps)
+    ):
+        parser.error(f"{version} fixes --train-steps at {canonical_train_steps}")
     overrides.update(
         version=version,
         count_tokenization=version_spec["count_tokenization"],
@@ -260,13 +287,21 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         overrides["answer_query_contrastive_temperature"] = (
             canonical_contrastive_temperature
         )
+    if canonical_scheduled_sampling is not None:
+        overrides["task_output_scheduled_sampling_max_probability"] = (
+            canonical_scheduled_sampling
+        )
+    if canonical_train_steps is not None:
+        overrides["train_steps"] = canonical_train_steps
+    if canonical_phase_cloud_steps is not None:
+        overrides["phase_cloud_steps"] = tuple(canonical_phase_cloud_steps)
     if args.model_variant is not None:
         overrides["enabled_model_variants"] = tuple(args.model_variant)
     elif version == "v22":
         # The nonthinking objective is identical to v20, so the canonical v22
         # run trains only the changed separator-trace Thinking model.
         overrides["enabled_model_variants"] = ("rope/thinking",)
-    elif version in {"v23", "v24", "v24.2", "v24.3", "v24.4", "v24.5", "v24.6", "v24.7", "v25", "v26", "v28", "v29", "v30", "v31", "v32"}:
+    elif version in {"v23", "v24", "v24.2", "v24.3", "v24.4", "v24.5", "v24.6", "v24.7", "v25", "v26", "v28", "v29", "v30", "v31", "v32", "v33"}:
         # Both objectives are retrained whenever the loss or count distribution
         # changes so the within-version Thinking/Non-thinking comparison stays
         # controlled.
