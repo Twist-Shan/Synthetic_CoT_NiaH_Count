@@ -12,6 +12,7 @@ from synthetic_counting_v20.model import build_model
 from synthetic_counting_v43.config import preset_config as preset_v43
 from synthetic_counting_v44.behavior_gate import evaluate_behavior_gate
 from synthetic_counting_v44.config import preset_config as preset_v44
+from synthetic_counting_v44.preflight import run_preflight
 
 
 def test_v44_changes_only_count_support_from_v43() -> None:
@@ -55,6 +56,10 @@ def test_v44_changes_only_count_support_from_v43() -> None:
 def test_v44_rejects_short_count_support() -> None:
     with pytest.raises(ValueError, match="count_max_threshold=10"):
         replace(preset_v44("main", device="cpu"), count_max_threshold=5).validate()
+
+
+def test_v44_preflight_is_exposed() -> None:
+    assert callable(run_preflight)
 
 
 def _write_behavior_tables(
