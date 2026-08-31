@@ -1063,6 +1063,49 @@ VERSION_SPECS = {
             10_000,
         ),
     },
+    # v55 returns to v51's pure gold-prefix training and changes one objective
+    # coefficient: grammar/structure weight increases from 16 to 32.  This
+    # directly targets the remaining continue-versus-close errors after v51,
+    # while preserving marker-identity weight, count weight, data, no-index
+    # trace, architecture, endpoint, and inference.
+    "v55": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 10,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "maxent_set_count",
+        "joint_sampler_max_starts_per_cell": None,
+        "permute_task_context_tokens": True,
+        "task_output_loss_reduction": "component_normalized",
+        "task_output_count_weight": 8.0,
+        "task_output_trace_weight": 8.0,
+        "task_output_structure_weight": 32.0,
+        "task_output_trace_delimiters_as_structure": True,
+        "task_output_scheduled_sampling_max_probability": 0.0,
+        "tie_word_embeddings": True,
+        "untie_atomic_count_readout": True,
+        "n_layer": 4,
+        "n_head": 4,
+        "n_embd": 256,
+        "n_inner": 1024,
+        "train_steps": 10_000,
+        "phase_cloud_steps": (
+            0,
+            1_000,
+            1_500,
+            2_000,
+            2_500,
+            3_000,
+            3_500,
+            4_000,
+            5_000,
+            6_000,
+            7_000,
+            8_000,
+            9_000,
+            10_000,
+        ),
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
