@@ -47,6 +47,7 @@ def build_parser(version: str = "v20") -> argparse.ArgumentParser:
     parser.add_argument("--cot-trace-loss-weight", type=float, default=None)
     parser.add_argument("--task-output-count-weight", type=float, default=None)
     parser.add_argument("--task-output-trace-weight", type=float, default=None)
+    parser.add_argument("--task-output-structure-weight", type=float, default=None)
     parser.add_argument("--answer-query-contrastive-weight", type=float, default=None)
     parser.add_argument("--answer-query-contrastive-temperature", type=float, default=None)
     parser.add_argument(
@@ -115,6 +116,7 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         "cot_trace_loss_weight",
         "task_output_count_weight",
         "task_output_trace_weight",
+        "task_output_structure_weight",
         "answer_query_contrastive_weight",
         "answer_query_contrastive_temperature",
         "task_output_scheduled_sampling_max_probability",
@@ -139,6 +141,9 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
     )
     canonical_task_output_trace_weight = version_spec.get(
         "task_output_trace_weight"
+    )
+    canonical_task_output_structure_weight = version_spec.get(
+        "task_output_structure_weight"
     )
     canonical_count_max = version_spec.get("count_max_threshold")
     canonical_n_layer = version_spec.get("n_layer")
@@ -186,6 +191,16 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         parser.error(
             f"{version} fixes --task-output-trace-weight at "
             f"{canonical_task_output_trace_weight:g}"
+        )
+    if (
+        canonical_task_output_structure_weight is not None
+        and args.task_output_structure_weight is not None
+        and float(args.task_output_structure_weight)
+        != float(canonical_task_output_structure_weight)
+    ):
+        parser.error(
+            f"{version} fixes --task-output-structure-weight at "
+            f"{canonical_task_output_structure_weight:g}"
         )
     if (
         canonical_count_max is not None
@@ -282,6 +297,10 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         overrides["task_output_count_weight"] = canonical_task_output_count_weight
     if canonical_task_output_trace_weight is not None:
         overrides["task_output_trace_weight"] = canonical_task_output_trace_weight
+    if canonical_task_output_structure_weight is not None:
+        overrides["task_output_structure_weight"] = (
+            canonical_task_output_structure_weight
+        )
     if canonical_count_max is not None:
         overrides["count_max_threshold"] = canonical_count_max
     if canonical_n_layer is not None:
@@ -318,7 +337,7 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         # The nonthinking objective is identical to v20, so the canonical v22
         # run trains only the changed separator-trace Thinking model.
         overrides["enabled_model_variants"] = ("rope/thinking",)
-    elif version in {"v23", "v24", "v24.2", "v24.3", "v24.4", "v24.5", "v24.6", "v24.7", "v25", "v26", "v28", "v29", "v30", "v31", "v32", "v33", "v34"}:
+    elif version in {"v23", "v24", "v24.2", "v24.3", "v24.4", "v24.5", "v24.6", "v24.7", "v25", "v26", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35"}:
         # Both objectives are retrained whenever the loss or count distribution
         # changes so the within-version Thinking/Non-thinking comparison stays
         # controlled.

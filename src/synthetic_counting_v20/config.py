@@ -296,6 +296,37 @@ VERSION_SPECS = {
             6_000,
         ),
     },
+    # v35 corrects the component imbalance diagnosed in v34.  Count, trace,
+    # and structure are all component-normalized, so assigning coefficient 8
+    # to each gives them equal aggregate objective share.  This specifically
+    # restores supervision for the continue-vs-close decision without changing
+    # any trace token, prefix, architecture, sampler, or inference rule.
+    "v35": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 10,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "maxent_set_count",
+        "task_output_loss_reduction": "component_normalized",
+        "task_output_count_weight": 8.0,
+        "task_output_trace_weight": 8.0,
+        "task_output_structure_weight": 8.0,
+        "tie_word_embeddings": True,
+        "untie_atomic_count_readout": True,
+        "train_steps": 6_000,
+        "phase_cloud_steps": (
+            0,
+            1_000,
+            1_500,
+            2_000,
+            2_500,
+            3_000,
+            3_500,
+            4_000,
+            5_000,
+            6_000,
+        ),
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
@@ -703,6 +734,18 @@ class V20Config:
             raise ValueError(
                 f"{self.version} requires task_output_trace_weight="
                 f"{canonical_task_output_trace_weight:g}"
+            )
+        canonical_task_output_structure_weight = version_spec.get(
+            "task_output_structure_weight"
+        )
+        if (
+            canonical_task_output_structure_weight is not None
+            and float(self.task_output_structure_weight)
+            != float(canonical_task_output_structure_weight)
+        ):
+            raise ValueError(
+                f"{self.version} requires task_output_structure_weight="
+                f"{canonical_task_output_structure_weight:g}"
             )
         canonical_count_max = version_spec.get("count_max_threshold")
         if (
