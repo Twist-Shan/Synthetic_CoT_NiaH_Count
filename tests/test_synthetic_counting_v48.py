@@ -43,7 +43,7 @@ def test_v48_changes_only_v47_parallel_capacity() -> None:
 
 
 def test_v48_rejects_compact_width() -> None:
-    with pytest.raises(ValueError, match="n_head=6"):
+    with pytest.raises(ValueError, match="6 heads"):
         replace(
             preset_v48("main", device="cpu"),
             n_head=4,
