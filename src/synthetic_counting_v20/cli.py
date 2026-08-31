@@ -402,7 +402,7 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         # The nonthinking objective is identical to v20, so the canonical v22
         # run trains only the changed separator-trace Thinking model.
         overrides["enabled_model_variants"] = ("rope/thinking",)
-    elif version in {"v23", "v24", "v24.2", "v24.3", "v24.4", "v24.5", "v24.6", "v24.7", "v25", "v26", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40", "v41", "v42", "v43", "v44"}:
+    elif version in {"v23", "v24", "v24.2", "v24.3", "v24.4", "v24.5", "v24.6", "v24.7", "v25", "v26", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40", "v41", "v42", "v43", "v44", "v45"}:
         # Both objectives are retrained whenever the loss or count distribution
         # changes so the within-version Thinking/Non-thinking comparison stays
         # controlled.

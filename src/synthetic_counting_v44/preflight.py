@@ -23,13 +23,17 @@ from synthetic_counting_v20.training import (
 from synthetic_counting_v35.config import preset_config as v35_preset_config
 
 
-def run_preflight(run_dir: str | Path) -> dict[str, Any]:
-    """Audit the fixed v44 data distribution before either model is trained."""
+def run_preflight(
+    run_dir: str | Path,
+    *,
+    expected_version: str = "v44",
+) -> dict[str, Any]:
+    """Audit the fixed count-1-to-10 data before either model is trained."""
 
     root = Path(run_dir)
     cfg = config_from_dict(json.loads((root / "config.json").read_text(encoding="utf-8")))
-    if cfg.version != "v44":
-        raise ValueError(f"expected a v44 run, got {cfg.version!r}")
+    if cfg.version != expected_version:
+        raise ValueError(f"expected a {expected_version} run, got {cfg.version!r}")
     if cfg.count_max_threshold != 10 or cfg.trace_format != "separator":
         raise ValueError("v44 preflight requires counts 1..10 and separator trace")
     if cfg.joint_sampler_max_starts_per_cell is not None:

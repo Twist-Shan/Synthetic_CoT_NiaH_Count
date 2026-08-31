@@ -24,8 +24,13 @@ def _single_mode_row(frame: pd.DataFrame, mode: str) -> pd.Series:
     return rows.iloc[0]
 
 
-def evaluate_behavior_gate(run_dir: str | Path) -> dict[str, Any]:
-    """Evaluate the fixed v44 behavior gate without checkpoint selection."""
+def evaluate_behavior_gate(
+    run_dir: str | Path,
+    *,
+    expected_version: str = "v44",
+    expected_final_step: int = 8_000,
+) -> dict[str, Any]:
+    """Evaluate the fixed behavior gate without checkpoint selection."""
 
     root = Path(run_dir)
     summary = pd.read_csv(root / "tables" / "final_autoregressive_summary.csv")
@@ -90,8 +95,10 @@ def evaluate_behavior_gate(run_dir: str | Path) -> dict[str, Any]:
         ),
     }
     return {
-        "version": "v44",
-        "endpoint_policy": "fixed final 8000-step checkpoint; no checkpoint selection",
+        "version": expected_version,
+        "endpoint_policy": (
+            f"fixed final {expected_final_step}-step checkpoint; no checkpoint selection"
+        ),
         "thresholds": GATE_THRESHOLDS,
         "metrics": metrics,
         "checks": checks,

@@ -648,6 +648,46 @@ VERSION_SPECS = {
             8_000,
         ),
     },
+    # v45 reallocates a nearly fixed parameter budget from parallel width to
+    # serial depth on top of v44.  Head dimension stays exactly 64 while the
+    # transformer changes from 4L/6H/384D to 6L/5H/320D (with a 4x MLP).
+    # Data, count support, full-support sampler, no-index trace, objective,
+    # optimizer, independent training, and the fixed 8,000-step endpoint are
+    # unchanged.  This is a targeted architecture test of whether serial trace
+    # retrieval benefits without making direct broad aggregation still wider.
+    "v45": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 10,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "maxent_set_count",
+        "joint_sampler_max_starts_per_cell": None,
+        "task_output_loss_reduction": "component_normalized",
+        "task_output_count_weight": 8.0,
+        "task_output_trace_weight": 8.0,
+        "task_output_structure_weight": 8.0,
+        "tie_word_embeddings": True,
+        "untie_atomic_count_readout": True,
+        "n_layer": 6,
+        "n_head": 5,
+        "n_embd": 320,
+        "n_inner": 1280,
+        "train_steps": 8_000,
+        "phase_cloud_steps": (
+            0,
+            1_000,
+            1_500,
+            2_000,
+            2_500,
+            3_000,
+            3_500,
+            4_000,
+            5_000,
+            6_000,
+            7_000,
+            8_000,
+        ),
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
