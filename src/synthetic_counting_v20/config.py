@@ -808,6 +808,50 @@ VERSION_SPECS = {
             10_000,
         ),
     },
+    # v49 returns to v47's compact 4L/4H/256D model and changes only the
+    # semantic partition used by the component-normalized Thinking loss.
+    # Separator tokens are grammar decisions (continue) rather than retrieved
+    # marker identities, so v49 groups every <Sep> with </Think> and the other
+    # structural tokens.  This balances continue against stop while reserving
+    # the trace component for marker identities.  Serialized traces, targets,
+    # data, optimizer, inference, and independent model training are unchanged.
+    "v49": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 10,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "maxent_set_count",
+        "joint_sampler_max_starts_per_cell": None,
+        "permute_task_context_tokens": True,
+        "task_output_loss_reduction": "component_normalized",
+        "task_output_count_weight": 8.0,
+        "task_output_trace_weight": 8.0,
+        "task_output_structure_weight": 8.0,
+        "task_output_trace_delimiters_as_structure": True,
+        "tie_word_embeddings": True,
+        "untie_atomic_count_readout": True,
+        "n_layer": 4,
+        "n_head": 4,
+        "n_embd": 256,
+        "n_inner": 1024,
+        "train_steps": 10_000,
+        "phase_cloud_steps": (
+            0,
+            1_000,
+            1_500,
+            2_000,
+            2_500,
+            3_000,
+            3_500,
+            4_000,
+            5_000,
+            6_000,
+            7_000,
+            8_000,
+            9_000,
+            10_000,
+        ),
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
@@ -913,6 +957,10 @@ class V20Config:
     task_output_count_weight: float = 1.0
     task_output_trace_weight: float = 1.0
     task_output_structure_weight: float = 0.1
+    # Historical component-normalized runs assign repeated <Sep> query tokens
+    # to the trace region.  Enabling this flag keeps those grammar decisions
+    # in the structure region with </Think>, without changing serialized data.
+    task_output_trace_delimiters_as_structure: bool = False
     # Optional training-only supervised contrastive objective on the final
     # answer-query residual.  Zero exactly reproduces all versions through
     # v24.6.  It never changes inference or supplies a decoder.
@@ -1078,6 +1126,18 @@ class V20Config:
             )
         if type(self.permute_task_context_tokens) is not bool:
             raise ValueError("permute_task_context_tokens must be a boolean")
+        if type(self.task_output_trace_delimiters_as_structure) is not bool:
+            raise ValueError(
+                "task_output_trace_delimiters_as_structure must be a boolean"
+            )
+        if self.task_output_trace_delimiters_as_structure and (
+            self.trace_format != "separator"
+            or self.task_output_loss_reduction != "component_normalized"
+        ):
+            raise ValueError(
+                "task_output_trace_delimiters_as_structure requires a separator "
+                "trace and component-normalized task-output loss"
+            )
         if self.seq_len < 2:
             raise ValueError("seq_len must be at least two")
         canonical_n_layer = int(version_spec.get("n_layer", 4))
@@ -1322,6 +1382,19 @@ class V20Config:
                 f"{self.version} requires task_output_loss_reduction="
                 f"{canonical_task_output_reduction!r}"
             )
+        canonical_delimiter_partition = version_spec.get(
+            "task_output_trace_delimiters_as_structure"
+        )
+        if (
+            canonical_delimiter_partition is not None
+            and self.task_output_trace_delimiters_as_structure
+            is not canonical_delimiter_partition
+        ):
+            raise ValueError(
+                f"{self.version} requires "
+                "task_output_trace_delimiters_as_structure="
+                f"{canonical_delimiter_partition}"
+            )
         canonical_contrastive_weight = version_spec.get(
             "answer_query_contrastive_weight"
         )
@@ -1453,6 +1526,19 @@ class V20Config:
         result["task_output_scope"] = {
             "nonthinking": "<Ans> through <EOS>, inclusive",
             "thinking": "<Think> through <EOS>, inclusive",
+        }
+        result["task_output_component_partition"] = {
+            "final_count": "atomic answer token",
+            "trace": (
+                "retrieved marker identities only"
+                if self.task_output_trace_delimiters_as_structure
+                else "trace query/delimiter tokens plus retrieved marker identities"
+            ),
+            "structure": (
+                "<Think>, repeated <Sep>, </Think>, <Ans>, and <EOS>"
+                if self.task_output_trace_delimiters_as_structure
+                else "output tags and <EOS> not assigned to count or trace"
+            ),
         }
         result["answer_query_contrastive_objective"] = {
             "active": bool(self.answer_query_contrastive_weight > 0),
@@ -1604,6 +1690,7 @@ def config_from_dict(values: dict[str, Any]) -> V20Config:
         "readout_parameterization",
         "joint_sampler_within_cell_policy",
         "task_context_order",
+        "task_output_component_partition",
     ):
         data.pop(derived, None)
     data["position_encodings"] = tuple(data["position_encodings"])
@@ -1621,6 +1708,7 @@ def config_from_dict(values: dict[str, Any]) -> V20Config:
     data.setdefault("task_output_count_weight", 1.0)
     data.setdefault("task_output_trace_weight", 1.0)
     data.setdefault("task_output_structure_weight", 0.1)
+    data.setdefault("task_output_trace_delimiters_as_structure", False)
     data.setdefault("answer_query_contrastive_weight", 0.0)
     data.setdefault("answer_query_contrastive_temperature", 0.1)
     data.setdefault("task_output_scheduled_sampling_max_probability", 0.0)
@@ -1705,6 +1793,11 @@ def default_run_name(cfg: V20Config) -> str:
     context_order_tag = (
         "_taskctx-permuted" if cfg.permute_task_context_tokens else ""
     )
+    delimiter_partition_tag = (
+        "_trace-markers_grammar-delimiters"
+        if cfg.task_output_trace_delimiters_as_structure
+        else ""
+    )
     lr_decay_tag = (
         "" if cfg.lr_decay_steps is None else f"_lrdecay{cfg.lr_decay_steps}"
     )
@@ -1719,7 +1812,7 @@ def default_run_name(cfg: V20Config) -> str:
         f"steps{cfg.train_steps}{lr_decay_tag}{min_lr_tag}_snap{cfg.checkpoint_every}_recover{cfg.recovery_every}_"
         f"evaln{eval_size}_{variants.replace('/', '-')}_{cfg.count_tokenization}{trace_tag}"
         f"{component_loss_tag}{readout_tag}{contrastive_tag}{scheduled_sampling_tag}"
-        f"{context_order_tag}_"
+        f"{context_order_tag}{delimiter_partition_tag}_"
         f"query-first_{schedule_tag}_seed{cfg.seed}"
     )
 

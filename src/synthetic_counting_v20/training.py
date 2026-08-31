@@ -181,9 +181,11 @@ def component_normalized_task_output_loss(
 
     ``token_losses`` and ``active`` are shifted by one position relative to the
     rendered sequence, whereas ``loss_weights`` is unshifted.  Only positions
-    selected by the task-output mask participate.  Trace delimiters and marker
-    identities form one region; all remaining active output tokens (tags,
-    ``<Ans>``, and ``<EOS>``) form the structure region.
+    selected by the task-output mask participate.  By default, trace
+    delimiters and marker identities form one region; all remaining active
+    output tokens (tags, ``<Ans>``, and ``<EOS>``) form the structure region.
+    A grammar-balanced configuration instead keeps trace delimiters in
+    structure and reserves trace for retrieved marker identities.
 
     Averaging within each region and example before the batch mean ensures that
     a count token has the same objective coefficient in Non-thinking and
@@ -211,13 +213,14 @@ def component_normalized_task_output_loss(
         if item.mode == "thinking":
             thinking_rows += 1
         count_indices = [position - 1 for position in item.spans.count_positions]
-        trace_indices = [
-            position - 1
-            for position in (
-                *(position for group in item.spans.trace_index_token_groups for position in group),
-                *item.spans.trace_marker_positions,
-            )
-        ]
+        trace_positions = list(item.spans.trace_marker_positions)
+        if not cfg.task_output_trace_delimiters_as_structure:
+            trace_positions[:0] = [
+                position
+                for group in item.spans.trace_index_token_groups
+                for position in group
+            ]
+        trace_indices = [position - 1 for position in trace_positions]
         output_start = (
             item.spans.ans_pos
             if item.mode == "nonthinking"

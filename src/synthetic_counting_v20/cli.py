@@ -173,6 +173,9 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         "permute_task_context_tokens"
     )
     canonical_task_output_reduction = version_spec.get("task_output_loss_reduction")
+    canonical_delimiter_partition = version_spec.get(
+        "task_output_trace_delimiters_as_structure"
+    )
     canonical_tying = version_spec.get("tie_word_embeddings")
     canonical_partial_untie = version_spec.get("untie_atomic_count_readout")
     canonical_contrastive_weight = version_spec.get(
@@ -379,6 +382,10 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         overrides["permute_task_context_tokens"] = canonical_context_permutation
     if canonical_task_output_reduction is not None:
         overrides["task_output_loss_reduction"] = canonical_task_output_reduction
+    if canonical_delimiter_partition is not None:
+        overrides["task_output_trace_delimiters_as_structure"] = (
+            canonical_delimiter_partition
+        )
     if canonical_tying is not None:
         overrides["tie_word_embeddings"] = canonical_tying
     if canonical_partial_untie is not None:
@@ -407,7 +414,7 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         # The nonthinking objective is identical to v20, so the canonical v22
         # run trains only the changed separator-trace Thinking model.
         overrides["enabled_model_variants"] = ("rope/thinking",)
-    elif version in {"v23", "v24", "v24.2", "v24.3", "v24.4", "v24.5", "v24.6", "v24.7", "v25", "v26", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40", "v41", "v42", "v43", "v44", "v45", "v46", "v47", "v48"}:
+    elif version in {"v23", "v24", "v24.2", "v24.3", "v24.4", "v24.5", "v24.6", "v24.7", "v25", "v26", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40", "v41", "v42", "v43", "v44", "v45", "v46", "v47", "v48", "v49"}:
         # Both objectives are retrained whenever the loss or count distribution
         # changes so the within-version Thinking/Non-thinking comparison stays
         # controlled.
