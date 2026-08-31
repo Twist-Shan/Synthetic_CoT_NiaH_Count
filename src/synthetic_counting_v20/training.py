@@ -1036,7 +1036,21 @@ def autoregressive_task_evaluation(
     return pd.DataFrame(rows)
 
 
-_MAX_JOINT_STARTS_PER_CELL = 8_192
+def _retain_joint_starts(
+    relative_starts: np.ndarray,
+    max_starts_per_cell: int | None,
+) -> np.ndarray:
+    """Apply the configured deterministic within-cell support policy."""
+
+    if max_starts_per_cell is None or relative_starts.size <= max_starts_per_cell:
+        return relative_starts
+    retained = np.linspace(
+        0,
+        relative_starts.size - 1,
+        max_starts_per_cell,
+        dtype=np.int64,
+    )
+    return relative_starts[retained]
 
 
 @dataclass(frozen=True)
@@ -1110,6 +1124,7 @@ def _joint_set_count_sampler(
         split.train.end,
         cfg.seq_len,
         cfg.count_max_threshold,
+        cfg.joint_sampler_max_starts_per_cell,
     )
     cached = _JOINT_SET_COUNT_SAMPLER_CACHE.get(key)
     if cached is not None:
@@ -1147,14 +1162,10 @@ def _joint_set_count_sampler(
             if not relative_starts.size:
                 continue
             support[set_index, count - 1] = True
-            if relative_starts.size > _MAX_JOINT_STARTS_PER_CELL:
-                retained = np.linspace(
-                    0,
-                    relative_starts.size - 1,
-                    _MAX_JOINT_STARTS_PER_CELL,
-                    dtype=np.int64,
-                )
-                relative_starts = relative_starts[retained]
+            relative_starts = _retain_joint_starts(
+                relative_starts,
+                cfg.joint_sampler_max_starts_per_cell,
+            )
             starts_by_cell[(set_index, count)] = (
                 relative_starts + int(region.start)
             ).astype(np.int32, copy=False)
@@ -1183,6 +1194,14 @@ def _joint_set_count_sampler(
                     "feasible": bool(support[set_index, count - 1]),
                     "full_window_count": full_window_counts[cell],
                     "retained_window_count": 0 if starts is None else int(len(starts)),
+                    "within_cell_sampling_policy": (
+                        "all_legal_starts"
+                        if cfg.joint_sampler_max_starts_per_cell is None
+                        else (
+                            "deterministic_evenly_spaced_cap_"
+                            f"{cfg.joint_sampler_max_starts_per_cell}"
+                        )
+                    ),
                     "target_probability": probability,
                     "target_set_marginal": float(row_marginals[set_index]),
                     "target_count_marginal": float(count_marginals[count - 1]),

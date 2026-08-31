@@ -163,6 +163,12 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
     canonical_pool_threshold = version_spec.get("needle_pool_frequency_threshold")
     canonical_pool_size = version_spec.get("needle_pool_size")
     canonical_count_distribution = version_spec.get("training_count_distribution")
+    has_canonical_joint_sampler_cap = (
+        "joint_sampler_max_starts_per_cell" in version_spec
+    )
+    canonical_joint_sampler_cap = version_spec.get(
+        "joint_sampler_max_starts_per_cell"
+    )
     canonical_task_output_reduction = version_spec.get("task_output_loss_reduction")
     canonical_tying = version_spec.get("tie_word_embeddings")
     canonical_partial_untie = version_spec.get("untie_atomic_count_readout")
@@ -364,6 +370,8 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         overrides["needle_pool_size"] = canonical_pool_size
     if canonical_count_distribution is not None:
         overrides["training_count_distribution"] = canonical_count_distribution
+    if has_canonical_joint_sampler_cap:
+        overrides["joint_sampler_max_starts_per_cell"] = canonical_joint_sampler_cap
     if canonical_task_output_reduction is not None:
         overrides["task_output_loss_reduction"] = canonical_task_output_reduction
     if canonical_tying is not None:
@@ -394,7 +402,7 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         # The nonthinking objective is identical to v20, so the canonical v22
         # run trains only the changed separator-trace Thinking model.
         overrides["enabled_model_variants"] = ("rope/thinking",)
-    elif version in {"v23", "v24", "v24.2", "v24.3", "v24.4", "v24.5", "v24.6", "v24.7", "v25", "v26", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40", "v41", "v42"}:
+    elif version in {"v23", "v24", "v24.2", "v24.3", "v24.4", "v24.5", "v24.6", "v24.7", "v25", "v26", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40", "v41", "v42", "v43"}:
         # Both objectives are retrained whenever the loss or count distribution
         # changes so the within-version Thinking/Non-thinking comparison stays
         # controlled.

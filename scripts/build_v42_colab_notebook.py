@@ -34,6 +34,9 @@ def build() -> Path:
             "v42_count1to5_width384_heads6_steps8000_independent_L256_pool100_seed",
         )
         source = source.replace('role_table["step"].eq(6000)', 'role_table["step"].eq(8000)')
+        source = source.replace(
+            "marker_sets_identical_to_v40", "marker_sets_identical_to_v41"
+        )
         cell["source"] = source.splitlines(keepends=True)
 
     _set_source(

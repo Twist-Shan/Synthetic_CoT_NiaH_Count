@@ -570,6 +570,44 @@ VERSION_SPECS = {
             8_000,
         ),
     },
+    # v43 removes the only train/evaluation support mismatch discovered in the
+    # v42 failure audit.  The maximum-entropy set x count cell probabilities
+    # are unchanged, but sampling within each feasible cell now ranges over
+    # every legal corpus window instead of a deterministic cap of 8,192
+    # evenly-spaced starts.  Everything else is byte-for-byte/canonically v42.
+    "v43": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 5,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "maxent_set_count",
+        "joint_sampler_max_starts_per_cell": None,
+        "task_output_loss_reduction": "component_normalized",
+        "task_output_count_weight": 8.0,
+        "task_output_trace_weight": 8.0,
+        "task_output_structure_weight": 8.0,
+        "tie_word_embeddings": True,
+        "untie_atomic_count_readout": True,
+        "n_layer": 4,
+        "n_head": 6,
+        "n_embd": 384,
+        "n_inner": 1536,
+        "train_steps": 8_000,
+        "phase_cloud_steps": (
+            0,
+            1_000,
+            1_500,
+            2_000,
+            2_500,
+            3_000,
+            3_500,
+            4_000,
+            5_000,
+            6_000,
+            7_000,
+            8_000,
+        ),
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
@@ -617,6 +655,11 @@ class V20Config:
     corpus_train_fraction: float = 0.80
     corpus_validation_fraction: float = 0.10
     candidate_filter_max_attempts: int = 100_000
+    # Maximum number of legal corpus starts retained inside each feasible
+    # set x count cell of the maximum-entropy sampler.  None uses the full
+    # within-cell support.  The historical 8,192 default exactly preserves
+    # versions through v42 and old serialized configs.
+    joint_sampler_max_starts_per_cell: int | None = 8_192
     shuffle_needle_set_order: bool = True
     # v20/v21 are intentionally RoPE-only so the comparison isolates output
     # tokenization rather than position encoding.
@@ -821,6 +864,13 @@ class V20Config:
             raise ValueError("train + validation fractions must be less than one")
         if self.candidate_filter_max_attempts <= 0:
             raise ValueError("candidate_filter_max_attempts must be positive")
+        if self.joint_sampler_max_starts_per_cell is not None and (
+            type(self.joint_sampler_max_starts_per_cell) is not int
+            or self.joint_sampler_max_starts_per_cell <= 0
+        ):
+            raise ValueError(
+                "joint_sampler_max_starts_per_cell must be a positive integer or None"
+            )
         if self.seq_len < 2:
             raise ValueError("seq_len must be at least two")
         canonical_n_layer = int(version_spec.get("n_layer", 4))
@@ -1036,6 +1086,15 @@ class V20Config:
                 f"{self.version} requires training_count_distribution="
                 f"{canonical_count_distribution!r}"
             )
+        if "joint_sampler_max_starts_per_cell" in version_spec:
+            canonical_joint_sampler_cap = version_spec[
+                "joint_sampler_max_starts_per_cell"
+            ]
+            if self.joint_sampler_max_starts_per_cell != canonical_joint_sampler_cap:
+                raise ValueError(
+                    f"{self.version} requires joint_sampler_max_starts_per_cell="
+                    f"{canonical_joint_sampler_cap!r}"
+                )
         canonical_task_output_reduction = version_spec.get("task_output_loss_reduction")
         if (
             canonical_task_output_reduction is not None
@@ -1201,6 +1260,14 @@ class V20Config:
         result["task_occurrence_ratio_definition"] = (
             "example-level probability of formatting a training corpus window as a counting task"
         )
+        result["joint_sampler_within_cell_policy"] = (
+            "all_legal_starts"
+            if self.joint_sampler_max_starts_per_cell is None
+            else (
+                "deterministic_evenly_spaced_cap_"
+                f"{self.joint_sampler_max_starts_per_cell}"
+            )
+        )
         result["sequence_layout"] = "query_first"
         thinking_trace = (
             "(<Sep> marker)*n"
@@ -1312,6 +1379,7 @@ def config_from_dict(values: dict[str, Any]) -> V20Config:
         "answer_query_contrastive_objective",
         "scheduled_sampling_objective",
         "readout_parameterization",
+        "joint_sampler_within_cell_policy",
     ):
         data.pop(derived, None)
     data["position_encodings"] = tuple(data["position_encodings"])
@@ -1358,6 +1426,7 @@ def config_from_dict(values: dict[str, Any]) -> V20Config:
     data.setdefault("tie_word_embeddings", True)
     data.setdefault("untie_atomic_count_readout", False)
     data.setdefault("training_count_distribution", "natural")
+    data.setdefault("joint_sampler_max_starts_per_cell", 8_192)
     if legacy_loss_schedule:
         data["max_steps_for_language_pred"] = int(data["train_steps"])
     cfg = V20Config(**data)
