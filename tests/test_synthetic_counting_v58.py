@@ -2,12 +2,19 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
+import pandas as pd
+import pytest
+
 from synthetic_counting_v20.config import config_from_dict
 from synthetic_counting_v20.data import V20Example, V20Vocab, character_token, render_v20
 from synthetic_counting_v20.model import build_model
 from synthetic_counting_v57.config import preset_config as preset_v57
 from synthetic_counting_v58.config import preset_config as preset_v58
 from synthetic_counting_v58.behavior_gate import GATE_THRESHOLDS
+from synthetic_counting_v58.confirmation import (
+    select_disjoint_balanced,
+    summarize_confirmation,
+)
 from synthetic_counting_v58.preflight import run_preflight
 
 
@@ -80,3 +87,74 @@ def test_v58_gate_is_comparative_and_count_uniform() -> None:
         "thinking_count_spread_max": 0.20,
         "thinking_minus_nonthinking_gap_min": 0.30,
     }
+
+
+def _confirmation_example(count: int, start: int, set_id: str = "set_000") -> V20Example:
+    marker = character_token("a")
+    return V20Example(
+        example_kind="counting_task",
+        seq_tokens=[marker] * count,
+        corpus_region="test",
+        corpus_start=start,
+        corpus_end=start + count,
+        prompt_sha256=f"{set_id}-{start}",
+        set_id=set_id,
+        needle_characters=("a", "b", "c"),
+        rendered_set_order=("a", "b", "c"),
+        needle_positions=tuple(range(count)),
+        needle_markers=(marker,) * count,
+        count=count,
+        per_character_counts=(count, 0, 0),
+    )
+
+
+def test_v58_confirmation_selection_is_balanced_and_disjoint() -> None:
+    excluded = [_confirmation_example(count, count * 100) for count in (1, 2)]
+    candidates = [
+        _confirmation_example(count, count * 100 + offset)
+        for count in (1, 2)
+        for offset in range(3)
+    ]
+    selected = select_disjoint_balanced(
+        candidates, excluded, count_max=2, examples_per_count=2
+    )
+    assert [example.count for example in selected] == [1, 1, 2, 2]
+    assert {(example.set_id, example.corpus_start) for example in selected}.isdisjoint(
+        {(example.set_id, example.corpus_start) for example in excluded}
+    )
+
+
+def test_v58_confirmation_summary_applies_revised_gate() -> None:
+    rows = []
+    thinking_correct = {count: 8 if count < 10 else 9 for count in range(1, 11)}
+    for mode in ("nonthinking", "thinking"):
+        for count in range(1, 11):
+            correct = 2 if mode == "nonthinking" else thinking_correct[count]
+            for row_id in range(10):
+                rows.append(
+                    {
+                        "mode": mode,
+                        "count": count,
+                        "row_id": row_id,
+                        "ar_accuracy": float(row_id < correct),
+                        "ar_answered": 1.0,
+                        "trace_exact": 0.5 if mode == "thinking" else float("nan"),
+                        "trace_ordered_marker_accuracy": (
+                            0.9 if mode == "thinking" else float("nan")
+                        ),
+                        "trace_marker_count_accuracy": 0.8 if mode == "thinking" else float("nan"),
+                        "trace_format_valid": 1.0 if mode == "thinking" else float("nan"),
+                        "trace_closed": 1.0 if mode == "thinking" else float("nan"),
+                        "trace_delimiter_count_accuracy": (
+                            0.8 if mode == "thinking" else float("nan")
+                        ),
+                    }
+                )
+    summary, by_count, gate = summarize_confirmation(pd.DataFrame(rows))
+    assert len(summary) == 2
+    assert len(by_count) == 20
+    assert gate["passed"] is True
+    assert gate["metrics"]["thinking_accuracy"] == pytest.approx(0.81)
+    assert gate["metrics"]["thinking_min_count_accuracy"] == pytest.approx(0.8)
+    assert gate["metrics"]["thinking_count_spread"] == pytest.approx(0.1)
+    assert gate["metrics"]["thinking_minus_nonthinking_gap"] == pytest.approx(0.61)
