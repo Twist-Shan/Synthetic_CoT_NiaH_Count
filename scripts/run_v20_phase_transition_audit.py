@@ -677,7 +677,7 @@ def cached_prefix_forward(
         hidden = hidden + projected
         hidden = hidden + layer.mlp(layer.ln_mlp(hidden))
         caches.append((key, value))
-    logits = F.linear(model.final_norm(hidden), model.token_embedding.weight)
+    logits = F.linear(model.final_norm(hidden), model.unembedding_weight)
     return logits, caches
 
 
@@ -721,7 +721,7 @@ def cached_incremental_forward(
         hidden = hidden + projected
         hidden = hidden + layer.mlp(layer.ln_mlp(hidden))
         updated.append((all_key, all_value))
-    logits = F.linear(model.final_norm(hidden), model.token_embedding.weight)
+    logits = F.linear(model.final_norm(hidden), model.unembedding_weight)
     return logits, updated
 
 
