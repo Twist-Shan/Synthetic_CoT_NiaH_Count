@@ -1150,6 +1150,50 @@ VERSION_SPECS = {
             10_000,
         ),
     },
+    # v57 returns to v51's batch-128 optimization path and changes one linked
+    # architecture factor: the parallel head bank widens from 4H/256D to
+    # 6H/384D while preserving 64 dimensions per head and the 4x MLP ratio.
+    # Data, no-index trace, 8/8/16 objective, depth, schedule, and inference
+    # remain unchanged.
+    "v57": {
+        "count_tokenization": "atomic",
+        "trace_format": "separator",
+        "count_max_threshold": 10,
+        "needle_pool_frequency_threshold": 10.0 / 256.0,
+        "training_count_distribution": "maxent_set_count",
+        "joint_sampler_max_starts_per_cell": None,
+        "permute_task_context_tokens": True,
+        "task_output_loss_reduction": "component_normalized",
+        "task_output_count_weight": 8.0,
+        "task_output_trace_weight": 8.0,
+        "task_output_structure_weight": 16.0,
+        "task_output_trace_delimiters_as_structure": True,
+        "task_output_scheduled_sampling_max_probability": 0.0,
+        "tie_word_embeddings": True,
+        "untie_atomic_count_readout": True,
+        "batch_size": 128,
+        "n_layer": 4,
+        "n_head": 6,
+        "n_embd": 384,
+        "n_inner": 1536,
+        "train_steps": 10_000,
+        "phase_cloud_steps": (
+            0,
+            1_000,
+            1_500,
+            2_000,
+            2_500,
+            3_000,
+            3_500,
+            4_000,
+            5_000,
+            6_000,
+            7_000,
+            8_000,
+            9_000,
+            10_000,
+        ),
+    },
 }
 SUPPORTED_VERSIONS = tuple(VERSION_SPECS)
 SUPPORTED_TRAINING_COUNT_DISTRIBUTIONS = (
