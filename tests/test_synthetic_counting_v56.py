@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
+
+import pytest
 
 from synthetic_counting_v20.config import config_from_dict
 from synthetic_counting_v20.data import V20Example, V20Vocab, character_token, render_v20
@@ -56,6 +58,12 @@ def test_v56_trace_serialization_is_identical_to_v51() -> None:
     assert render_v20(_example(), old_vocab, "thinking").tokens == render_v20(
         _example(), new_vocab, "thinking"
     ).tokens
+
+
+def test_v56_rejects_noncanonical_batch_size() -> None:
+    candidate = preset_v56("main", device="cpu")
+    with pytest.raises(ValueError, match="batch_size=256"):
+        replace(candidate, batch_size=128).validate()
 
 
 def test_v56_preflight_is_exposed() -> None:

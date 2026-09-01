@@ -1738,6 +1738,14 @@ class V20Config:
             raise ValueError(
                 f"{self.version} requires train_steps={canonical_train_steps}"
             )
+        canonical_batch_size = version_spec.get("batch_size")
+        if (
+            canonical_batch_size is not None
+            and int(self.batch_size) != int(canonical_batch_size)
+        ):
+            raise ValueError(
+                f"{self.version} requires batch_size={canonical_batch_size}"
+            )
         if not math.isfinite(float(self.min_lr)) or not 0 <= self.min_lr < self.lr:
             raise ValueError("min_lr must be finite and satisfy 0 <= min_lr < lr")
         if self.lr_decay_steps is not None:

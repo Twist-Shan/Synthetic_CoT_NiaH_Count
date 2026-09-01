@@ -145,6 +145,7 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
     )
     overrides = {name: getattr(args, name) for name in names if getattr(args, name) is not None}
     version_spec = VERSION_SPECS[version]
+    canonical_batch_size = version_spec.get("batch_size")
     canonical_final_weight = version_spec.get("final_count_loss_weight")
     canonical_task_output_count_weight = version_spec.get(
         "task_output_count_weight"
@@ -191,6 +192,12 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
     canonical_lr_decay_steps = version_spec.get("lr_decay_steps")
     canonical_min_lr = version_spec.get("min_lr")
     canonical_phase_cloud_steps = version_spec.get("phase_cloud_steps")
+    if (
+        canonical_batch_size is not None
+        and args.batch_size is not None
+        and int(args.batch_size) != int(canonical_batch_size)
+    ):
+        parser.error(f"{version} fixes --batch-size at {canonical_batch_size}")
     if (
         canonical_final_weight is not None
         and args.final_count_loss_weight is not None
@@ -350,6 +357,8 @@ def main(argv: list[str] | None = None, *, version: str = "v20") -> None:
         count_tokenization=version_spec["count_tokenization"],
         trace_format=version_spec["trace_format"],
     )
+    if canonical_batch_size is not None:
+        overrides["batch_size"] = canonical_batch_size
     if canonical_final_weight is not None:
         overrides["final_count_loss_weight"] = canonical_final_weight
     if canonical_task_output_count_weight is not None:
