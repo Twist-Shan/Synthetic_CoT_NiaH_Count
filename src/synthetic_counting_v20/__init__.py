@@ -11,6 +11,12 @@ if "pyarrow" not in sys.modules:
     _pyarrow_stub.__version__ = "0.0.0"
     _pyarrow_stub.Array = type("Array", (), {})
     _pyarrow_stub.ChunkedArray = type("ChunkedArray", (), {})
+    # Narwhals and newer scikit-learn validation helpers inspect these core
+    # PyArrow container types even when PyArrow is only an unavailable
+    # optional dependency.  Keep the stub structurally complete for their
+    # isinstance guards without importing or requiring PyArrow.
+    _pyarrow_stub.Table = type("Table", (), {})
+    _pyarrow_stub.RecordBatch = type("RecordBatch", (), {})
     sys.modules["pyarrow"] = _pyarrow_stub
 for _optional in ("numexpr", "bottleneck"):
     sys.modules.setdefault(_optional, None)
