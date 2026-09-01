@@ -33,6 +33,7 @@ if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
 from compare_v22_modes_ncc import DEFAULT_RESULTS_ROOT, SPECS, _unique_run  # noqa: E402
+from compare_v22_modes_ncc import ModeSpec  # noqa: E402
 from run_v22_topk_ncc import (  # noqa: E402
     Head,
     _format_heads,
@@ -46,9 +47,11 @@ from synthetic_counting_v20.training import _parse_generation  # noqa: E402
 from synthetic_counting_v20.v10_port_analysis import _local_attention_edit  # noqa: E402
 
 
-def _balanced_reporting_subset(examples, per_count: int):
+def _balanced_reporting_subset(
+    examples, per_count: int, *, count_min: int, count_max: int
+):
     selected = []
-    for count in range(1, 31):
+    for count in range(count_min, count_max + 1):
         bucket = [example for example in examples if int(example.count or 0) == count]
         if len(bucket) < per_count:
             raise ValueError(
@@ -176,18 +179,47 @@ def main() -> None:
     parser.add_argument("--examples-per-count", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--top-k", type=int, nargs="+", default=(1, 2, 4))
+    parser.add_argument("--paired-run-prefix", default=None)
+    parser.add_argument("--expected-version", default=None)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
+
+    specs = SPECS
+    if args.paired_run_prefix is not None:
+        specs = (
+            ModeSpec(
+                "nonthinking",
+                args.paired_run_prefix,
+                "nonthinking",
+                "separator",
+            ),
+            ModeSpec(
+                "thinking",
+                args.paired_run_prefix,
+                "thinking",
+                "separator",
+            ),
+        )
 
     detail_frames = []
     summary_rows = []
     ranking_frames = []
-    for spec in SPECS:
+    for spec in specs:
         run_dir = _unique_run(args.results_root.resolve(), spec.run_prefix)
         cfg, vocab, _train, selection, reporting, model = _load_model(
             run_dir, spec, device=args.device
         )
-        reporting = _balanced_reporting_subset(reporting, args.examples_per_count)
+        if args.expected_version is not None and cfg.version != args.expected_version:
+            raise ValueError(
+                f"{spec.label}: expected version={args.expected_version!r}, "
+                f"got {cfg.version!r}"
+            )
+        reporting = _balanced_reporting_subset(
+            reporting,
+            args.examples_per_count,
+            count_min=int(cfg.count_min),
+            count_max=int(cfg.count_max_threshold),
+        )
         ranking = _rank_heads(run_dir, spec, cfg, vocab, selection, model)
         ranked_heads = _heads_from_ranking(ranking)
         ranking_frames.append(
@@ -261,7 +293,14 @@ def main() -> None:
     (args.output / "manifest.json").write_text(
         json.dumps(
             {
-                "comparison": "v22 Thinking vs matched v20 Non-thinking",
+                "comparison": (
+                    f"paired {args.expected_version or 'separator-trace'} "
+                    "Thinking vs Non-thinking"
+                    if args.paired_run_prefix is not None
+                    else "v22 Thinking vs matched v20 Non-thinking"
+                ),
+                "paired_run_prefix": args.paired_run_prefix,
+                "expected_version": args.expected_version,
                 "selection_split": "heldout_head_selection",
                 "reporting_split": "disjoint heldout reporting examples",
                 "examples_per_count": int(args.examples_per_count),
@@ -270,7 +309,10 @@ def main() -> None:
                     "nonthinking": "selected broad heads zeroed at <Ans>",
                     "thinking": "selected targeted heads zeroed at every generated <Sep> query",
                 },
-                "controls": "all disjoint layer-count-matched sets available in the 4x4 inventory",
+                "controls": (
+                    "all disjoint layer-count-matched sets available in the "
+                    "configured head inventory"
+                ),
             },
             indent=2,
         ),

@@ -212,8 +212,11 @@ def _behavior_metrics(
     answer_abs_error: list[float] = []
     trace_correct: list[float] = []
     trace_margin: list[float] = []
+    supported_counts = tuple(
+        range(int(cfg.count_min), int(cfg.count_max_threshold) + 1)
+    )
     number_ids = torch.tensor(
-        [vocab.token_to_id[vocab.number_token(count)] for count in range(1, 31)],
+        [vocab.token_to_id[vocab.number_token(count)] for count in supported_counts],
         device=device,
     )
     for start in range(0, len(examples), batch_size):
@@ -240,7 +243,16 @@ def _behavior_metrics(
             answer_margin.append(float((logits[gold_id] - alternatives.max()).cpu()))
             probabilities = torch.softmax(logits[number_ids], dim=0)
             expected = float(
-                (probabilities * torch.arange(1, 31, device=device)).sum().cpu()
+                (
+                    probabilities
+                    * torch.tensor(
+                        supported_counts,
+                        dtype=probabilities.dtype,
+                        device=device,
+                    )
+                )
+                .sum()
+                .cpu()
             )
             answer_abs_error.append(abs(expected - int(example.count)))
             if mode == "thinking":
@@ -370,10 +382,15 @@ def analyze_mode(
     confirmation_per_label: int,
     batch_size: int,
     top_ks: Sequence[int],
+    expected_version: str | None = None,
 ):
     cfg, vocab, train, selection, reporting, model = _load_model(
         run_dir, spec, device=device
     )
+    if expected_version is not None and cfg.version != expected_version:
+        raise ValueError(
+            f"{spec.label}: expected version={expected_version!r}, got {cfg.version!r}"
+        )
     ranking = _rank_heads(run_dir, spec, cfg, vocab, selection, model)
     ranked_heads = _heads_from_ranking(ranking)
     print(
@@ -459,14 +476,40 @@ def main() -> None:
     parser.add_argument("--confirmation-per-label", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--top-k", type=int, nargs="+", default=(1, 2, 4))
+    parser.add_argument(
+        "--paired-run-prefix",
+        default=None,
+        help=(
+            "Use both independently trained modes from one separator-trace run; "
+            "the default retains the historical v20/v22 comparison"
+        ),
+    )
+    parser.add_argument("--expected-version", default=None)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
+
+    specs = SPECS
+    if args.paired_run_prefix is not None:
+        specs = (
+            ModeSpec(
+                "nonthinking",
+                args.paired_run_prefix,
+                "nonthinking",
+                "separator",
+            ),
+            ModeSpec(
+                "thinking",
+                args.paired_run_prefix,
+                "thinking",
+                "separator",
+            ),
+        )
 
     rankings = []
     layerwise = []
     selected = []
     behavior = []
-    for spec in SPECS:
+    for spec in specs:
         run_dir = _unique_run(args.results_root.resolve(), spec.run_prefix)
         outputs = analyze_mode(
             run_dir,
@@ -476,6 +519,7 @@ def main() -> None:
             confirmation_per_label=args.confirmation_per_label,
             batch_size=args.batch_size,
             top_ks=args.top_k,
+            expected_version=args.expected_version,
         )
         rankings.append(outputs[0])
         layerwise.append(outputs[1])
@@ -495,7 +539,14 @@ def main() -> None:
     (args.output / "manifest.json").write_text(
         json.dumps(
             {
-                "comparison": "v22 Thinking vs matched v20 Non-thinking",
+                "comparison": (
+                    f"paired {args.expected_version or 'separator-trace'} "
+                    "Thinking vs Non-thinking"
+                    if args.paired_run_prefix is not None
+                    else "v22 Thinking vs matched v20 Non-thinking"
+                ),
+                "paired_run_prefix": args.paired_run_prefix,
+                "expected_version": args.expected_version,
                 "top_k": list(map(int, args.top_k)),
                 "decoder_policy": (
                     "clean discovery selects layer and fits PCA/decoder/centroids; "
@@ -508,7 +559,8 @@ def main() -> None:
                     ),
                 },
                 "controls": (
-                    "all disjoint layer-count-matched sets when the 4x4 inventory permits"
+                    "all disjoint layer-count-matched sets available in the "
+                    "configured head inventory"
                 ),
             },
             indent=2,

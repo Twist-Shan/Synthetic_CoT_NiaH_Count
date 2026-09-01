@@ -81,12 +81,14 @@ def _forward_sequences(model, sequences, vocab, device: str, *, hidden: bool = F
     )
 
 
-def _answer_pairs(examples: Sequence[V20Example]) -> list[AnswerPair]:
+def _answer_pairs(
+    examples: Sequence[V20Example], *, count_min: int = 1, count_max: int = 30
+) -> list[AnswerPair]:
     buckets: dict[int, list[V20Example]] = {}
     for example in examples:
         buckets.setdefault(int(example.count or 0), []).append(example)
     pairs = []
-    for receiver_count in range(2, 30):
+    for receiver_count in range(count_min + 1, count_max):
         receivers = buckets[receiver_count]
         if len(receivers) < 2:
             raise ValueError(f"count={receiver_count}: need two receiver/control rows")
@@ -516,12 +518,13 @@ def _select_progress_layer(
     discovery_examples,
     centroid_banks,
     *,
+    progress_ks: Sequence[int],
     device: str,
 ) -> tuple[int, pd.DataFrame]:
     rows = []
     for layer in range(1, cfg.n_layer):
         for example in discovery_examples:
-            for k in (4, 6, 8):
+            for k in progress_ks:
                 for shift in (-1, 1):
                     if example.needle_markers[k + shift] == example.needle_markers[k]:
                         continue
@@ -589,19 +592,44 @@ def main() -> None:
     parser.add_argument("--progress-confirmation-examples", type=int, default=8)
     parser.add_argument("--max-progress-new-tokens", type=int, default=28)
     parser.add_argument("--skip-answer", action="store_true")
+    parser.add_argument("--paired-run-prefix", default=None)
+    parser.add_argument("--expected-version", default=None)
+    parser.add_argument("--progress-k", type=int, nargs="+", default=(4, 6, 8))
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
+
+    specs = SPECS
+    if args.paired_run_prefix is not None:
+        specs = (
+            ModeSpec(
+                "nonthinking",
+                args.paired_run_prefix,
+                "nonthinking",
+                "separator",
+            ),
+            ModeSpec(
+                "thinking",
+                args.paired_run_prefix,
+                "thinking",
+                "separator",
+            ),
+        )
 
     answer_discovery = []
     answer_confirmation = []
     bundles = {}
     selected_answer_layers: dict[str, int] = {}
     if not args.skip_answer:
-        for spec in SPECS:
+        for spec in specs:
             run_dir = _unique_run(args.results_root.resolve(), spec.run_prefix)
             cfg, vocab, train, _selection, reporting = _load_bundle(
                 run_dir, device=args.device
             )
+            if args.expected_version is not None and cfg.version != args.expected_version:
+                raise ValueError(
+                    f"{spec.label}: expected version={args.expected_version!r}, "
+                    f"got {cfg.version!r}"
+                )
             _, checkpoint_vocab, _, _, model = load_v20_checkpoint_model(
                 run_dir,
                 "rope",
@@ -617,7 +645,11 @@ def main() -> None:
                 model,
                 cfg,
                 vocab,
-                _answer_pairs(train),
+                _answer_pairs(
+                    train,
+                    count_min=int(cfg.count_min),
+                    count_max=int(cfg.count_max_threshold),
+                ),
                 mode=spec.mode,
                 split="discovery",
                 device=args.device,
@@ -627,7 +659,11 @@ def main() -> None:
                 model,
                 cfg,
                 vocab,
-                _answer_pairs(reporting),
+                _answer_pairs(
+                    reporting,
+                    count_min=int(cfg.count_min),
+                    count_max=int(cfg.count_max_threshold),
+                ),
                 mode=spec.mode,
                 split="confirmation",
                 device=args.device,
@@ -660,11 +696,16 @@ def main() -> None:
             ).get("answer_transplant", {})
 
     if "thinking" not in bundles:
-        spec = next(spec for spec in SPECS if spec.mode == "thinking")
+        spec = next(spec for spec in specs if spec.mode == "thinking")
         run_dir = _unique_run(args.results_root.resolve(), spec.run_prefix)
         cfg, vocab, train, _selection, reporting = _load_bundle(
             run_dir, device=args.device
         )
+        if args.expected_version is not None and cfg.version != args.expected_version:
+            raise ValueError(
+                f"thinking: expected version={args.expected_version!r}, "
+                f"got {cfg.version!r}"
+            )
         _, checkpoint_vocab, _, _, thinking_model = load_v20_checkpoint_model(
             run_dir,
             "rope",
@@ -688,19 +729,32 @@ def main() -> None:
         batch_size=32,
     )["thinking_item_end"]
     centroid_banks = _centroid_bank(discovery_geometry)
-    discovery_n10 = [
-        example for example in train if int(example.count or 0) == 10
+    terminal_count = int(cfg.count_max_threshold)
+    progress_ks = tuple(sorted(set(map(int, args.progress_k))))
+    invalid_ks = [
+        k for k in progress_ks if k - 1 < 0 or k + 1 >= terminal_count
+    ]
+    if invalid_ks:
+        raise ValueError(
+            f"progress k values must allow k-1 and k+1 within count={terminal_count}: "
+            f"{invalid_ks}"
+        )
+    discovery_terminal = [
+        example for example in train if int(example.count or 0) == terminal_count
     ][: args.progress_discovery_examples]
-    confirmation_n10 = [
-        example for example in reporting if int(example.count or 0) == 10
+    confirmation_terminal = [
+        example
+        for example in reporting
+        if int(example.count or 0) == terminal_count
     ][: args.progress_confirmation_examples]
     print("[thinking] selecting progress intervention layer", flush=True)
     selected_progress_layer, progress_discovery = _select_progress_layer(
         thinking_model,
         cfg,
         vocab,
-        discovery_n10,
+        discovery_terminal,
         centroid_banks,
+        progress_ks=progress_ks,
         device=args.device,
     )
     progress_discovery.to_csv(
@@ -718,8 +772,8 @@ def main() -> None:
         "natural_marker_cross_position",
         "natural_item_span_cross_position",
     )
-    for example_index, example in enumerate(confirmation_n10):
-        for k in (4, 6, 8):
+    for example_index, example in enumerate(confirmation_terminal):
+        for k in progress_ks:
             for shift in (-1, 1):
                 if example.needle_markers[k + shift] == example.needle_markers[k]:
                     continue
@@ -746,7 +800,8 @@ def main() -> None:
                         }
                     )
         print(
-            f"[thinking] progress confirmation {example_index + 1}/{len(confirmation_n10)}",
+            f"[thinking] progress confirmation "
+            f"{example_index + 1}/{len(confirmation_terminal)}",
             flush=True,
         )
     pd.DataFrame(progress_rows).to_csv(
@@ -784,6 +839,10 @@ def main() -> None:
                     "natural donor marker/item span cross k positions; position-confounded "
                     "because fixed two-token separator items prevent absolute-position matching"
                 ),
+                "paired_run_prefix": args.paired_run_prefix,
+                "expected_version": args.expected_version,
+                "terminal_count": terminal_count,
+                "progress_k": list(progress_ks),
             },
             indent=2,
         ),
