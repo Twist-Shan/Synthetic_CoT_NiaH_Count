@@ -5,6 +5,7 @@ import os
 import random
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 import torch
@@ -12,6 +13,7 @@ import synthetic_counting_v20.training as training_module
 
 from synthetic_counting_v20.config import config_from_dict, preset_config as preset_v20
 from synthetic_counting_v20.data import V20Example, V20Vocab, character_token, render_v20
+from synthetic_counting_v20.attention_metrics import broad_profile_metrics
 from synthetic_counting_v20.model import build_model
 from synthetic_counting_v20.phase_transition import build_training_token_exposure
 from synthetic_counting_v20.training import (
@@ -60,6 +62,27 @@ def test_main_settings_are_rope_query_first_counts_1_to_30():
         assert cfg.recovery_every == cfg.snapshot_shard_every == 500
         assert cfg.max_render_len <= cfg.n_positions
         assert config_from_dict(cfg.to_dict()) == cfg
+
+
+def test_broad_score_uses_effective_coverage_and_handles_single_occurrence():
+    profiles = np.asarray(
+        [
+            [0.1, 0.1, 0.1, 0.1],
+            [0.4, 0.0, 0.0, 0.0],
+            [0.2, 0.2, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+        ]
+    )
+    metrics = broad_profile_metrics(profiles)
+    np.testing.assert_allclose(metrics["total_target_mass"], [0.4, 0.4, 0.4, 0.0])
+    np.testing.assert_allclose(metrics["effective_coverage"], [1.0, 0.25, 0.5, 0.0])
+    np.testing.assert_allclose(metrics["broad_score"], [0.4, 0.1, 0.2, 0.0])
+
+    singleton = broad_profile_metrics(np.asarray([[0.37], [0.0]]))
+    np.testing.assert_allclose(singleton["effective_coverage"], [1.0, 0.0])
+    np.testing.assert_allclose(singleton["broad_score"], [0.37, 0.0])
+    np.testing.assert_allclose(singleton["normalized_entropy"], [1.0, 0.0])
+    np.testing.assert_allclose(singleton["legacy_entropy_broad_score"], [0.0, 0.0])
 
 
 def test_atomic_and_digitwise_rendering_change_only_number_spelling():

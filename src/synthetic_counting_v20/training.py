@@ -6,7 +6,7 @@ import random
 import shutil
 import time
 from contextlib import nullcontext
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from itertools import permutations
 from pathlib import Path
 from typing import Any
@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn.functional as F
 from torch.optim import AdamW
 from tqdm.auto import tqdm
 
@@ -28,6 +29,7 @@ from .data import (
     component_target_positions,
     load_corpus_text,
     make_training_example,
+    make_v20_example,
     render_v20,
     shifted_v20_token_losses,
 )
@@ -69,14 +71,253 @@ def sync_tree(source: Path, destination: Path) -> None:
 def learning_rate(cfg: V20Config, step: int) -> float:
     if step <= cfg.warmup_steps:
         return cfg.lr * step / max(1, cfg.warmup_steps)
-    progress = (step - cfg.warmup_steps) / max(1, cfg.train_steps - cfg.warmup_steps)
-    return cfg.lr * 0.5 * (1.0 + math.cos(math.pi * min(1.0, progress)))
+    decay_steps = cfg.train_steps if cfg.lr_decay_steps is None else cfg.lr_decay_steps
+    progress = (step - cfg.warmup_steps) / max(1, decay_steps - cfg.warmup_steps)
+    cosine = 0.5 * (1.0 + math.cos(math.pi * min(1.0, progress)))
+    return cfg.min_lr + (cfg.lr - cfg.min_lr) * cosine
 
 
 def training_loss_phase(cfg: V20Config, step: int) -> str:
     """Return the objective phase for an absolute optimizer step."""
 
     return "all_sequence" if step <= cfg.max_steps_for_language_pred else "task_output"
+
+
+def scheduled_sampling_probability(cfg: V20Config, step: int, mode: str) -> float:
+    """Return the predeclared linear roll-in probability for this update.
+
+    Non-thinking has no generated continuation input between its fixed
+    ``<Ans>`` prefix and the answer target, so the same rule degenerates to
+    ordinary teacher forcing for that mode.  Thinking ramps linearly from zero
+    immediately after the language-model phase to the configured maximum at
+    the final optimizer step.
+    """
+
+    maximum = float(cfg.task_output_scheduled_sampling_max_probability)
+    if mode != "thinking" or maximum == 0.0 or step <= cfg.max_steps_for_language_pred:
+        return 0.0
+    task_steps = max(1, cfg.train_steps - cfg.max_steps_for_language_pred)
+    progress = (step - cfg.max_steps_for_language_pred) / task_steps
+    return maximum * min(1.0, max(0.0, float(progress)))
+
+
+@torch.no_grad()
+def scheduled_sampling_inputs(
+    model: TinyPositionCausalLM,
+    ids: torch.Tensor,
+    attention_mask: torch.Tensor,
+    rendered: list[V20Rendered],
+    probability: float,
+) -> tuple[torch.Tensor, dict[str, float | int]]:
+    """Roll model predictions into generated continuation input positions.
+
+    The first pass predicts token ``t`` from the original prefix through
+    ``t-1``.  Selected continuation inputs are replaced by that prediction;
+    the second, gradient-carrying pass still uses the original gold labels.
+    Thus neither the serialized trace nor any supervision target changes.
+
+    Eligible positions begin immediately after the fixed ``<Think>`` prefix
+    and end at ``<Ans>`` (inclusive).  The final count itself is a target, not
+    a roll-in input.  Non-thinking examples have no eligible positions.
+    """
+
+    value = float(probability)
+    if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        raise ValueError("scheduled-sampling probability must be finite and in [0, 1]")
+    if ids.shape != attention_mask.shape or ids.ndim != 2:
+        raise ValueError("ids and attention_mask must be identically shaped rank-2 tensors")
+    if ids.shape[0] != len(rendered):
+        raise ValueError("rendered batch size must match ids")
+
+    eligible = torch.zeros_like(ids, dtype=torch.bool)
+    for row, item in enumerate(rendered):
+        if item.spans is None or item.mode != "thinking":
+            continue
+        if item.spans.think_pos is None:
+            raise ValueError("Thinking rows require a <Think> position")
+        start = int(item.spans.think_pos) + 1
+        stop = int(item.spans.ans_pos) + 1
+        eligible[row, start:stop] = True
+    eligible &= attention_mask.bool()
+    eligible_count = int(eligible.sum().item())
+    empty_stats: dict[str, float | int] = {
+        "eligible_tokens": eligible_count,
+        "selected_tokens": 0,
+        "changed_tokens": 0,
+        "changed_fraction": 0.0,
+    }
+    if value == 0.0 or eligible_count == 0:
+        return ids, empty_stats
+
+    logits = model(input_ids=ids, attention_mask=attention_mask).logits
+    if logits.shape[:2] != ids.shape:
+        raise ValueError("model logits must align with ids in batch and sequence dimensions")
+    predicted_next = logits[:, :-1].argmax(dim=-1)
+    rollin_ids = torch.empty_like(ids)
+    rollin_ids[:, 0] = ids[:, 0]
+    rollin_ids[:, 1:] = predicted_next
+    selected = eligible & (torch.rand(ids.shape, device=ids.device) < value)
+    corrupted = ids.clone()
+    corrupted[selected] = rollin_ids[selected]
+    changed = selected & corrupted.ne(ids)
+    selected_count = int(selected.sum().item())
+    changed_count = int(changed.sum().item())
+    return corrupted, {
+        "eligible_tokens": eligible_count,
+        "selected_tokens": selected_count,
+        "changed_tokens": changed_count,
+        "changed_fraction": changed_count / max(1, eligible_count),
+    }
+
+
+def component_normalized_task_output_loss(
+    token_losses: torch.Tensor,
+    active: torch.Tensor,
+    loss_weights: torch.Tensor,
+    rendered: list[V20Rendered],
+    cfg: V20Config,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Combine per-example count, trace, and structure means.
+
+    ``token_losses`` and ``active`` are shifted by one position relative to the
+    rendered sequence, whereas ``loss_weights`` is unshifted.  Only positions
+    selected by the task-output mask participate.  By default, trace
+    delimiters and marker identities form one region; all remaining active
+    output tokens (tags, ``<Ans>``, and ``<EOS>``) form the structure region.
+    A grammar-balanced configuration instead keeps trace delimiters in
+    structure and reserves trace for retrieved marker identities.
+
+    Averaging within each region and example before the batch mean ensures that
+    a count token has the same objective coefficient in Non-thinking and
+    Thinking, regardless of trace length.
+    """
+
+    if token_losses.shape != active.shape:
+        raise ValueError("token_losses and active must have identical shifted shapes")
+    if loss_weights.shape != (token_losses.shape[0], token_losses.shape[1] + 1):
+        raise ValueError("loss_weights must be unshifted by exactly one target position")
+    if len(rendered) != token_losses.shape[0]:
+        raise ValueError("rendered batch size must match token_losses")
+
+    region_names = ("final_count", "trace", "structure")
+    region_masks_cpu = torch.zeros(
+        (len(region_names), token_losses.shape[0], token_losses.shape[1]),
+        dtype=torch.bool,
+    )
+    thinking_rows = 0
+    task_rows = 0
+    for row, item in enumerate(rendered):
+        if item.spans is None:
+            continue
+        task_rows += 1
+        if item.mode == "thinking":
+            thinking_rows += 1
+        count_indices = [position - 1 for position in item.spans.count_positions]
+        trace_positions = list(item.spans.trace_marker_positions)
+        if not cfg.task_output_trace_delimiters_as_structure:
+            trace_positions[:0] = [
+                position
+                for group in item.spans.trace_index_token_groups
+                for position in group
+            ]
+        trace_indices = [position - 1 for position in trace_positions]
+        output_start = (
+            item.spans.ans_pos
+            if item.mode == "nonthinking"
+            else item.spans.think_pos
+        )
+        if output_start is None:
+            raise ValueError("task-output rows require an output start position")
+        region_masks_cpu[0, row, count_indices] = True
+        if trace_indices:
+            region_masks_cpu[1, row, trace_indices] = True
+        region_masks_cpu[2, row, output_start - 1 : len(item.tokens) - 1] = True
+
+    # Count and trace positions were initially included in the continuous
+    # output range.  Removing them leaves tags, <Ans>, and <EOS> as structure.
+    region_masks_cpu[2] &= ~(region_masks_cpu[0] | region_masks_cpu[1])
+    cpu_valid_rows = region_masks_cpu.any(dim=-1)
+    if (
+        task_rows == 0
+        or int(cpu_valid_rows[0].sum()) != task_rows
+        or int(cpu_valid_rows[2].sum()) != task_rows
+    ):
+        raise ValueError("component-normalized task loss requires count and structure targets")
+    if thinking_rows and int(cpu_valid_rows[1].sum()) != thinking_rows:
+        raise ValueError("every Thinking row must contain an active trace region")
+
+    objective_mask = ((loss_weights[:, 1:] > 0) & active).unsqueeze(0)
+    region_masks = region_masks_cpu.to(device=token_losses.device) & objective_mask
+    region_counts = region_masks.sum(dim=-1)
+    valid_rows = region_counts > 0
+    region_row_means = (
+        (token_losses.unsqueeze(0) * region_masks.to(dtype=token_losses.dtype)).sum(dim=-1)
+        / region_counts.clamp_min(1).to(dtype=token_losses.dtype)
+    )
+    region_means = {
+        "final_count": region_row_means[0, valid_rows[0]].mean(),
+        "structure": region_row_means[2, valid_rows[2]].mean(),
+    }
+    if thinking_rows:
+        region_means["trace"] = region_row_means[1, valid_rows[1]].mean()
+    total = (
+        float(cfg.task_output_count_weight) * region_means["final_count"]
+        + float(cfg.task_output_structure_weight) * region_means["structure"]
+    )
+    if "trace" in region_means:
+        total = total + float(cfg.task_output_trace_weight) * region_means["trace"]
+    return total, region_means
+
+
+def answer_query_supervised_contrastive_loss(
+    final_hidden: torch.Tensor,
+    rendered: list[V20Rendered],
+    *,
+    temperature: float,
+) -> torch.Tensor:
+    """Compress count classes at the native ``<Ans>`` query representation.
+
+    This is a training-only supervised contrastive objective.  It adds no
+    decoder, parameters, tokens, or inference-time rule: the ordinary LM head
+    must still predict the atomic answer token from the same query state.
+    Anchors without a same-count positive in the current batch are ignored.
+    """
+
+    if final_hidden.ndim != 3 or final_hidden.shape[0] != len(rendered):
+        raise ValueError("final_hidden must be [batch, sequence, hidden]")
+    rows: list[int] = []
+    positions: list[int] = []
+    labels: list[int] = []
+    for row, item in enumerate(rendered):
+        if item.spans is None or item.count is None:
+            continue
+        rows.append(row)
+        positions.append(int(item.spans.ans_pos))
+        labels.append(int(item.count))
+    if len(rows) < 2:
+        return final_hidden.sum() * 0.0
+
+    row_index = torch.tensor(rows, device=final_hidden.device, dtype=torch.long)
+    position_index = torch.tensor(
+        positions, device=final_hidden.device, dtype=torch.long
+    )
+    label = torch.tensor(labels, device=final_hidden.device, dtype=torch.long)
+    query = final_hidden[row_index, position_index].float()
+    query = F.normalize(query, dim=-1)
+    scores = query @ query.transpose(0, 1)
+    scores = scores / float(temperature)
+    diagonal = torch.eye(len(rows), device=scores.device, dtype=torch.bool)
+    scores = scores.masked_fill(diagonal, float("-inf"))
+    log_prob = scores - torch.logsumexp(scores, dim=1, keepdim=True)
+    positives = label[:, None].eq(label[None, :]) & ~diagonal
+    positive_count = positives.sum(dim=1)
+    valid = positive_count > 0
+    if not bool(valid.any()):
+        return final_hidden.sum() * 0.0
+    positive_log_prob = torch.where(
+        positives, log_prob, torch.zeros_like(log_prob)
+    ).sum(dim=1)
+    return -(positive_log_prob[valid] / positive_count[valid]).mean()
 
 
 def _autocast_context(cfg: V20Config):
@@ -570,7 +811,7 @@ def teacher_forced_task_evaluation(
             assert item.spans is not None and example.count is not None
             predicted, final_exact = _teacher_forced_number(logits[row_index], item, vocab)
             marker_correct: list[float] = []
-            index_correct: list[float] = []
+            query_correct: list[float] = []
             marker_correct_by_token: dict[str, list[float]] = {}
             if mode == "thinking":
                 for marker_position in item.spans.trace_marker_positions:
@@ -580,8 +821,8 @@ def teacher_forced_task_evaluation(
                     )
                     marker_correct.append(correct)
                     marker_correct_by_token.setdefault(item.tokens[marker_position], []).append(correct)
-                for group in item.spans.trace_index_token_groups:
-                    index_correct.append(
+                for group in item.spans.trace_query_token_groups:
+                    query_correct.append(
                         float(
                             all(
                                 int(logits[row_index, position - 1].argmax())
@@ -609,7 +850,17 @@ def teacher_forced_task_evaluation(
                 "tf_pred_count": predicted,
                 "tf_final_accuracy": final_exact,
                 "tf_trace_marker_accuracy": float(np.mean(marker_correct)) if marker_correct else np.nan,
-                "tf_trace_index_accuracy": float(np.mean(index_correct)) if index_correct else np.nan,
+                "tf_trace_query_accuracy": float(np.mean(query_correct)) if query_correct else np.nan,
+                "tf_trace_index_accuracy": (
+                    float(np.mean(query_correct))
+                    if query_correct and vocab.trace_format == "indexed"
+                    else np.nan
+                ),
+                "tf_trace_delimiter_accuracy": (
+                    float(np.mean(query_correct))
+                    if query_correct and vocab.trace_format == "separator"
+                    else np.nan
+                ),
                 "frequency_baseline_count": baseline,
                 "frequency_baseline_accuracy": float(baseline == example.count),
             }
@@ -637,29 +888,58 @@ def _parse_generation(tokens: list[str], vocab: V20Vocab, example: V20Example, m
             cursor += 1
         predicted = vocab.decode_number_tokens(number)
     trace: list[str] = []
-    if mode == "thinking" and "<Think>" in tokens:
+    trace_started = mode == "thinking" and "<Think>" in tokens
+    trace_closed = False
+    if trace_started:
         start = tokens.index("<Think>") + 1
-        end = tokens.index("</Think>") if "</Think>" in tokens[start:] else len(tokens)
+        trace_closed = "</Think>" in tokens[start:]
+        end = tokens.index("</Think>", start) if trace_closed else len(tokens)
         trace = tokens[start:end]
-    expected = [
-        token
-        for index, marker in enumerate(example.needle_markers, start=1)
-        for token in (*vocab.number_tokens(index), marker)
-    ]
+    if vocab.trace_format == "separator":
+        expected = [
+            token
+            for marker in example.needle_markers
+            for token in ("<Sep>", marker)
+        ]
+    else:
+        expected = [
+            token
+            for index, marker in enumerate(example.needle_markers, start=1)
+            for token in (*vocab.number_tokens(index), marker)
+        ]
     generated_markers: list[str] = []
     cursor = 0
-    while cursor < len(trace):
-        number: list[str] = []
-        while cursor < len(trace) and trace[cursor] in vocab.numbers:
-            number.append(trace[cursor])
+    # A generation that never enters the trace is not a well-formed empty
+    # trace.  Closure is reported separately so syntax and stopping can be
+    # diagnosed independently.
+    trace_format_valid = trace_started
+    if vocab.trace_format == "separator":
+        while cursor < len(trace):
+            if trace[cursor] != "<Sep>" or cursor + 1 >= len(trace):
+                trace_format_valid = False
+                break
+            marker = trace[cursor + 1]
+            if marker not in vocab.character_tokens:
+                trace_format_valid = False
+                break
+            generated_markers.append(marker)
+            cursor += 2
+    else:
+        while cursor < len(trace):
+            number: list[str] = []
+            while cursor < len(trace) and trace[cursor] in vocab.numbers:
+                number.append(trace[cursor])
+                cursor += 1
+            if not number or cursor >= len(trace):
+                trace_format_valid = False
+                break
+            marker = trace[cursor]
             cursor += 1
-        if not number or cursor >= len(trace):
-            break
-        marker = trace[cursor]
-        cursor += 1
-        if marker not in vocab.character_tokens:
-            break
-        generated_markers.append(marker)
+            if marker not in vocab.character_tokens:
+                trace_format_valid = False
+                break
+            generated_markers.append(marker)
+    trace_format_valid = trace_format_valid and cursor == len(trace)
     matches = sum(
         int(index < len(generated_markers) and generated_markers[index] == marker)
         for index, marker in enumerate(example.needle_markers)
@@ -675,6 +955,28 @@ def _parse_generation(tokens: list[str], vocab: V20Vocab, example: V20Example, m
         "trace_exact": float(trace == expected) if mode == "thinking" else np.nan,
         "trace_ordered_marker_accuracy": (
             matches / max(1, int(example.count)) if mode == "thinking" else np.nan
+        ),
+        "trace_generated_marker_count": (
+            len(generated_markers) if mode == "thinking" else np.nan
+        ),
+        "trace_marker_count_accuracy": (
+            float(len(generated_markers) == int(example.count))
+            if mode == "thinking"
+            else np.nan
+        ),
+        "trace_format_valid": (
+            float(trace_format_valid) if mode == "thinking" else np.nan
+        ),
+        "trace_closed": float(trace_closed) if mode == "thinking" else np.nan,
+        "trace_delimiter_count": (
+            trace.count("<Sep>")
+            if mode == "thinking" and vocab.trace_format == "separator"
+            else np.nan
+        ),
+        "trace_delimiter_count_accuracy": (
+            float(trace.count("<Sep>") == int(example.count))
+            if mode == "thinking" and vocab.trace_format == "separator"
+            else np.nan
         ),
         # Backward-compatible alias. This is positional accuracy, not set-level recall.
         "trace_marker_recall": matches / max(1, int(example.count)) if mode == "thinking" else np.nan,
@@ -737,6 +1039,223 @@ def autoregressive_task_evaluation(
     return pd.DataFrame(rows)
 
 
+def _retain_joint_starts(
+    relative_starts: np.ndarray,
+    max_starts_per_cell: int | None,
+) -> np.ndarray:
+    """Apply the configured deterministic within-cell support policy."""
+
+    if max_starts_per_cell is None or relative_starts.size <= max_starts_per_cell:
+        return relative_starts
+    retained = np.linspace(
+        0,
+        relative_starts.size - 1,
+        max_starts_per_cell,
+        dtype=np.int64,
+    )
+    return relative_starts[retained]
+
+
+@dataclass(frozen=True)
+class _JointSetCountSampler:
+    cells: tuple[tuple[int, int], ...]
+    probabilities: tuple[float, ...]
+    starts: dict[tuple[int, int], np.ndarray]
+    plan: pd.DataFrame
+
+
+_JOINT_SET_COUNT_SAMPLER_CACHE: dict[tuple[Any, ...], _JointSetCountSampler] = {}
+
+
+def _maximum_entropy_cell_probabilities(
+    support: np.ndarray,
+    *,
+    tolerance: float = 1e-12,
+    max_iterations: int = 20_000,
+) -> np.ndarray:
+    """Return the max-entropy table with uniform row and column marginals.
+
+    ``support`` is a boolean set-by-count matrix. Structural-zero cells remain
+    zero. Iterative proportional fitting is deterministic and either reaches
+    the requested marginals or fails loudly, rather than silently dropping
+    needle sets that do not support every count.
+    """
+
+    support = np.asarray(support, dtype=bool)
+    if support.ndim != 2 or not support.size:
+        raise ValueError("set-count support must be a nonempty 2D matrix")
+    if not support.any(axis=1).all():
+        raise ValueError("every needle set must support at least one count")
+    if not support.any(axis=0).all():
+        raise ValueError("every requested count must be supported by at least one set")
+    row_target = np.full(support.shape[0], 1.0 / support.shape[0], dtype=np.float64)
+    column_target = np.full(support.shape[1], 1.0 / support.shape[1], dtype=np.float64)
+    probabilities = support.astype(np.float64)
+    probabilities /= probabilities.sum()
+    for _ in range(max_iterations):
+        row_sums = probabilities.sum(axis=1)
+        probabilities *= (row_target / row_sums)[:, None]
+        column_sums = probabilities.sum(axis=0)
+        probabilities *= (column_target / column_sums)[None, :]
+        error = max(
+            float(np.abs(probabilities.sum(axis=1) - row_target).max()),
+            float(np.abs(probabilities.sum(axis=0) - column_target).max()),
+        )
+        if error <= tolerance:
+            break
+    else:
+        raise RuntimeError(
+            "feasible set-count support did not converge to uniform marginals; "
+            f"final error={error:.3e}"
+        )
+    probabilities[~support] = 0.0
+    probabilities /= probabilities.sum()
+    return probabilities
+
+
+def _joint_set_count_sampler(
+    cfg: V20Config,
+    text: str,
+    split: CorpusSplit,
+    pool: NeedlePool,
+) -> _JointSetCountSampler:
+    key = (
+        split.corpus_sha256,
+        split.split_fingerprint,
+        pool.pool_fingerprint,
+        split.train.start,
+        split.train.end,
+        cfg.seq_len,
+        cfg.count_max_threshold,
+        cfg.joint_sampler_max_starts_per_cell,
+    )
+    cached = _JOINT_SET_COUNT_SAMPLER_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    region = split.train
+    region_text = text[region.start : region.end]
+    if len(region_text) < cfg.seq_len:
+        raise ValueError("training corpus region is shorter than seq_len")
+    codepoints = np.fromiter(
+        (ord(character) for character in region_text),
+        dtype=np.int32,
+        count=len(region_text),
+    )
+    support = np.zeros(
+        (len(pool.sets), cfg.count_max_threshold),
+        dtype=bool,
+    )
+    starts_by_cell: dict[tuple[int, int], np.ndarray] = {}
+    full_window_counts: dict[tuple[int, int], int] = {}
+    for set_index, needle_set in enumerate(pool.sets):
+        membership = np.zeros(len(codepoints), dtype=bool)
+        for character in needle_set.characters:
+            membership |= codepoints == ord(character)
+        prefix = np.empty(len(membership) + 1, dtype=np.int32)
+        prefix[0] = 0
+        np.cumsum(membership, dtype=np.int32, out=prefix[1:])
+        window_counts = prefix[cfg.seq_len :] - prefix[: -cfg.seq_len]
+        for count in range(1, cfg.count_max_threshold + 1):
+            relative_starts = np.flatnonzero(window_counts == count).astype(
+                np.int32,
+                copy=False,
+            )
+            full_window_counts[(set_index, count)] = int(relative_starts.size)
+            if not relative_starts.size:
+                continue
+            support[set_index, count - 1] = True
+            relative_starts = _retain_joint_starts(
+                relative_starts,
+                cfg.joint_sampler_max_starts_per_cell,
+            )
+            starts_by_cell[(set_index, count)] = (
+                relative_starts + int(region.start)
+            ).astype(np.int32, copy=False)
+
+    probabilities = _maximum_entropy_cell_probabilities(support)
+    cells: list[tuple[int, int]] = []
+    cell_probabilities: list[float] = []
+    rows: list[dict[str, Any]] = []
+    row_marginals = probabilities.sum(axis=1)
+    count_marginals = probabilities.sum(axis=0)
+    for set_index, needle_set in enumerate(pool.sets):
+        for count in range(1, cfg.count_max_threshold + 1):
+            cell = (set_index, count)
+            probability = float(probabilities[set_index, count - 1])
+            starts = starts_by_cell.get(cell)
+            if probability > 0:
+                if starts is None or not len(starts):
+                    raise RuntimeError("positive set-count cell has no retained starts")
+                cells.append(cell)
+                cell_probabilities.append(probability)
+            rows.append(
+                {
+                    "set_id": needle_set.set_id,
+                    "set_index": set_index,
+                    "count": count,
+                    "feasible": bool(support[set_index, count - 1]),
+                    "full_window_count": full_window_counts[cell],
+                    "retained_window_count": 0 if starts is None else int(len(starts)),
+                    "within_cell_sampling_policy": (
+                        "all_legal_starts"
+                        if cfg.joint_sampler_max_starts_per_cell is None
+                        else (
+                            "deterministic_evenly_spaced_cap_"
+                            f"{cfg.joint_sampler_max_starts_per_cell}"
+                        )
+                    ),
+                    "target_probability": probability,
+                    "target_set_marginal": float(row_marginals[set_index]),
+                    "target_count_marginal": float(count_marginals[count - 1]),
+                }
+            )
+    sampler = _JointSetCountSampler(
+        cells=tuple(cells),
+        probabilities=tuple(cell_probabilities),
+        starts=starts_by_cell,
+        plan=pd.DataFrame(rows),
+    )
+    _JOINT_SET_COUNT_SAMPLER_CACHE[key] = sampler
+    return sampler
+
+
+def _maxent_set_count_training_examples(
+    cfg: V20Config,
+    vocab: V20Vocab,
+    text: str,
+    split: CorpusSplit,
+    pool: NeedlePool,
+    rng: random.Random,
+) -> list[V20Example]:
+    sampler = _joint_set_count_sampler(cfg, text, split, pool)
+    selections = rng.choices(
+        range(len(sampler.cells)),
+        weights=sampler.probabilities,
+        k=cfg.batch_size,
+    )
+    examples: list[V20Example] = []
+    for selected in selections:
+        set_index, target_count = sampler.cells[selected]
+        starts = sampler.starts[(set_index, target_count)]
+        start = int(starts[rng.randrange(len(starts))])
+        example = make_v20_example(
+            cfg,
+            vocab,
+            text,
+            split,
+            pool,
+            rng,
+            region_name="train",
+            initial_start=start,
+            needle_set=pool.sets[set_index],
+        )
+        if int(example.count or 0) != target_count:
+            raise RuntimeError("joint sampler start index produced the wrong count")
+        examples.append(example)
+    return examples
+
+
 def _training_batch(
     cfg: V20Config,
     vocab: V20Vocab,
@@ -748,6 +1267,16 @@ def _training_batch(
     *,
     require_task: bool = False,
 ) -> tuple[list[V20Example], list[V20Rendered]]:
+    if cfg.training_count_distribution == "maxent_set_count":
+        examples = _maxent_set_count_training_examples(
+            cfg,
+            vocab,
+            text,
+            split,
+            pool,
+            rng,
+        )
+        return examples, [render_v20(example, vocab, mode) for example in examples]
     if cfg.training_count_distribution == "uniform":
         # Draw the desired semantic counts first, then fill all count buckets
         # from one shared stream of natural candidates.  Sharing rejected
@@ -909,6 +1438,7 @@ def _empty_sampling_state(cfg: V20Config) -> dict[str, Any]:
         "proposed_counts": {},
         "frequency_bins": {},
         "set_ids": {},
+        "set_count_cells": {},
     }
 
 
@@ -931,6 +1461,7 @@ def _load_sampling_state(run_dir: Path, position_encoding: str, mode: str, step:
 def _update_sampling_state(
     state: dict[str, Any], examples: list[V20Example], active_by_example: np.ndarray
 ) -> None:
+    state.setdefault("set_count_cells", {})
     for example, active_tokens in zip(examples, active_by_example):
         state["examples"] += 1
         state["active_tokens"] += int(active_tokens)
@@ -950,6 +1481,10 @@ def _update_sampling_state(
         ):
             key = str(value)
             state[name][key] = int(state[name].get(key, 0)) + 1
+        cell_key = f"{example.set_id}|{int(example.count or 0)}"
+        state["set_count_cells"][cell_key] = (
+            int(state["set_count_cells"].get(cell_key, 0)) + 1
+        )
 
 
 def _write_evaluations(
@@ -1213,6 +1748,20 @@ def train_v20_variant(
             f"refusing to overwrite existing checkpoints in {root}; "
             "use --skip-completed to resume or choose a new run name"
         )
+    if cfg.training_count_distribution == "maxent_set_count":
+        sampler = _joint_set_count_sampler(cfg, text, split, pool)
+        plan_path = run_dir / "tables" / "training_set_count_sampler_plan.csv"
+        atomic_csv(sampler.plan, plan_path)
+        feasible = int(sampler.plan["feasible"].sum())
+        print(
+            "[sampler] maxent_set_count "
+            f"feasible_cells={feasible}/{len(sampler.plan)} "
+            f"max_set_error="
+            f"{float((sampler.plan.groupby('set_id').target_probability.sum() - 1.0 / len(pool.sets)).abs().max()):.3e} "
+            f"max_count_error="
+            f"{float((sampler.plan.groupby('count').target_probability.sum() - 1.0 / cfg.count_max_threshold).abs().max()):.3e}",
+            flush=True,
+        )
     model = paired_v20_model(cfg, vocab, position_encoding)
     optimizer = AdamW(
         model.parameters(), lr=cfg.lr, betas=(cfg.adam_beta1, cfg.adam_beta2), weight_decay=cfg.weight_decay
@@ -1295,11 +1844,68 @@ def train_v20_variant(
         )
         ids, labels, attention_mask = collate_v20(rendered, vocab, cfg.device)
         loss_weights = collate_v20_loss_weights(rendered, cfg, cfg.device, step=step)
+        rollin_probability = scheduled_sampling_probability(cfg, step, mode)
+        model_input_ids = ids
+        rollin_stats: dict[str, float | int] = {
+            "eligible_tokens": 0,
+            "selected_tokens": 0,
+            "changed_tokens": 0,
+            "changed_fraction": 0.0,
+        }
+        if rollin_probability > 0.0:
+            with _autocast_context(cfg):
+                model_input_ids, rollin_stats = scheduled_sampling_inputs(
+                    model,
+                    ids,
+                    attention_mask,
+                    rendered,
+                    rollin_probability,
+                )
+        contrastive_active = (
+            loss_phase == "task_output"
+            and cfg.answer_query_contrastive_weight > 0
+        )
         with _autocast_context(cfg):
-            output = model(input_ids=ids, attention_mask=attention_mask)
-            loss, token_losses, active = shifted_v20_token_losses(
+            output = model(
+                input_ids=model_input_ids,
+                attention_mask=attention_mask,
+                output_hidden_states=contrastive_active,
+            )
+            token_weighted_loss, token_losses, active = shifted_v20_token_losses(
                 output.logits, labels, loss_weights
             )
+            component_reduction_active = (
+                loss_phase == "task_output"
+                and cfg.task_output_loss_reduction == "component_normalized"
+            )
+            if component_reduction_active:
+                loss, objective_region_losses = component_normalized_task_output_loss(
+                    token_losses,
+                    active,
+                    loss_weights,
+                    rendered,
+                    cfg,
+                )
+            else:
+                loss = token_weighted_loss
+                objective_region_losses = {}
+            if contrastive_active:
+                if output.hidden_states is None:
+                    raise RuntimeError(
+                        "answer-query contrastive loss requires hidden states"
+                    )
+                contrastive_loss = answer_query_supervised_contrastive_loss(
+                    model.final_norm(output.hidden_states[-1]),
+                    rendered,
+                    temperature=cfg.answer_query_contrastive_temperature,
+                )
+                loss = (
+                    loss
+                    + float(cfg.answer_query_contrastive_weight)
+                    * contrastive_loss
+                )
+            else:
+                contrastive_loss = None
         active_by_example = active.sum(dim=1).detach().cpu().numpy()
         _update_sampling_state(sampling_state, examples, active_by_example)
         optimizer.zero_grad(set_to_none=True)
@@ -1341,6 +1947,31 @@ def train_v20_variant(
                     )
                 )
             )
+            if component_reduction_active:
+                coefficient_denominator = (
+                    float(cfg.task_output_count_weight)
+                    + float(cfg.task_output_structure_weight)
+                    + (
+                        float(cfg.task_output_trace_weight)
+                        if "trace" in objective_region_losses
+                        else 0.0
+                    )
+                )
+                final_count_coefficient_share = (
+                    float(cfg.task_output_count_weight) / coefficient_denominator
+                )
+                trace_coefficient_share = (
+                    float(cfg.task_output_trace_weight) / coefficient_denominator
+                    if "trace" in objective_region_losses
+                    else 0.0
+                )
+                structure_coefficient_share = (
+                    float(cfg.task_output_structure_weight) / coefficient_denominator
+                )
+            else:
+                final_count_coefficient_share = float("nan")
+                trace_coefficient_share = float("nan")
+                structure_coefficient_share = float("nan")
             row: dict[str, Any] = {
                 "step": step,
                 "position_encoding": position_encoding,
@@ -1351,6 +1982,55 @@ def train_v20_variant(
                 "batch_active_weight_sum": active_weight_sum,
                 "batch_final_count_weight_share": final_count_weight_sum / max(1.0, active_weight_sum),
                 "batch_cot_trace_weight_share": trace_weight_sum / max(1.0, active_weight_sum),
+                "batch_final_count_token_weight_share": final_count_weight_sum
+                / max(1.0, active_weight_sum),
+                "batch_cot_trace_token_weight_share": trace_weight_sum
+                / max(1.0, active_weight_sum),
+                "task_output_loss_reduction": cfg.task_output_loss_reduction,
+                "component_reduction_active": component_reduction_active,
+                "answer_query_contrastive_active": contrastive_active,
+                "train_answer_query_contrastive_loss": (
+                    float(contrastive_loss.detach().cpu())
+                    if contrastive_loss is not None
+                    else float("nan")
+                ),
+                "answer_query_contrastive_weight": float(
+                    cfg.answer_query_contrastive_weight
+                ),
+                "answer_query_contrastive_temperature": float(
+                    cfg.answer_query_contrastive_temperature
+                ),
+                "scheduled_sampling_probability": rollin_probability,
+                "scheduled_sampling_eligible_tokens": int(
+                    rollin_stats["eligible_tokens"]
+                ),
+                "scheduled_sampling_selected_tokens": int(
+                    rollin_stats["selected_tokens"]
+                ),
+                "scheduled_sampling_changed_tokens": int(
+                    rollin_stats["changed_tokens"]
+                ),
+                "scheduled_sampling_changed_fraction": float(
+                    rollin_stats["changed_fraction"]
+                ),
+                "batch_final_count_region_coefficient_share": final_count_coefficient_share,
+                "batch_trace_region_coefficient_share": trace_coefficient_share,
+                "batch_structure_region_coefficient_share": structure_coefficient_share,
+                "train_objective_final_count_region_mean_loss": float(
+                    objective_region_losses["final_count"].detach().cpu()
+                )
+                if "final_count" in objective_region_losses
+                else float("nan"),
+                "train_objective_trace_region_mean_loss": float(
+                    objective_region_losses["trace"].detach().cpu()
+                )
+                if "trace" in objective_region_losses
+                else float("nan"),
+                "train_objective_structure_region_mean_loss": float(
+                    objective_region_losses["structure"].detach().cpu()
+                )
+                if "structure" in objective_region_losses
+                else float("nan"),
                 "training_loss_phase": loss_phase,
                 "language_prediction_enabled": loss_phase == "all_sequence",
                 "batch_objective_active_tokens": objective_active_tokens,
@@ -1377,11 +2057,18 @@ def train_v20_variant(
                 ["position_encoding", "mode", "step"],
             )
             progress.set_postfix(loss=f"{loss.item():.4f}", task=f"{is_task.mean():.2f}")
+            rollin_suffix = (
+                f" rollin_p={rollin_probability:.3f} "
+                f"rollin_changed={int(rollin_stats['changed_tokens'])}/"
+                f"{int(rollin_stats['eligible_tokens'])}"
+                if rollin_probability > 0.0
+                else ""
+            )
             print(
                 f"[train] {position_encoding}/{mode} "
                 f"step={step}/{cfg.train_steps} loss={loss.item():.4f} "
                 f"lr={rate:.3e} grad_norm={gradient_norm:.3f} "
-                f"task_ratio={is_task.mean():.2f}",
+                f"task_ratio={is_task.mean():.2f}{rollin_suffix}",
                 flush=True,
             )
         if step % cfg.eval_every == 0 or step == cfg.train_steps:
@@ -1496,14 +2183,18 @@ def train_v20_variant(
 def summarize_learning_tables(run_dir: Path) -> None:
     detail = _read_table(run_dir / "tables" / "eval_detail.csv")
     if not detail.empty:
+        tf_aggregations: dict[str, tuple[str, str]] = {
+            "tf_final_accuracy": ("tf_final_accuracy", "mean"),
+            "tf_trace_marker_accuracy": ("tf_trace_marker_accuracy", "mean"),
+            "tf_trace_index_accuracy": ("tf_trace_index_accuracy", "mean"),
+            "frequency_baseline_accuracy": ("frequency_baseline_accuracy", "mean"),
+        }
+        for name in ("tf_trace_query_accuracy", "tf_trace_delimiter_accuracy"):
+            if name in detail:
+                tf_aggregations[name] = (name, "mean")
         by_count = detail.groupby(
             ["position_encoding", "mode", "step", "count", "count_bin"], as_index=False
-        ).agg(
-            tf_final_accuracy=("tf_final_accuracy", "mean"),
-            tf_trace_marker_accuracy=("tf_trace_marker_accuracy", "mean"),
-            tf_trace_index_accuracy=("tf_trace_index_accuracy", "mean"),
-            frequency_baseline_accuracy=("frequency_baseline_accuracy", "mean"),
-        )
+        ).agg(**tf_aggregations)
         atomic_csv(by_count, run_dir / "tables" / "eval_by_count.csv")
         by_set = detail.groupby(
             ["position_encoding", "mode", "step", "set_id", "set_frequency_bin"], as_index=False
@@ -1519,18 +2210,27 @@ def summarize_learning_tables(run_dir: Path) -> None:
             )
         if "trace_ordered_marker_accuracy" not in ar:
             ar["trace_ordered_marker_accuracy"] = ar["trace_marker_recall"]
+        ar_aggregations: dict[str, tuple[str, str]] = {
+            "ar_final_accuracy": ("ar_accuracy", "mean"),
+            "ar_answer_rate": ("ar_answered", "mean"),
+            "ar_abs_error_answered_only": ("ar_abs_error", "mean"),
+            "ar_abs_error": ("ar_abs_error", "mean"),
+            "ar_abs_error_with_missing_penalty": ("ar_abs_error_with_missing_penalty", "mean"),
+            "trace_exact": ("trace_exact", "mean"),
+            "trace_ordered_marker_accuracy": ("trace_ordered_marker_accuracy", "mean"),
+            "trace_marker_recall": ("trace_marker_recall", "mean"),
+        }
+        for name in (
+            "trace_marker_count_accuracy",
+            "trace_format_valid",
+            "trace_closed",
+            "trace_delimiter_count_accuracy",
+        ):
+            if name in ar:
+                ar_aggregations[name] = (name, "mean")
         summary = ar.groupby(
             ["position_encoding", "mode", "step", "count"], as_index=False
-        ).agg(
-            ar_final_accuracy=("ar_accuracy", "mean"),
-            ar_answer_rate=("ar_answered", "mean"),
-            ar_abs_error_answered_only=("ar_abs_error", "mean"),
-            ar_abs_error=("ar_abs_error", "mean"),
-            ar_abs_error_with_missing_penalty=("ar_abs_error_with_missing_penalty", "mean"),
-            trace_exact=("trace_exact", "mean"),
-            trace_ordered_marker_accuracy=("trace_ordered_marker_accuracy", "mean"),
-            trace_marker_recall=("trace_marker_recall", "mean"),
-        )
+        ).agg(**ar_aggregations)
         atomic_csv(summary, run_dir / "tables" / "autoregressive_by_count.csv")
     final_ar = _read_table(run_dir / "tables" / "final_autoregressive_detail.csv")
     if not final_ar.empty:
@@ -1538,20 +2238,29 @@ def summarize_learning_tables(run_dir: Path) -> None:
             final_ar["ar_answered"] = final_ar["ar_pred_count"].notna().astype(float)
         if "trace_ordered_marker_accuracy" not in final_ar:
             final_ar["trace_ordered_marker_accuracy"] = final_ar["trace_marker_recall"]
-        final_by_count = final_ar.groupby(
-            ["position_encoding", "mode", "step", "count"], as_index=False
-        ).agg(
-            examples=("ar_accuracy", "size"),
-            ar_final_accuracy=("ar_accuracy", "mean"),
-            ar_answer_rate=("ar_answered", "mean"),
-            ar_abs_error_answered_only=("ar_abs_error", "mean"),
-            ar_abs_error_with_missing_penalty=(
+        final_aggregations: dict[str, tuple[str, str]] = {
+            "examples": ("ar_accuracy", "size"),
+            "ar_final_accuracy": ("ar_accuracy", "mean"),
+            "ar_answer_rate": ("ar_answered", "mean"),
+            "ar_abs_error_answered_only": ("ar_abs_error", "mean"),
+            "ar_abs_error_with_missing_penalty": (
                 "ar_abs_error_with_missing_penalty",
                 "mean",
             ),
-            trace_exact=("trace_exact", "mean"),
-            trace_ordered_marker_accuracy=("trace_ordered_marker_accuracy", "mean"),
-        )
+            "trace_exact": ("trace_exact", "mean"),
+            "trace_ordered_marker_accuracy": ("trace_ordered_marker_accuracy", "mean"),
+        }
+        for name in (
+            "trace_marker_count_accuracy",
+            "trace_format_valid",
+            "trace_closed",
+            "trace_delimiter_count_accuracy",
+        ):
+            if name in final_ar:
+                final_aggregations[name] = (name, "mean")
+        final_by_count = final_ar.groupby(
+            ["position_encoding", "mode", "step", "count"], as_index=False
+        ).agg(**final_aggregations)
         atomic_csv(final_by_count, run_dir / "tables" / "final_autoregressive_by_count.csv")
 
         rows: list[dict[str, Any]] = []
@@ -1583,6 +2292,16 @@ def summarize_learning_tables(run_dir: Path) -> None:
                     "trace_ordered_marker_accuracy": float(
                         group["trace_ordered_marker_accuracy"].mean()
                     ),
+                    **{
+                        name: float(group[name].mean())
+                        for name in (
+                            "trace_marker_count_accuracy",
+                            "trace_format_valid",
+                            "trace_closed",
+                            "trace_delimiter_count_accuracy",
+                        )
+                        if name in group
+                    },
                 }
             )
         atomic_csv(
@@ -1594,8 +2313,14 @@ def summarize_learning_tables(run_dir: Path) -> None:
         rows: list[dict[str, Any]] = []
         for _, item in final.iterrows():
             state = json.loads(item["cumulative_sampling_json"])
-            for dimension in ("accepted_counts", "proposed_counts", "frequency_bins", "set_ids"):
-                for value, count in state[dimension].items():
+            for dimension in (
+                "accepted_counts",
+                "proposed_counts",
+                "frequency_bins",
+                "set_ids",
+                "set_count_cells",
+            ):
+                for value, count in state.get(dimension, {}).items():
                     rows.append(
                         {
                             "position_encoding": item.position_encoding,

@@ -354,9 +354,34 @@ def run_routing(
 
 
 def retrieval_ranking(run_dir: Path) -> list[tuple[int, int]]:
-    frame = pd.read_csv(run_dir / "analysis/v10_port/tables/head_rankings.csv")
-    selected = frame[frame["role"] == "thinking_targeted"].sort_values("rank")
-    return [(int(row.layer), int(row.head)) for row in selected.itertuples(index=False)]
+    candidates = (
+        (
+            run_dir / "analysis/v10_port/tables/head_rankings.csv",
+            ("thinking_targeted", "targeted_retrieval"),
+        ),
+        (
+            run_dir / "analysis/phase_transition/tables/fixed_head_rankings.csv",
+            ("targeted_retrieval", "thinking_targeted"),
+        ),
+    )
+    attempted: list[str] = []
+    for path, role_names in candidates:
+        attempted.append(str(path))
+        if not path.exists():
+            continue
+        frame = pd.read_csv(path)
+        if not {"role", "rank", "layer", "head"}.issubset(frame.columns):
+            continue
+        selected = frame[frame["role"].isin(role_names)].sort_values("rank")
+        if not selected.empty:
+            return [
+                (int(row.layer), int(row.head))
+                for row in selected.itertuples(index=False)
+            ]
+    raise FileNotFoundError(
+        "No usable targeted-retrieval head ranking was found; checked: "
+        + ", ".join(attempted)
+    )
 
 
 def prepare_retrieval_pairs(
@@ -652,7 +677,7 @@ def cached_prefix_forward(
         hidden = hidden + projected
         hidden = hidden + layer.mlp(layer.ln_mlp(hidden))
         caches.append((key, value))
-    logits = F.linear(model.final_norm(hidden), model.token_embedding.weight)
+    logits = F.linear(model.final_norm(hidden), model.unembedding_weight)
     return logits, caches
 
 
@@ -696,7 +721,7 @@ def cached_incremental_forward(
         hidden = hidden + projected
         hidden = hidden + layer.mlp(layer.ln_mlp(hidden))
         updated.append((all_key, all_value))
-    logits = F.linear(model.final_norm(hidden), model.token_embedding.weight)
+    logits = F.linear(model.final_norm(hidden), model.unembedding_weight)
     return logits, updated
 
 

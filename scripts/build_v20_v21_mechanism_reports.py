@@ -982,7 +982,7 @@ def build_report(run_dir: Path) -> Path:
         )
         attention_dynamics_section = f"""
         <h3>7.1 可拖动 checkpoint 的 4×4 head-role 图</h3>
-        <div class="definition"><strong>Broad attention score。</strong>在最终 <code>&lt;Ans&gt;</code> query，先令 M<sub>h</sub>=Σ<sub>j∈needles</sub>A<sub>h</sub>(Ans,j) 为该 head 落在全部 target occurrences 上的总质量；再令 H<sub>h</sub>=−Σp<sub>j</sub>log p<sub>j</sub>/log n，其中 p<sub>j</sub>=A<sub>h</sub>(Ans,j)/M<sub>h</sub>。定义 B<sub>h</sub>=M<sub>h</sub>H<sub>h</sub>。它同时要求“注意 needle 集合”与“在 n 个 occurrences 间广泛覆盖”，范围 0–1。Targeted 与 successor-like 分数分别沿用第 6.2 与第 6.1 节定义。四个固定 head 均在独立 selection split 的 final checkpoint 选出；滑动曲线使用不重叠 reporting split。</div>
+        <div class="definition"><strong>Broad attention score。</strong>在最终 <code>&lt;Ans&gt;</code> query，先令 M<sub>h</sub>=Σ<sub>j∈needles</sub>A<sub>h</sub>(Ans,j) 为该 head 落在全部 target occurrences 上的总质量；再令 p<sub>j</sub>=A<sub>h</sub>(Ans,j)/M<sub>h</sub>，H<sub>h</sub>=−Σp<sub>j</sub>log p<sub>j</sub>，effective coverage C<sub>h</sub>=exp(H<sub>h</sub>)/n。定义 B<sub>h</sub>=M<sub>h</sub>C<sub>h</sub>。它同时要求“注意 needle 集合”与“在 n 个 occurrences 间广泛覆盖”；均匀覆盖 K 个 occurrence 时 C=K/n，n=1 且 M&gt;0 时 C=1。归一化 entropy H/log n 另列为 diagnostic，不再用于 broad head 排名。Targeted 与 successor-like 分数分别沿用第 6.2 与第 6.1 节定义。四个固定 head 均在独立 selection split 的 final checkpoint 选出；滑动曲线使用不重叠 reporting split。</div>
         {table(["角色", "固定 head", "step 0", "step 1,500", "step 10,000"], attention_final_rows)}
         {attention_embed}
         <p>拖动上方 training-step 控件可逐个查看 101 个 checkpoints。每个 panel 的 4 行是 Layer 1–4，4 列是 Head 0–3，格内数字是原始 role score；黑框是最终固定 head。各 panel 独立设色标以免 broad score 被强 retrieval mass 淹没，因此跨 panel 必须比较数字而不是颜色深浅。下方折线统一使用 0–1 纵轴，显示四个固定 head 的原始分数。</p>
