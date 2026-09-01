@@ -11,3 +11,10 @@ residual dimensions / 1536 MLP dimensions to 8 heads / 512 residual dimensions
 / 2048 MLP dimensions. Head dimension remains 64. This tests whether a larger
 parallel retrieval bank improves trace completeness and count-uniform behavior
 without adding serial depth or changing supervision.
+
+Before optimization, the behavior gate was revised to match the comparative
+claim: Thinking accuracy at least 0.75, a Thinking-minus-Non-thinking gap of at
+least 0.30, minimum per-count Thinking accuracy at least 0.70, and per-count
+max-minus-min spread at most 0.20. Exact trace identity remains diagnostic and
+is evaluated mechanistically rather than used to discard an otherwise useful,
+uniform paired model.

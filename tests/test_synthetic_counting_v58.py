@@ -7,6 +7,7 @@ from synthetic_counting_v20.data import V20Example, V20Vocab, character_token, r
 from synthetic_counting_v20.model import build_model
 from synthetic_counting_v57.config import preset_config as preset_v57
 from synthetic_counting_v58.config import preset_config as preset_v58
+from synthetic_counting_v58.behavior_gate import GATE_THRESHOLDS
 from synthetic_counting_v58.preflight import run_preflight
 
 
@@ -70,3 +71,12 @@ def test_v58_trace_serialization_is_identical_to_v57() -> None:
 
 def test_v58_preflight_is_exposed() -> None:
     assert callable(run_preflight)
+
+
+def test_v58_gate_is_comparative_and_count_uniform() -> None:
+    assert GATE_THRESHOLDS == {
+        "thinking_accuracy_min": 0.75,
+        "thinking_min_count_accuracy_min": 0.70,
+        "thinking_count_spread_max": 0.20,
+        "thinking_minus_nonthinking_gap_min": 0.30,
+    }
