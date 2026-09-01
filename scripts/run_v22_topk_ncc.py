@@ -329,6 +329,9 @@ def _evaluate_condition(
         metrics, _selections, selected_layer = evaluate_geometry_dataset(
             combine_splits(discovery[endpoint], confirmation[endpoint]),
             endpoint=endpoint,
+            classes=tuple(
+                range(int(cfg.count_min), int(cfg.count_max_threshold) + 1)
+            ),
         )
         metrics.insert(0, "comparison_mode", spec.label)
         metrics.insert(1, "scope", scope)
