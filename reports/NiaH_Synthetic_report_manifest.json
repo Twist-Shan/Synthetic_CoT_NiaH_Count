@@ -1,10 +1,10 @@
 {
   "schema_version": "v58_synthetic_report_v1",
   "report": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\reports\\NiaH_Synthetic_report.html",
-  "report_sha256": "45b08fa2b5e716e99d3663c87e09fc2f9da8d6149080401abb0ab0bc32392246",
+  "report_sha256": "1478e77b461632433c36f84afd76ebb2e492a6c37dfbb2422bce930a7c0fcd80",
   "primary_comparison": "independently trained v58 separator/no-index Thinking vs v58 Non-thinking",
   "run": "v58_final",
-  "code_commit": "f11ca567d3b77e39859a19923d31c26d1a12bcae",
+  "code_commit": "c3edab70022b90f0b43ce621a34ca89117504407",
   "behavior_gate": {
     "schema_version": "v58_independent_behavior_confirmation_v1",
     "thresholds": {
