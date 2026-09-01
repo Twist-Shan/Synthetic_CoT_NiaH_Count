@@ -1,21 +1,114 @@
 {
+  "schema_version": "v58_synthetic_report_v1",
   "report": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\reports\\NiaH_Synthetic_report.html",
-  "primary_comparison": "v22 separator/no-index Thinking vs matched v20 Non-thinking",
+  "report_sha256": "45b08fa2b5e716e99d3663c87e09fc2f9da8d6149080401abb0ab0bc32392246",
+  "primary_comparison": "independently trained v58 separator/no-index Thinking vs v58 Non-thinking",
+  "run": "v58_final",
+  "code_commit": "f11ca567d3b77e39859a19923d31c26d1a12bcae",
+  "behavior_gate": {
+    "schema_version": "v58_independent_behavior_confirmation_v1",
+    "thresholds": {
+      "thinking_accuracy_min": 0.75,
+      "thinking_min_count_accuracy_min": 0.7,
+      "thinking_count_spread_max": 0.2,
+      "thinking_minus_nonthinking_gap_min": 0.3
+    },
+    "metrics": {
+      "thinking_accuracy": 0.9625,
+      "nonthinking_accuracy": 0.18,
+      "thinking_minus_nonthinking_gap": 0.7825,
+      "thinking_min_count_accuracy": 0.9,
+      "thinking_count_spread": 0.09999999999999998,
+      "thinking_trace_exact": 0.8715,
+      "thinking_per_count_accuracy": {
+        "1": 1.0,
+        "2": 1.0,
+        "3": 0.98,
+        "4": 0.99,
+        "5": 0.97,
+        "6": 0.975,
+        "7": 0.94,
+        "8": 0.915,
+        "9": 0.9,
+        "10": 0.955
+      },
+      "nonthinking_per_count_accuracy": {
+        "1": 0.5,
+        "2": 0.195,
+        "3": 0.155,
+        "4": 0.06,
+        "5": 0.065,
+        "6": 0.05,
+        "7": 0.095,
+        "8": 0.06,
+        "9": 0.095,
+        "10": 0.525
+      }
+    },
+    "checks": {
+      "thinking_accuracy": true,
+      "thinking_min_count_accuracy": true,
+      "thinking_count_spread": true,
+      "thinking_minus_nonthinking_gap": true
+    },
+    "passed": true,
+    "trace_policy": "diagnostic only; not a behavioral gate"
+  },
+  "dynamics_statistics": {
+    "final_targeted_mass": 0.42201546743758794,
+    "first_targeted_50pct_step": 4600,
+    "first_targeted_80pct_step": 5900,
+    "final_targeted_top4_share": 0.5041804103629064,
+    "final_broad_top4_share": 0.47872511500817877,
+    "final_targeted_jaccard": 0.6,
+    "final_broad_jaccard": 0.3333333333333333
+  },
   "figures": {
-    "clean": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\reports\\NiaH_Synthetic_report_assets\\clean_ncc_comparison.png",
-    "tf_topk": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\reports\\NiaH_Synthetic_report_assets\\teacher_forced_topk_ncc.png",
-    "fr_topk": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\reports\\NiaH_Synthetic_report_assets\\free_running_topk.png",
-    "answer": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\reports\\NiaH_Synthetic_report_assets\\free_running_answer_transplant.png",
-    "progress": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\reports\\NiaH_Synthetic_report_assets\\free_running_progress_sufficiency.png",
-    "dynamics": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\reports\\NiaH_Synthetic_report_assets\\aligned_head_bank_training_dynamics.png",
-    "v22_roles": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\work\\v22_training_dynamics\\figures__dense_fixed_head_emergence.png",
-    "v22_causal": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\work\\v22_training_dynamics\\figures__milestone_local_head_causality.png"
+    "behavior": {
+      "path": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\reports\\NiaH_Synthetic_report_assets\\v58_behavior_confirmation.png",
+      "sha256": "56ae6427b8d33e0d87a29e7ac66db2238292e8c610014ac00e2ff75e5fa35237"
+    },
+    "geometry": {
+      "path": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\reports\\NiaH_Synthetic_report_assets\\v58_clean_geometry.png",
+      "sha256": "e489d98438eb301d5719df497ed336e0e5430cf4ad792fa2275d82b0003b70d6"
+    },
+    "roles": {
+      "path": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\reports\\NiaH_Synthetic_report_assets\\v58_role_specialization.png",
+      "sha256": "b3322f97a71b6458c21e8e4547b7cb69d01159e1755d16a1a06de92e6de1c614"
+    },
+    "topk": {
+      "path": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\reports\\NiaH_Synthetic_report_assets\\v58_topk_causal.png",
+      "sha256": "9ed832706647433eb3bebb84dd0cf4b87860c3021f714459703ce02fbd2b4f0c"
+    },
+    "sufficiency": {
+      "path": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\reports\\NiaH_Synthetic_report_assets\\v58_free_running_sufficiency.png",
+      "sha256": "acbb302ee3133d04c6aa50f3b74add8d512ee4421753db7e3dabb67dce69632e"
+    },
+    "dynamics": {
+      "path": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\reports\\NiaH_Synthetic_report_assets\\v58_training_dynamics.png",
+      "sha256": "d212f2328f0a8e0b9aa626da999750496b65375b7855749181197a51aa378914"
+    }
   },
   "source_roots": {
-    "clean_ncc": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\work\\ncc_v22_thinking_vs_nonthinking",
-    "topk_ncc": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\work\\v22_topk_ncc",
-    "free_running_topk": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\work\\v22_free_running_topk",
-    "free_running_sufficiency": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\work\\v22_free_running_sufficiency",
-    "v22_training_dynamics": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\work\\v22_training_dynamics"
+    "run_archive": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\work\\v58_final",
+    "analysis": "C:\\Users\\HP\\Desktop\\Research\\UWM Yiqiao Zhong\\CoT for Counting\\Synthetic_NiaH_like_Count\\work\\v58_final\\analysis"
+  },
+  "input_hashes": {
+    "work\\v58_final\\config.json": "67d0d442fc0248cfba7cc85fd23fd5904da8cb58d9f7d8584f04901ab56357f1",
+    "work\\v58_final\\analysis\\behavior_confirmation_v58\\autoregressive_summary.csv": "fbfa558a8f2b9b18b09de8aeb99f533a25b8a985d1331e528dddefe64c812e3e",
+    "work\\v58_final\\analysis\\v58_clean_ncc\\selected_confirmation_summary.csv": "6c014af7ed2fd61d1ede4c99391b7ea6d318eab72623c8521cb1c02c943c3e31",
+    "work\\v58_final\\analysis\\v58_topk_ncc\\post_ablation_behavior.csv": "92951ad05bf7fd54ae8ad1ad173fabff0fbec4985e987c40ca225e81ddabc372",
+    "work\\v58_final\\analysis\\v58_free_running_topk\\free_running_summary.csv": "29a891f9504238ef042af891575865e7e4367ffa7fec7c2f29c92299831ce82f",
+    "work\\v58_final\\analysis\\v58_free_running_sufficiency\\answer_transplant_confirmation.csv": "5aabd851666d16162087ebd5289ed768bb0ef4256aef07f68efd0ca7c1be6202",
+    "work\\v58_final\\analysis\\phase_transition_audit\\tables\\high_power_ar_summary.csv": "bc6309024737134a1e9fea55bf06977e17d0b591685e4711a81808d6e4be1282"
+  },
+  "validation": {
+    "high_power_endpoint_matches_canonical": true,
+    "cached_vs_reference_generation": "10/10 exact for each mode at step 5000",
+    "self_contained_images": true,
+    "missing_reference_files": [
+      "C:/Users/HP/Downloads/plan.tex",
+      "C:/Users/HP/Downloads/LLM_Compression.pdf"
+    ]
   }
 }
