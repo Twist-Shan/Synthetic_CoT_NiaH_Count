@@ -1,0 +1,3 @@
+mode,ar_accuracy,trace_exact,trace_marker_count_accuracy
+nonthinking,0.21,,
+thinking,0.95,0.87,0.95

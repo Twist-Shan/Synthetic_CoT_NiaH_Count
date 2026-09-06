@@ -1,0 +1,7 @@
+mode,K,selected_answer,control_answer,selected_answered,control_answered,selected_minus_control_pp_95CI,selected_trace_exact,control_trace_exact
+nonthinking,1,0.22,0.17333333333333334,1.0,1.0,"4.67 [-4.33, 14.00]",,
+nonthinking,2,0.19,0.05,1.0,0.3433333333333333,"14.00 [7.00, 21.67]",,
+nonthinking,4,0.07,0.0,1.0,0.0,"7.00 [4.00, 10.00]",,
+thinking,1,0.95,0.9333333333333333,1.0,1.0,"1.67 [-0.67, 4.00]",0.8,0.7866666666666666
+thinking,2,0.91,0.91,1.0,1.0,"0.00 [-4.67, 5.00]",0.62,0.75
+thinking,4,0.86,0.91,1.0,1.0,"-5.00 [-9.00, -1.00]",0.51,0.74

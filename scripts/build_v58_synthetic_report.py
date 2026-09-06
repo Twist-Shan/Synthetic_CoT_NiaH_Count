@@ -25,6 +25,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from plotly.offline import get_plotlyjs
+from build_v58_commit_query_section import build_section as build_commit_query_section
+from build_v58_native_continuation_section import build_section as build_native_continuation_section
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -379,7 +382,8 @@ def _plot_ranked_control(
 def plot_topk(
     tf_behavior: pd.DataFrame,
     tf_ncc: pd.DataFrame,
-    free_running: pd.DataFrame,
+    targeted_free_running: pd.DataFrame,
+    broad_free_running: pd.DataFrame,
     path: Path,
 ) -> None:
     fig, axes = plt.subplots(2, 3, figsize=(15.2, 8.2))
@@ -392,14 +396,24 @@ def plot_topk(
     )
     _plot_ranked_control(
         axes[0, 1],
-        _arm_curve(free_running, mode="thinking", scope="role_query_local_free_running", metric="trace_exact"),
+        _arm_curve(
+            targeted_free_running,
+            mode="thinking",
+            scope="confirmation_role_query_local_free_running",
+            metric="trace_exact",
+        ),
         title="B · Free-running exact trace",
         ylabel="Exact rate",
         color=PURPLE,
     )
     _plot_ranked_control(
         axes[0, 2],
-        _arm_curve(free_running, mode="thinking", scope="role_query_local_free_running", metric="ar_final_accuracy"),
+        _arm_curve(
+            targeted_free_running,
+            mode="thinking",
+            scope="confirmation_role_query_local_free_running",
+            metric="ar_final_accuracy",
+        ),
         title="C · Thinking free-running final answer",
         ylabel="Exact accuracy",
         color=PURPLE,
@@ -434,7 +448,12 @@ def plot_topk(
     )
     _plot_ranked_control(
         axes[1, 2],
-        _arm_curve(free_running, mode="nonthinking", scope="role_query_local_free_running", metric="ar_final_accuracy"),
+        _arm_curve(
+            broad_free_running,
+            mode="nonthinking",
+            scope="confirmation_role_query_local_free_running",
+            metric="ar_final_accuracy",
+        ),
         title="F · Non-thinking broad-bank test",
         ylabel="Exact accuracy",
         color=ORANGE,
@@ -445,6 +464,449 @@ def plot_topk(
     fig.suptitle("Ranked Top-K necessity and clean-frozen post-ablation representation", y=1.01)
     fig.tight_layout()
     savefig(fig, path)
+
+
+def _paired_damage_ci(
+    detail: pd.DataFrame,
+    arm: str,
+    metric: str,
+    *,
+    bootstraps: int = 10_000,
+) -> tuple[float, float, float]:
+    clean = detail.loc[detail["arm"].eq("clean"), ["row_id", metric]].set_index("row_id")
+    damaged = detail.loc[detail["arm"].eq(arm), ["row_id", metric]].set_index("row_id")
+    paired = clean.join(damaged, lsuffix="_clean", rsuffix="_damaged", how="inner")
+    if len(paired) != len(clean) or len(paired) != len(damaged):
+        raise RuntimeError(f"unpaired successor rows: {arm}/{metric}")
+    differences = (
+        paired[f"{metric}_clean"].to_numpy(dtype=float)
+        - paired[f"{metric}_damaged"].to_numpy(dtype=float)
+    )
+    rng = np.random.default_rng(20260901)
+    indices = rng.integers(0, len(differences), size=(bootstraps, len(differences)))
+    samples = differences[indices].mean(axis=1)
+    return float(differences.mean()), float(np.quantile(samples, 0.025)), float(np.quantile(samples, 0.975))
+
+
+def plot_role_causal_separation(
+    successor_summary: pd.DataFrame,
+    successor_detail: pd.DataFrame,
+    path: Path,
+) -> None:
+    arms = [
+        "clean",
+        "targeted_top2",
+        "successor_top1",
+        "successor_same_layer_low_score",
+        "targeted_top2_plus_successor_top1",
+    ]
+    labels = ["Clean", "Targeted T2", "Successor T1", "L2 low-score\ncontrol", "Joint"]
+    colors = [GREY, PURPLE, ORANGE, BLUE, RED]
+    metrics = [
+        ("trace_ordered_marker_accuracy", "trace_ordered_marker_accuracy", "Ordered marker"),
+        ("trace_marker_count_accuracy", "trace_marker_count_accuracy", "Marker count"),
+        ("ar_final_accuracy", "ar_accuracy", "Final count"),
+    ]
+
+    fig, axes = plt.subplots(2, 2, figsize=(15.2, 8.5))
+    summary = successor_summary.set_index("arm").loc[arms]
+
+    ax = axes[0, 0]
+    x = np.arange(len(arms))
+    width = 0.23
+    for index, (summary_metric, _detail_metric, label) in enumerate(metrics):
+        values = summary[summary_metric].to_numpy(dtype=float)
+        ax.bar(x + (index - 1) * width, values, width, label=label)
+    ax.set(
+        title="A · Clean and intervened behavior",
+        xlabel="Intervention arm",
+        ylabel="Exact / token-weighted rate",
+        xticks=x,
+        xticklabels=labels,
+        ylim=(0, 1.06),
+    )
+    ax.legend(loc="lower left")
+    style_axis(ax)
+
+    ax = axes[0, 1]
+    intervention_arms = arms[1:]
+    intervention_labels = labels[1:]
+    x = np.arange(len(intervention_arms))
+    for index, (_summary_metric, detail_metric, label) in enumerate(metrics):
+        estimates = []
+        lower = []
+        upper = []
+        for arm in intervention_arms:
+            estimate, low, high = _paired_damage_ci(successor_detail, arm, detail_metric)
+            estimates.append(estimate)
+            lower.append(estimate - low)
+            upper.append(high - estimate)
+        ax.bar(
+            x + (index - 1) * width,
+            estimates,
+            width,
+            yerr=np.vstack([lower, upper]),
+            capsize=2.5,
+            label=label,
+        )
+    ax.axhline(0, color="#333333", linewidth=0.8)
+    ax.set(
+        title="B · Paired damage from clean (bootstrap 95% CI)",
+        xlabel="Intervention arm",
+        ylabel="Clean − intervened rate",
+        xticks=x,
+        xticklabels=intervention_labels,
+        ylim=(-0.05, 0.62),
+    )
+    ax.legend(loc="upper left")
+    style_axis(ax)
+
+    ax = axes[1, 0]
+    length_match = []
+    for arm in arms:
+        rows = successor_detail.loc[successor_detail["arm"].eq(arm)].copy()
+        valid = rows["ar_pred_count"].notna()
+        length_match.append(
+            float(
+                (
+                    rows.loc[valid, "ar_pred_count"].astype(float)
+                    == rows.loc[valid, "trace_generated_marker_count"].astype(float)
+                ).mean()
+            )
+        )
+    bars = ax.bar(np.arange(len(arms)), length_match, color=colors)
+    for bar, value in zip(bars, length_match, strict=True):
+        ax.text(bar.get_x() + bar.get_width() / 2, value + 0.006, f"{100*value:.1f}%", ha="center", fontsize=8)
+    ax.set(
+        title="C · Final answer follows generated trace length",
+        xlabel="Intervention arm",
+        ylabel="P(answer = generated marker count | answered)",
+        xticks=np.arange(len(arms)),
+        xticklabels=labels,
+        ylim=(0.9, 1.012),
+    )
+    style_axis(ax)
+
+    ax = axes[1, 1]
+    clean_by_count = (
+        successor_detail.loc[successor_detail["arm"].eq("clean")]
+        .groupby("count")["ar_accuracy"]
+        .mean()
+    )
+    line_arms = [
+        "targeted_top2",
+        "successor_top1",
+        "successor_same_layer_low_score",
+        "targeted_top2_plus_successor_top1",
+    ]
+    line_labels = ["Targeted T2", "Successor T1", "L2 low-score control", "Joint"]
+    line_colors = [PURPLE, ORANGE, BLUE, RED]
+    for arm, label, color in zip(line_arms, line_labels, line_colors, strict=True):
+        arm_by_count = successor_detail.loc[successor_detail["arm"].eq(arm)].groupby("count")["ar_accuracy"].mean()
+        damage = clean_by_count - arm_by_count
+        ax.plot(damage.index, damage.values, marker="o", linewidth=2, color=color, label=label)
+    ax.axhline(0, color="#333333", linewidth=0.8)
+    ax.set(
+        title="D · Final-count damage by gold count",
+        xlabel="Gold count",
+        ylabel="Clean − intervened accuracy",
+        xticks=np.arange(1, 11),
+        ylim=(-0.08, 0.96),
+    )
+    ax.legend(loc="upper left")
+    style_axis(ax)
+
+    fig.suptitle("Causal role separation: targeted content vs successor/cardinality", y=1.01)
+    fig.tight_layout()
+    savefig(fig, path)
+
+
+def geometry_projection_widget(cloud: pd.DataFrame) -> str:
+    """Build the v20-style 2x2 endpoint comparison in both 2D and 3D.
+
+    The preferred input is the discovery-fitted, confirmation-only export with
+    an explicit ``endpoint`` column.  The older phase-transition cloud is
+    accepted as a transparent fallback; it lacks the Non-thinking running
+    endpoint, which is rendered as unavailable rather than fabricated.
+    """
+
+    if "endpoint" in cloud.columns:
+        columns = ["endpoint", "layer", "sample", "k", "pc1", "pc2", "pc3"]
+        columns.extend(
+            column
+            for column in ("pc1_variance_ratio", "pc2_variance_ratio", "pc3_variance_ratio")
+            if column in cloud.columns
+        )
+        payload = cloud.loc[:, columns].copy()
+        source_label = "discovery-fitted PCA; held-out confirmation states"
+    else:
+        endpoint_map = {
+            ("nonthinking", "final_answer"): "nonthinking_answer_query",
+            ("thinking", "trace_marker"): "thinking_item_end",
+            ("thinking", "final_answer"): "thinking_answer_query",
+        }
+        final_step = int(cloud["step"].max())
+        payload = cloud.loc[cloud["step"].eq(final_step)].copy()
+        payload["endpoint"] = [
+            endpoint_map.get((str(mode), str(site)), "")
+            for mode, site in zip(payload["mode"], payload["site"], strict=True)
+        ]
+        payload = payload.loc[payload["endpoint"].ne(""), ["endpoint", "layer", "sample", "k", "pc1", "pc2", "pc3"]]
+        source_label = (
+            "phase-transition milestone fallback; Non-thinking running cloud "
+            "was not archived"
+        )
+    for column in ("pc1", "pc2", "pc3"):
+        payload[column] = payload[column].astype(float).round(6)
+    for column in ("layer", "sample", "k"):
+        payload[column] = payload[column].astype(int)
+    records = json.dumps(payload.to_dict(orient="records"), ensure_ascii=False, separators=(",", ":"))
+    plotly_runtime = "\n".join(line.rstrip() for line in get_plotlyjs().splitlines())
+    layer_options = (
+        '<option value="0">L0 · embedding output</option>'
+        '<option value="1">L1</option><option value="2" selected>L2</option>'
+        '<option value="3">L3</option><option value="4">L4</option>'
+    )
+    return (
+        '<div class="geometry-widget">'
+        '<div class="geometry-controls">'
+        f'<span class="geometry-source">{html.escape(source_label)}</span>'
+        '</div>'
+        '<h4 class="geometry-view-title"><span>2D comparison · PC1–PC2</span>'
+        f'<label class="geometry-layer-control">2D layer <select id="geometry-layer-2d">{layer_options}</select></label></h4>'
+        '<div id="geometry-2d" class="geometry-panel geometry-panel-2d" aria-label="Layer-selectable 2D PCA geometry comparison"></div>'
+        '<h4 class="geometry-view-title"><span>3D comparison · PC1–PC3</span>'
+        f'<label class="geometry-layer-control">3D layer <select id="geometry-layer-3d">{layer_options}</select></label>'
+        '<span class="geometry-interaction-hint">拖拽旋转 · 滚轮缩放 · 双击复位</span></h4>'
+        '<div id="geometry-3d" class="geometry-panel geometry-panel-3d" aria-label="Layer-selectable 3D PCA geometry comparison"></div>'
+        '</div>'
+        f'<script>{plotly_runtime}</script>'
+        f'<script>const V58_GEOMETRY_DATA={records};</script>'
+        + r"""
+<script>
+(function(){
+  const layer2d = document.getElementById('geometry-layer-2d');
+  const layer3d = document.getElementById('geometry-layer-3d');
+  const specs=[
+    {endpoint:'nonthinking_prompt_occurrence',title:'Non-thinking · running index',row:0,col:0},
+    {endpoint:'thinking_item_end',title:'Thinking · running index',row:0,col:1},
+    {endpoint:'nonthinking_answer_query',title:'Non-thinking · final count',row:1,col:0},
+    {endpoint:'thinking_answer_query',title:'Thinking · final count',row:1,col:1}
+  ];
+  function endpointRows(endpoint,layerValue){return V58_GEOMETRY_DATA.filter(d=>d.endpoint===endpoint&&d.layer===layerValue);}
+  function summarize(rows){
+    const grouped=new Map();
+    for(const row of rows){if(!grouped.has(row.k))grouped.set(row.k,[]);grouped.get(row.k).push(row);}
+    const ks=[...grouped.keys()].sort((a,b)=>a-b);
+    return ks.map(k=>{const g=grouped.get(k);return{k:k,x:g.reduce((s,d)=>s+d.pc1,0)/g.length,y:g.reduce((s,d)=>s+d.pc2,0)/g.length,z:g.reduce((s,d)=>s+d.pc3,0)/g.length};});
+  }
+  function axisTitle(rows,index,includeVariance=true){
+    const key=`pc${index}_variance_ratio`,value=rows.length?Number(rows[0][key]):NaN;
+    return includeVariance&&Number.isFinite(value)?`PC${index} (${(100*value).toFixed(1)}% discovery variance)`:`PC${index}`;
+  }
+  function axisName(prefix,index){return index===0?prefix:prefix+(index+1);}
+  function renderGeometry(){
+    const traces2d=[],traces3d=[],annotations2d=[],annotations3d=[];
+    const selected2d=Number(layer2d.value),selected3d=Number(layer3d.value);
+    const layout2d={title:{text:`Four aligned endpoints · L${selected2d}`,font:{size:16}},margin:{l:64,r:40,t:86,b:55},paper_bgcolor:'#fff',plot_bgcolor:'#fff',showlegend:true,legend:{orientation:'h',y:1.08,x:0}};
+    const layout3d={title:{text:`Four aligned endpoints · L${selected3d}`,font:{size:16}},margin:{l:0,r:0,t:86,b:0},paper_bgcolor:'#fff',showlegend:true,dragmode:'orbit',legend:{orientation:'h',y:1.08,x:0}};
+    const xdomains=[[0,.46],[.54,1],[0,.46],[.54,1]],ydomains=[[.56,1],[.56,1],[0,.44],[0,.44]];
+    specs.forEach((spec,index)=>{
+      const rows2d=endpointRows(spec.endpoint,selected2d),centers2d=summarize(rows2d);
+      const rows3d=endpointRows(spec.endpoint,selected3d),centers3d=summarize(rows3d);
+      const hover2d=rows2d.map(d=>`count/progress k=${d.k}<br>sample=${d.sample}<br>endpoint=${spec.title}<br>layer=L${selected2d}`);
+      const hover3d=rows3d.map(d=>`count/progress k=${d.k}<br>sample=${d.sample}<br>endpoint=${spec.title}<br>layer=L${selected3d}`);
+      const xref=axisName('x',index),yref=axisName('y',index),scene=index===0?'scene':'scene'+(index+1);
+      if(rows2d.length){
+        traces2d.push({type:'scattergl',mode:'markers',name:'held-out states',legendgroup:'states',showlegend:index===0,xaxis:xref,yaxis:yref,x:rows2d.map(d=>d.pc1),y:rows2d.map(d=>d.pc2),text:hover2d,hoverinfo:'text+x+y',marker:{size:6,opacity:.46,color:rows2d.map(d=>d.k),cmin:1,cmax:10,colorscale:'Viridis',showscale:index===3,colorbar:index===3?{title:'k',len:.40,y:.22}:undefined}});
+        traces2d.push({type:'scatter',mode:'lines+markers+text',name:'class centroids',legendgroup:'centroids',showlegend:index===0,xaxis:xref,yaxis:yref,x:centers2d.map(d=>d.x),y:centers2d.map(d=>d.y),text:centers2d.map(d=>String(d.k)),textposition:'top center',line:{color:'#c64e4e',width:2},marker:{size:8,color:centers2d.map(d=>d.k),cmin:1,cmax:10,colorscale:'Viridis',line:{color:'#17202a',width:1},showscale:false}});
+      }else{
+        annotations2d.push({xref:'paper',yref:'paper',x:(xdomains[index][0]+xdomains[index][1])/2,y:(ydomains[index][0]+ydomains[index][1])/2,text:'Not archived<br>requires final-checkpoint re-export',showarrow:false,font:{color:'#b94444',size:14}});
+      }
+      if(rows3d.length){
+        traces3d.push({type:'scatter3d',mode:'markers',name:'held-out states',legendgroup:'states3d',showlegend:index===0,scene:scene,x:rows3d.map(d=>d.pc1),y:rows3d.map(d=>d.pc2),z:rows3d.map(d=>d.pc3),text:hover3d,hoverinfo:'text+x+y+z',marker:{size:3.2,opacity:.46,color:rows3d.map(d=>d.k),cmin:1,cmax:10,colorscale:'Viridis',showscale:index===3,colorbar:index===3?{title:'k',len:.40,y:.22}:undefined}});
+        traces3d.push({type:'scatter3d',mode:'lines+markers+text',name:'class centroids',legendgroup:'centroids3d',showlegend:index===0,scene:scene,x:centers3d.map(d=>d.x),y:centers3d.map(d=>d.y),z:centers3d.map(d=>d.z),text:centers3d.map(d=>String(d.k)),textposition:'top center',line:{color:'#c64e4e',width:5},marker:{size:4.5,color:centers3d.map(d=>d.k),cmin:1,cmax:10,colorscale:'Viridis',line:{color:'#17202a',width:1},showscale:false}});
+      }else{
+        annotations3d.push({xref:'paper',yref:'paper',x:(xdomains[index][0]+xdomains[index][1])/2,y:(ydomains[index][0]+ydomains[index][1])/2,text:'Not archived<br>requires final-checkpoint re-export',showarrow:false,font:{color:'#b94444',size:14}});
+      }
+      const xlayout=index===0?'xaxis':'xaxis'+(index+1),ylayout=index===0?'yaxis':'yaxis'+(index+1);
+      layout2d[xlayout]={domain:xdomains[index],anchor:yref,title:{text:axisTitle(rows2d,1)},zeroline:false};
+      layout2d[ylayout]={domain:ydomains[index],anchor:xref,title:{text:axisTitle(rows2d,2)},zeroline:false};
+      layout3d[scene]={domain:{x:xdomains[index],y:ydomains[index]},xaxis:{title:{text:axisTitle(rows3d,1,false)}},yaxis:{title:{text:axisTitle(rows3d,2,false)}},zaxis:{title:{text:axisTitle(rows3d,3,false)}},aspectmode:'data'};
+      const titleY=spec.row===0?1.025:.465;
+      annotations2d.push({xref:'paper',yref:'paper',x:(xdomains[index][0]+xdomains[index][1])/2,y:titleY,text:`<b>${spec.title}</b>`,showarrow:false,font:{size:13}});
+      annotations3d.push({xref:'paper',yref:'paper',x:(xdomains[index][0]+xdomains[index][1])/2,y:titleY,text:`<b>${spec.title}</b>`,showarrow:false,font:{size:13}});
+    });
+    layout2d.annotations=annotations2d;layout3d.annotations=annotations3d;
+    Plotly.react('geometry-2d',traces2d,layout2d,{responsive:true,displaylogo:false});
+    Plotly.react('geometry-3d',traces3d,layout3d,{responsive:true,displaylogo:false,scrollZoom:true});
+  }
+  layer2d.addEventListener('change',renderGeometry);
+  layer3d.addEventListener('change',renderGeometry);
+  renderGeometry();
+})();
+</script>
+"""
+    )
+
+
+def plot_role_differentiation_heatmaps(
+    attention: pd.DataFrame,
+    broad_rankings: pd.DataFrame,
+    thinking_rankings: pd.DataFrame,
+    path: Path,
+) -> dict[str, float]:
+    ranking_by_role = {
+        "nonthinking_broad": broad_rankings,
+        "marker_successor": thinking_rankings,
+        "targeted_retrieval": thinking_rankings,
+    }
+    specs = [
+        ("nonthinking_broad", "Non-thinking broad retrieval"),
+        ("marker_successor", "Thinking marker successor"),
+        ("targeted_retrieval", "Thinking targeted retrieval"),
+    ]
+    steps = np.asarray(sorted(attention["step"].astype(int).unique()), dtype=float)
+    head_labels = [f"L{layer}H{head}" for layer in range(1, 5) for head in range(8)]
+    fig, axes = plt.subplots(3, 2, figsize=(15.2, 12.2), sharey=True)
+    statistics: dict[str, float] = {}
+    matrices: dict[str, np.ndarray] = {}
+    frozen_by_role: dict[str, list[tuple[int, int]]] = {}
+    for role, _title in specs:
+        role_rows = attention.loc[attention["role"].eq(role)].copy()
+        role_rankings = ranking_by_role[role].loc[ranking_by_role[role]["role"].eq(role)].sort_values("rank")
+        first = role_rankings.iloc[0]
+        second = role_rankings.iloc[1]
+        frozen_by_role[role] = [
+            (int(first["layer"]), int(first["head"])),
+            (int(second["layer"]), int(second["head"])),
+        ]
+        matrix_columns = []
+        for step in steps:
+            snapshot = role_rows.loc[role_rows["step"].eq(int(step))].sort_values(["layer", "head"])
+            values = snapshot["score"].to_numpy(float)
+            if len(values) != 32:
+                raise RuntimeError(f"{role} step {int(step)} has {len(values)} heads")
+            matrix_columns.append(values / max(float(values.sum()), 1e-12))
+        matrices[role] = np.column_stack(matrix_columns)
+        for rank_row, label_prefix in ((first, "rank1"), (second, "rank2")):
+            line = role_rows.loc[
+                role_rows["layer"].eq(int(rank_row["layer"]))
+                & role_rows["head"].eq(int(rank_row["head"]))
+            ].sort_values("step")
+            if label_prefix == "rank1":
+                final_score = float(line.iloc[-1]["score"])
+                statistics[f"{role}_rank1_final_score"] = final_score
+                statistics[f"{role}_rank1_first_50pct_step"] = float(
+                    line.loc[line["score"].ge(0.5 * final_score), "step"].iloc[0]
+                )
+                statistics[f"{role}_rank1_first_80pct_step"] = float(
+                    line.loc[line["score"].ge(0.8 * final_score), "step"].iloc[0]
+                )
+
+    vmax = max(float(matrix.max()) for matrix in matrices.values())
+    meshes = []
+    for row, (role, title) in enumerate(specs):
+        matrix = matrices[role]
+        frozen_labels = ", ".join(f"L{layer}H{head}" for layer, head in frozen_by_role[role])
+        for column, scale in enumerate(("linear", "log")):
+            ax = axes[row, column]
+            if scale == "linear":
+                centers = steps
+                edges = np.concatenate(([-50.0], (centers[:-1] + centers[1:]) / 2, [10050.0]))
+                switch = 1500.0
+                ax.set_xlim(-50, 10050)
+                ax.set_xticks([0, 1500, 3000, 5000, 7000, 10000], ["0", "1.5k", "3k", "5k", "7k", "10k"])
+                scale_title = "linear steps"
+            else:
+                centers = steps + 100.0
+                inner = np.sqrt(centers[:-1] * centers[1:])
+                edges = np.concatenate(([centers[0] ** 2 / inner[0]], inner, [centers[-1] ** 2 / inner[-1]]))
+                switch = 1600.0
+                ax.set_xscale("log")
+                ax.set_xlim(edges[0], edges[-1])
+                ticks = np.asarray([100, 200, 600, 1600, 3100, 5100, 10100], dtype=float)
+                ax.set_xticks(ticks, ["0", "100", "500", "1.5k", "3k", "5k", "10k"])
+                ax.minorticks_off()
+                scale_title = "log(step + 100)"
+            y_edges = np.arange(33) - 0.5
+            mesh = ax.pcolormesh(edges, y_edges, matrix, cmap="magma", vmin=0.0, vmax=vmax, shading="flat")
+            meshes.append(mesh)
+            ax.axvline(switch, color="white", linestyle=":", linewidth=1.1)
+            for boundary in (7.5, 15.5, 23.5):
+                ax.axhline(boundary, color="white", linewidth=0.7, alpha=0.72)
+            for rank, (head_layer, head) in enumerate(frozen_by_role[role], start=1):
+                y = (head_layer - 1) * 8 + head
+                ax.axhline(y, color="#56D7FF", linewidth=0.85, linestyle="-" if rank == 1 else "--", alpha=0.95)
+            ax.set_title(f"{title} · {scale_title}\nfrozen rank-1/2: {frozen_labels}", fontsize=10.2)
+            ax.set_xlabel("optimizer step" if scale == "linear" else "optimizer step + 100 (log scale)")
+            ax.set_yticks(np.arange(32), head_labels, fontsize=6.8)
+            ax.set_ylabel("attention head")
+    fig.suptitle("Head-bank differentiation over training: identical role-share heatmaps on linear and log axes", y=1.005)
+    fig.text(0.5, 0.982, "Each column within a panel sums to 1 across the same 32 heads; cyan lines mark frozen discovery rank-1/rank-2 heads", ha="center", va="top", fontsize=8.8, color="#444")
+    fig.tight_layout(rect=(0, 0, 0.94, 0.965), h_pad=1.7, w_pad=1.2)
+    colorbar_axis = fig.add_axes((0.955, 0.18, 0.012, 0.66))
+    colorbar = fig.colorbar(meshes[-1], cax=colorbar_axis)
+    colorbar.set_label("share of total role score")
+    savefig(fig, path)
+    return statistics
+
+
+def plot_geometry_emergence(
+    geometry_dynamics: pd.DataFrame,
+    selected_layers: dict,
+    path: Path,
+) -> dict[str, float]:
+    endpoints = [
+        (
+            "nonthinking",
+            "final_answer",
+            int(selected_layers["nonthinking"]["nonthinking_answer_query"]),
+            "Non-thinking final",
+            ORANGE,
+        ),
+        (
+            "thinking",
+            "trace_marker",
+            int(selected_layers["thinking"]["thinking_item_end"]),
+            "Thinking running",
+            BLUE,
+        ),
+        (
+            "thinking",
+            "final_answer",
+            int(selected_layers["thinking"]["thinking_answer_query"]),
+            "Thinking final",
+            PURPLE,
+        ),
+    ]
+    metrics = [
+        ("centroid_pc1_to_pc3_variance_fraction", "A · Variance captured by centroid PC1–PC3", "Variance fraction"),
+        ("centroid_effective_dimension", "B · Centroid effective dimension", "Effective dimension"),
+        ("path_straightness_chord_over_arc", "C · Count/progress path straightness", "Chord / arc length"),
+    ]
+    fig, axes = plt.subplots(1, 3, figsize=(15.4, 4.7))
+    statistics: dict[str, float] = {}
+    for ax, (metric, title, ylabel) in zip(axes, metrics, strict=True):
+        for mode, site, selected_layer, label, color in endpoints:
+            line = geometry_dynamics.loc[
+                geometry_dynamics["mode"].eq(mode)
+                & geometry_dynamics["site"].eq(site)
+                & geometry_dynamics["layer"].eq(selected_layer)
+            ].sort_values("step")
+            display_label = f"{label} · L{selected_layer}"
+            ax.plot(line["step"], line[metric], color=color, linewidth=2.1, marker="o", markersize=3.4, label=display_label)
+            key = label.lower().replace("-", "").replace(" ", "_")
+            statistics[f"{key}_{metric}_final"] = float(line.iloc[-1][metric])
+        ax.axvline(1500, color=RED, linestyle=":", linewidth=1.1)
+        ax.set(title=title, xlabel="Training step", ylabel=ylabel)
+        ax.ticklabel_format(style="plain", axis="x")
+        style_axis(ax)
+        ax.legend(loc="best", fontsize=7.5)
+    fig.suptitle("Representation geometry over training (fixed final-selected physical layers)", y=1.02)
+    fig.tight_layout()
+    savefig(fig, path)
+    return statistics
 
 
 def plot_sufficiency(answer: pd.DataFrame, progress: pd.DataFrame, path: Path) -> None:
@@ -728,10 +1190,32 @@ def build_report(output: Path) -> dict:
     sampling = read_csv(DATA / "tables" / "training_sampling_distribution.csv")
     train_metrics = read_csv(DATA / "tables" / "train_metrics.csv")
     geometry = read_csv(ANALYSIS / "v58_clean_ncc" / "selected_confirmation_summary.csv")
+    selected_layers = read_json(ANALYSIS / "v58_clean_ncc" / "selected_layers.json")
+    clean_projection_path = ANALYSIS / "v58_clean_ncc" / "geometry_confirmation_pca_all_layers.csv"
+    clean_projection_manifest_path = (
+        ANALYSIS / "v58_clean_ncc" / "geometry_confirmation_pca_all_layers_manifest.json"
+    )
+    geometry_cloud = read_csv(
+        clean_projection_path
+        if clean_projection_path.exists()
+        else ANALYSIS / "phase_transition" / "tables" / "milestone_manifold_cloud_3d.csv"
+    )
+    geometry_dynamics = read_csv(ANALYSIS / "phase_transition" / "tables" / "dense_manifold_geometry.csv")
     rankings = read_csv(ANALYSIS / "v58_topk_ncc" / "head_rankings.csv")
+    thinking_rankings = read_csv(ANALYSIS / "phase_transition" / "tables" / "fixed_head_rankings.csv")
     tf_behavior = read_csv(ANALYSIS / "v58_topk_ncc" / "post_ablation_behavior.csv")
     tf_ncc = read_csv(ANALYSIS / "v58_topk_ncc" / "post_ablation_ncc_selected.csv")
-    free_topk = read_csv(ANALYSIS / "v58_free_running_topk" / "free_running_summary.csv")
+    targeted_hp = read_csv(ANALYSIS / "v58_confirmation_topk_hp500" / "free_running_summary.csv")
+    targeted_hp_detail = read_csv(ANALYSIS / "v58_confirmation_topk_hp500" / "free_running_detail.csv")
+    broad_hp = read_csv(ANALYSIS / "v58_confirmation_broad_topk_hp500" / "free_running_summary.csv")
+    factorial_summary = read_csv(ANALYSIS / "v58_thinking_factorial_hp500" / "factorial_summary.csv")
+    factorial_detail = read_csv(ANALYSIS / "v58_thinking_factorial_hp500" / "factorial_detail.csv")
+    successor_summary = read_csv(ANALYSIS / "v58_thinking_successor_hp500" / "successor_summary.csv")
+    successor_detail = read_csv(ANALYSIS / "v58_thinking_successor_hp500" / "successor_detail.csv")
+    targeted_hp_manifest = read_json(ANALYSIS / "v58_confirmation_topk_hp500" / "manifest.json")
+    broad_hp_manifest = read_json(ANALYSIS / "v58_confirmation_broad_topk_hp500" / "manifest.json")
+    factorial_manifest = read_json(ANALYSIS / "v58_thinking_factorial_hp500" / "manifest.json")
+    successor_manifest = read_json(ANALYSIS / "v58_thinking_successor_hp500" / "manifest.json")
     answer = read_csv(ANALYSIS / "v58_free_running_sufficiency" / "answer_transplant_confirmation.csv")
     progress = read_csv(ANALYSIS / "v58_free_running_sufficiency" / "progress_rollout_confirmation.csv")
     attention = read_csv(ANALYSIS / "extended" / "tables" / "attention_role_dynamics.csv")
@@ -748,22 +1232,74 @@ def build_report(output: Path) -> dict:
         raise RuntimeError("high-power Thinking endpoint does not reproduce canonical evaluation")
     if not math.isclose(float(final_hp_nt["ar_accuracy"]), float(canonical_nt["ar_final_accuracy"]), abs_tol=1e-12):
         raise RuntimeError("high-power Non-thinking endpoint does not reproduce canonical evaluation")
+    if any(
+        overlap != 0
+        for overlap in (
+            targeted_hp_manifest["selection_overlap_by_mode"]["thinking"],
+            broad_hp_manifest["selection_overlap_by_mode"]["nonthinking"],
+            factorial_manifest["selection_overlap"],
+            successor_manifest["selection_overlap"],
+        )
+    ):
+        raise RuntimeError("high-power causal confirmation overlaps role-selection examples")
+    factorial_compare_columns = [
+        "row_id",
+        "ar_pred_count",
+        "ar_accuracy",
+        "trace_exact",
+        "trace_ordered_marker_accuracy",
+        "trace_generated_marker_count",
+        "generated_tokens",
+    ]
+    factorial_rows = {
+        arm: factorial_detail.loc[factorial_detail["arm"].eq(arm), factorial_compare_columns]
+        .sort_values("row_id")
+        .reset_index(drop=True)
+        for arm in ("clean", "targeted_only", "broad_only", "joint")
+    }
+    broad_factorial_rowwise_null = factorial_rows["clean"].equals(factorial_rows["broad_only"])
+    broad_factorial_interaction_null = factorial_rows["targeted_only"].equals(factorial_rows["joint"])
+    if not broad_factorial_rowwise_null or not broad_factorial_interaction_null:
+        raise RuntimeError("Thinking broad factorial arm is not the expected rowwise null")
 
     figures = {
         "behavior": ASSET_DIR / "v58_behavior_confirmation.png",
         "geometry": ASSET_DIR / "v58_clean_geometry.png",
         "roles": ASSET_DIR / "v58_role_specialization.png",
         "topk": ASSET_DIR / "v58_topk_causal.png",
+        "role_causal": ASSET_DIR / "v58_role_causal_separation.png",
         "sufficiency": ASSET_DIR / "v58_free_running_sufficiency.png",
+        "commit_query": ASSET_DIR / "v58_commit_query_alignment.png",
+        "native_layer_selection": ASSET_DIR / "v58_native_layer_selection.png",
+        "native_continuation": ASSET_DIR / "v58_native_continuation.png",
         "dynamics": ASSET_DIR / "v58_training_dynamics.png",
+        "role_dynamics_heatmap": ASSET_DIR / "v58_role_differentiation_heatmaps.png",
+        "geometry_dynamics": ASSET_DIR / "v58_geometry_emergence.png",
     }
     plot_behavior(confirmation_by_count, confirmation, figures["behavior"])
     plot_geometry(geometry, figures["geometry"])
     plot_role_specialization(attention, figures["roles"])
-    plot_topk(tf_behavior, tf_ncc, free_topk, figures["topk"])
+    plot_topk(tf_behavior, tf_ncc, targeted_hp, broad_hp, figures["topk"])
+    plot_role_causal_separation(successor_summary, successor_detail, figures["role_causal"])
     plot_sufficiency(answer, progress, figures["sufficiency"])
     dynamics_stats = plot_training_dynamics(
         high_power, routing, attention, rankings, patching, causal, figures["dynamics"]
+    )
+    dynamics_stats.update(
+        plot_role_differentiation_heatmaps(
+            attention,
+            rankings,
+            thinking_rankings,
+            figures["role_dynamics_heatmap"],
+        )
+    )
+    dynamics_stats.update(
+        plot_geometry_emergence(geometry_dynamics, selected_layers, figures["geometry_dynamics"])
+    )
+    geometry_widget = geometry_projection_widget(geometry_cloud)
+    commit_query_section, commit_query_provenance = build_commit_query_section(ANALYSIS, figures["commit_query"])
+    native_continuation_section, native_continuation_provenance = build_native_continuation_section(
+        ANALYSIS, figures["native_layer_selection"], figures["native_continuation"]
     )
 
     c_t = row_value(confirmation, mode="thinking")
@@ -772,14 +1308,79 @@ def build_report(output: Path) -> dict:
     g_nt_final = row_value(geometry, comparison_mode="nonthinking", endpoint="nonthinking_answer_query")
     g_t_run = row_value(geometry, comparison_mode="thinking", endpoint="thinking_item_end")
     g_t_final = row_value(geometry, comparison_mode="thinking", endpoint="thinking_answer_query")
+    geometry_initial_nt_final = row_value(
+        geometry_dynamics,
+        step=0,
+        mode="nonthinking",
+        site="final_answer",
+        layer=int(selected_layers["nonthinking"]["nonthinking_answer_query"]),
+    )
+    geometry_initial_t_run = row_value(
+        geometry_dynamics,
+        step=0,
+        mode="thinking",
+        site="trace_marker",
+        layer=int(selected_layers["thinking"]["thinking_item_end"]),
+    )
+    geometry_initial_t_final = row_value(
+        geometry_dynamics,
+        step=0,
+        mode="thinking",
+        site="final_answer",
+        layer=int(selected_layers["thinking"]["thinking_answer_query"]),
+    )
 
     tf_clean = row_value(tf_behavior, comparison_mode="thinking", scope="role_query_local", path_kind="clean", top_k=0)
     tf_k2 = row_value(tf_behavior, comparison_mode="thinking", scope="role_query_local", path_kind="ranked", top_k=2)
-    fr_clean = row_value(free_topk, comparison_mode="thinking", scope="role_query_local_free_running", path_kind="clean", top_k=0)
-    fr_k2 = row_value(free_topk, comparison_mode="thinking", scope="role_query_local_free_running", path_kind="ranked", top_k=2)
-    fr_k4 = row_value(free_topk, comparison_mode="thinking", scope="role_query_local_free_running", path_kind="ranked", top_k=4)
+    hp_scope = "confirmation_role_query_local_free_running"
+    fr_clean = row_value(targeted_hp, comparison_mode="thinking", scope=hp_scope, path_kind="clean", top_k=0)
+    fr_k2 = row_value(targeted_hp, comparison_mode="thinking", scope=hp_scope, path_kind="ranked", top_k=2)
+    fr_k4 = row_value(targeted_hp, comparison_mode="thinking", scope=hp_scope, path_kind="ranked", top_k=4)
     fr_k2_control_trace = median_control(
-        free_topk, "trace_exact", mode="thinking", scope="role_query_local_free_running", top_k=2
+        targeted_hp, "trace_exact", mode="thinking", scope=hp_scope, top_k=2
+    )
+    fr_k4_control_trace = median_control(
+        targeted_hp, "trace_exact", mode="thinking", scope=hp_scope, top_k=4
+    )
+    broad_clean = row_value(broad_hp, comparison_mode="nonthinking", scope=hp_scope, path_kind="clean", top_k=0)
+    broad_k4 = row_value(broad_hp, comparison_mode="nonthinking", scope=hp_scope, path_kind="ranked", top_k=4)
+    broad_k4_control = median_control(
+        broad_hp, "ar_final_accuracy", mode="nonthinking", scope=hp_scope, top_k=4
+    )
+
+    factorial_clean = row_value(factorial_summary, arm="clean")
+    factorial_targeted = row_value(factorial_summary, arm="targeted_only")
+    factorial_broad = row_value(factorial_summary, arm="broad_only")
+    factorial_joint = row_value(factorial_summary, arm="joint")
+    successor_clean_hp = row_value(successor_summary, arm="clean")
+    successor_targeted_hp = row_value(successor_summary, arm="targeted_top2")
+    successor_top1_hp = row_value(successor_summary, arm="successor_top1")
+    successor_low_hp = row_value(successor_summary, arm="successor_same_layer_low_score")
+    successor_joint_hp = row_value(successor_summary, arm="targeted_top2_plus_successor_top1")
+
+    targeted_k2_detail = targeted_hp_detail.loc[
+        targeted_hp_detail["path_kind"].eq("ranked") & targeted_hp_detail["top_k"].eq(2)
+    ].copy()
+    targeted_k2_valid = targeted_k2_detail["ar_pred_count"].notna()
+    targeted_k2_answer_length_match = float(
+        (
+            targeted_k2_detail.loc[targeted_k2_valid, "ar_pred_count"].astype(float)
+            == targeted_k2_detail.loc[targeted_k2_valid, "trace_generated_marker_count"].astype(float)
+        ).mean()
+    )
+    targeted_content_wrong_length_right = targeted_k2_detail.loc[
+        targeted_k2_detail["trace_exact"].eq(0)
+        & targeted_k2_detail["trace_marker_count_accuracy"].eq(1)
+    ]
+    targeted_length_wrong = targeted_k2_detail.loc[
+        targeted_k2_detail["trace_marker_count_accuracy"].eq(0)
+    ]
+
+    successor_final_damage, successor_final_ci_low, successor_final_ci_high = _paired_damage_ci(
+        successor_detail, "successor_top1", "ar_accuracy"
+    )
+    successor_marker_damage, successor_marker_ci_low, successor_marker_ci_high = _paired_damage_ci(
+        successor_detail, "successor_top1", "trace_marker_count_accuracy"
     )
 
     selected_answer = answer.loc[answer["is_discovery_selected_layer"].eq(1.0)]
@@ -894,11 +1495,12 @@ def build_report(output: Path) -> dict:
         ["Experiment", "Clean / damaged baseline", "Intervention result", "Matched-control interpretation"],
         [
             ["Teacher-forced targeted Top-2", f"trace token acc {pct(tf_clean['teacher_forced_trace_accuracy'])}", pct(tf_k2["teacher_forced_trace_accuracy"]), f"control median {pct(median_control(tf_behavior,'teacher_forced_trace_accuracy',mode='thinking',scope='role_query_local',top_k=2))}"],
-            ["Free-running targeted Top-2", f"trace exact {pct(fr_clean['trace_exact'])}", f"trace {pct(fr_k2['trace_exact'])}; final {pct(fr_k2['ar_final_accuracy'])}", f"control trace median {pct(fr_k2_control_trace)}"],
-            ["Free-running targeted Top-4", f"trace exact {pct(fr_clean['trace_exact'])}", f"trace {pct(fr_k4['trace_exact'])}; final {pct(fr_k4['ar_final_accuracy'])}", "only one disjoint matched Top-4 control; effect is enriched, not unique"],
+            ["500-sample targeted Top-2", f"trace exact {pct(fr_clean['trace_exact'])}; final {pct(fr_clean['ar_final_accuracy'])}", f"trace {pct(fr_k2['trace_exact'])}; ordered marker {pct(fr_k2['trace_ordered_marker_accuracy'])}; final {pct(fr_k2['ar_final_accuracy'])}", f"control trace median {pct(fr_k2_control_trace)}; trace damage is selective, count damage is modest"],
+            ["500-sample targeted Top-4", f"trace exact {pct(fr_clean['trace_exact'])}", f"trace {pct(fr_k4['trace_exact'])}; ordered marker {pct(fr_k4['trace_ordered_marker_accuracy'])}; final {pct(fr_k4['ar_final_accuracy'])}", f"sole complement trace {pct(fr_k4_control_trace)}; it contains targeted ranks 5/6/7/10, so it is not a null"],
+            ["500-sample successor L2H3", f"marker-count/final {pct(successor_clean_hp['trace_marker_count_accuracy'])}/{pct(successor_clean_hp['ar_final_accuracy'])}", f"marker-count {pct(successor_top1_hp['trace_marker_count_accuracy'])}; final {pct(successor_top1_hp['ar_final_accuracy'])}", f"low-score L2H5 gives {pct(successor_low_hp['trace_marker_count_accuracy'])}/{pct(successor_low_hp['ar_final_accuracy'])}; role is distributed but L2H3 is selectively stronger"],
+            ["Targeted Top-2 + successor L2H3", f"targeted-only final {pct(successor_targeted_hp['ar_final_accuracy'])}; successor-only {pct(successor_top1_hp['ar_final_accuracy'])}", f"joint final {pct(successor_joint_hp['ar_final_accuracy'])}; ordered marker {pct(successor_joint_hp['trace_ordered_marker_accuracy'])}", "targeted adds ordering/content damage, but essentially no additional count damage beyond successor"],
             ["Top-2 targeted value patch", f"corrupt marker acc {pct(patch_final['corrupt_correct'])}", f"patched {pct(patch_final['patched_correct'])}; normalized recovery {pct(patch_final['normalized_recovery_mean'])}", f"restores +{num(patch_final['margin_restoration'],2)} correct-marker logit margin"],
-            ["Marker-successor L2H3 zero", f"baseline accuracy {pct(0.9818181818181818)}", f"accuracy {pct(successor_final['accuracy'])}; margin damage {num(successor_final['causal_damage'])}", f"same-layer control damage {num(successor_control['causal_damage'])}"],
-            ["Targeted L4H5 zero", f"baseline accuracy {pct(0.9454545454545454)}", f"accuracy {pct(target_final['accuracy'])}; margin damage {num(target_final['causal_damage'])}", f"control damage {num(target_control['causal_damage'])}; single-head specificity modest"],
+            ["Thinking broad Top-2 factorial", f"clean final/trace {pct(factorial_clean['ar_final_accuracy'])}/{pct(factorial_clean['trace_exact'])}", f"broad-only {pct(factorial_broad['ar_final_accuracy'])}/{pct(factorial_broad['trace_exact'])}; joint exactly equals targeted-only", "zero broad main effect and zero broad×targeted interaction on all 500 rows"],
         ],
     )
 
@@ -906,13 +1508,14 @@ def build_report(output: Path) -> dict:
         ["Large-model experiment / claim", "v58 aligned result", "Status"],
         [
             ["Separate running and final geometry", f"Running NCC NT/T={pct(g_nt_run['confirmation_ncc_balanced_accuracy'])}/{pct(g_t_run['confirmation_ncc_balanced_accuracy'])}; final={pct(g_nt_final['confirmation_ncc_balanced_accuracy'])}/{pct(g_t_final['confirmation_ncc_balanced_accuracy'])}", '<span class="status partial">final strongly aligned; running weak</span>'],
-            ["Targeted retrieval bank and matched Top-K lesions", f"Thinking Top-4={top_t_text}; free-run trace exact {pct(fr_clean['trace_exact'])}→{pct(fr_k4['trace_exact'])}", '<span class="status yes">positive, but not uniquely necessary</span>'],
+            ["Targeted retrieval bank and matched Top-K lesions", f"Thinking Top-4={top_t_text}; 500-sample trace exact {pct(fr_clean['trace_exact'])}→{pct(fr_k4['trace_exact'])}, final {pct(fr_clean['ar_final_accuracy'])}→{pct(fr_k4['ar_final_accuracy'])}", '<span class="status yes">content path is causal; final mediation partial</span>'],
+            ["Successor / trace-cardinality mechanism", f"L2H3 lesion changes marker-count {pct(successor_clean_hp['trace_marker_count_accuracy'])}→{pct(successor_top1_hp['trace_marker_count_accuracy'])} and final {pct(successor_clean_hp['ar_final_accuracy'])}→{pct(successor_top1_hp['ar_final_accuracy'])}", '<span class="status yes">strong role separation from targeted bank</span>'],
             ["Post-ablation representation readout", f"Thinking running/final NCC remain {pct(g_t_run['confirmation_ncc_balanced_accuracy'])}/{pct(g_t_final['confirmation_ncc_balanced_accuracy'])} after local Top-K", '<span class="status partial">measured; no mediation at earlier layers</span>'],
             ["Free-running answer-state sufficiency", f"Thinking adjacent donor adoption {pct(t_donor['donor_adoption'].mean())} vs context control {pct(t_context['donor_adoption'].mean())}; NT {pct(nt_donor['donor_adoption'].mean())} vs {pct(nt_context['donor_adoption'].mean())}", '<span class="status yes">strong Thinking terminal readout</span>'],
-            ["Natural no-index progress / recurrence", "Same-position centroid shift only weakly changes the next marker; natural cross-position patches are position-confounded", '<span class="status no">internal-counter sufficiency not established</span>'],
-            ["Non-thinking broad retrieval/aggregation", f"Descriptive Top-4={top_nt_text}; ranked ablation is not more damaging than matched controls at a low behavioral floor", '<span class="status no">major remaining gap</span>'],
+            ["Natural no-index progress / recurrence", "Fresh discovery-selected L2 confirmation supports donor-directed free continuation over full-norm controls; multi-step transfer decays", '<span class="status partial">local continuation sufficiency supported; sustained recurrence limited</span>'],
+            ["Non-thinking broad retrieval/aggregation", f"Descriptive Top-4={top_nt_text}; 500-sample clean/ranked-K4/control-complement final={pct(broad_clean['ar_final_accuracy'])}/{pct(broad_k4['ar_final_accuracy'])}/{pct(broad_k4_control)}", '<span class="status no">floor and contaminated controls; not selective</span>'],
             ["Universal Thinking final broad aggregator", "Not required: the trace-derived answer-query state itself is executable", '<span class="status partial">not claimed and not needed</span>'],
-            ["One-arm serial mediation", "Targeted damage, carrier rescue, commit rescue and final rollout are not all closed in the same damaged baseline", '<span class="status no">open</span>'],
+            ["One-arm serial mediation", "Targeted and successor lesions now share one free-running baseline, but targeted→successor→answer rescue is not closed", '<span class="status partial">role dissociation established; rescue chain open</span>'],
         ],
     )
 
@@ -921,25 +1524,26 @@ def build_report(output: Path) -> dict:
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:#E9EEF3;color:var(--ink);font-family:Inter,"Segoe UI","Noto Sans SC",Arial,sans-serif;line-height:1.64}
 main{max-width:1180px;margin:28px auto;background:var(--paper);padding:55px 66px 72px;box-shadow:0 12px 38px rgba(24,39,56,.12)}
 h1{font-size:2.25rem;line-height:1.16;margin:0 0 12px;letter-spacing:-.025em}h2{font-size:1.55rem;margin:52px 0 14px;padding-top:10px;border-top:2px solid var(--ink)}h3{font-size:1.14rem;margin:30px 0 9px}h4{margin:22px 0 6px}p{margin:9px 0 13px}.dek{font-size:1.08rem;color:var(--muted);max-width:940px}.meta{font-size:.88rem;color:var(--muted);margin-bottom:25px}
-.abstract,.conclusion,.warning,.example,.formula,.audit{padding:15px 18px;margin:16px 0;border-left:4px solid var(--blue);background:#F4F8FC}.conclusion{border-left-color:var(--green);background:#F2F8F6}.warning{border-left-color:var(--red);background:#FFF5F4}.example{border-left-color:var(--orange);background:#FFF8EC}.formula{border-left-color:var(--purple);background:#F7F5FB}.audit{border-left-color:#607D8B;background:#F3F6F8}.label{font-weight:750;margin-right:5px}
+.abstract,.conclusion,.warning,.example,.formula,.audit,.purpose{padding:15px 18px;margin:16px 0;border-left:4px solid var(--blue);background:#F4F8FC}.conclusion{border-left-color:var(--green);background:#F2F8F6}.warning{border-left-color:var(--red);background:#FFF5F4}.example{border-left-color:var(--orange);background:#FFF8EC}.formula{border-left-color:var(--purple);background:#F7F5FB}.audit{border-left-color:#607D8B;background:#F3F6F8}.label{font-weight:750;margin-right:5px}
 .toc{background:var(--wash);padding:17px 22px;border:1px solid var(--line);margin:24px 0}.toc ol{columns:2;margin:8px 0 0;padding-left:23px}.toc a{color:var(--blue);text-decoration:none}
 .chain{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:18px 0}.chain>div{padding:14px;border:1px solid var(--line);background:#FAFBFC}.chain b{display:block;color:var(--blue);margin-bottom:4px}
 figure{margin:24px 0 31px}figure img{display:block;width:100%;height:auto;border:1px solid var(--line);background:white}figcaption{font-size:.9rem;color:#46525E;margin-top:8px;line-height:1.52}
+.geometry-widget{margin:20px 0 8px;border:1px solid var(--line);background:#FAFBFC;padding:14px}.geometry-controls{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:0 0 12px}.geometry-source{font-size:.82rem;color:var(--muted)}.geometry-view-title{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:18px 0 7px;color:#334155}.geometry-layer-control{font-size:.78rem;font-weight:700;color:#334155}.geometry-layer-control select{margin-left:5px;padding:5px 8px;border:1px solid #BCC7D3;background:white;color:var(--ink)}.geometry-interaction-hint{font-size:.75rem;font-weight:500;color:#64748B}.geometry-panel{min-width:0;border:1px solid #E2E8F0;background:white}.geometry-panel-2d{height:850px}.geometry-panel-3d{height:980px}.interactive-caption{font-size:.9rem;color:#46525E;margin:7px 0 28px;line-height:1.52}
 .table-wrap{overflow-x:auto;margin:15px 0 24px;border:1px solid var(--line)}table{width:100%;border-collapse:collapse;font-size:.88rem}th{background:#EDF2F7;text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);white-space:nowrap}td{padding:9px 10px;border-bottom:1px solid #E8EDF2;vertical-align:top}tr:last-child td{border-bottom:0}
 code{font-family:"Cascadia Mono",Consolas,monospace;font-size:.88em;background:#EEF2F5;padding:2px 5px;border-radius:3px}.status{display:inline-block;padding:2px 7px;border-radius:12px;font-size:.78rem;font-weight:700;white-space:nowrap}.status.yes{color:#12664F;background:#DDF3EA}.status.partial{color:#855600;background:#FFF0C9}.status.no{color:#8F2F2F;background:#FBE2E2}
 ul{padding-left:22px}.small{font-size:.86rem;color:var(--muted)}a{color:var(--blue)}
-@media(max-width:800px){main{margin:0;padding:30px 20px}.chain{grid-template-columns:1fr}.toc ol{columns:1}h1{font-size:1.8rem}}
+@media(max-width:800px){main{margin:0;padding:30px 20px}.chain{grid-template-columns:1fr}.geometry-panel-2d{height:760px}.geometry-panel-3d{height:900px}.toc ol{columns:1}h1{font-size:1.8rem}}
 @media print{body{background:white}main{box-shadow:none;margin:0;max-width:none}figure{break-inside:avoid}}
 """
 
     report = f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>NiaH Synthetic v58: geometry, causal experiments, and training dynamics</title><style>{css}</style></head><body><main>
+<link rel="icon" href="data:,"><title>NiaH Synthetic v58: geometry, causal experiments, and training dynamics</title><style>{css}</style></head><body><main>
 <h1>NiaH Synthetic v58：No-index Thinking vs Independent Non-thinking</h1>
-<p class="dek">完整训练设定、Geometry Comparison、Top-K ablation / patching、free-running causal sufficiency，以及与大模型实验对齐的 training dynamics</p>
-<p class="meta">生成日期：2026-09-01 · count classes：1–10 · seed：1234 · 两个 independently initialized models · 线性 training-step 主横轴</p>
+<p class="dek">完整训练设定、可选层的2D/3D Geometry Comparison、Top-K ablation / patching、free-running causal sufficiency，以及与v20和大模型实验对齐的training dynamics</p>
+<p class="meta">生成日期：2026-09-05 · count classes：1–10 · seed：1234 · 两个 independently initialized models · training dynamics 同时报告 linear 与 log(step+100) 横轴</p>
 
-<div class="abstract"><span class="label">核心结论。</span>v58 已经满足比“Native-thinking 必须接近满分”更合理、也更严格可检验的标准：独立 confirmation 上 Thinking 为 <strong>{pct(c_t['ar_final_accuracy'],2)}</strong>，Non-thinking 为 <strong>{pct(c_nt['ar_final_accuracy'],2)}</strong>，差 {100*(float(c_t['ar_final_accuracy'])-float(c_nt['ar_final_accuracy'])):.2f} pp；Thinking 的十个 count 均在 {pct(behavior_gate['metrics']['thinking_min_count_accuracy'])}–100%，没有类别塌缩。机制上最强的是集中在 L4 的 targeted bank、逐渐增强的 retrieval transport，以及可执行的 trace-to-answer state（相邻 donor adoption {pct(t_donor['donor_adoption'].mean())}）。Thinking answer-query NCC 为 {pct(g_t_final['confirmation_ncc_balanced_accuracy'])}、NT 为 {pct(g_nt_final['confirmation_ncc_balanced_accuracy'])}，但固定两-token trace 令 answer position 与 count 确定相关，因此这里的 <strong>final representation compression 是操作性结果，并带有 trace-length/position confound</strong>。v58 也没有建立紧致的 autonomous running counter，或选择性强的 Non-thinking broad-bank necessity。因此可写的主张是：<strong>supervised no-index Thinking 形成定向检索和强终端 count/trace-length code，从而显著优于独立 Non-thinking；不是两侧所有大模型机制均已对称复现。</strong></div>
+<div class="abstract"><span class="label">核心结论。</span>v58 在独立 confirmation 上 Thinking 为 <strong>{pct(c_t['ar_final_accuracy'],2)}</strong>，Non-thinking 为 <strong>{pct(c_nt['ar_final_accuracy'],2)}</strong>，差 {100*(float(c_t['ar_final_accuracy'])-float(c_nt['ar_final_accuracy'])):.2f} pp；Thinking 十个 count 均在 {pct(behavior_gate['metrics']['thinking_min_count_accuracy'])}–100%，没有类别塌缩。新的每臂500条free-running干预给出更具体的角色分化：删除L4 targeted Top-2使trace exact从{pct(fr_clean['trace_exact'])}降到{pct(fr_k2['trace_exact'])}，但final count仅从{pct(fr_clean['ar_final_accuracy'])}降到{pct(fr_k2['ar_final_accuracy'])}；删除L2 successor L2H3则使marker-count从{pct(successor_clean_hp['trace_marker_count_accuracy'])}降到{pct(successor_top1_hp['trace_marker_count_accuracy'])}、final count降到{pct(successor_top1_hp['ar_final_accuracy'])}。这说明<strong>L4 targeted bank主要控制检索内容/顺序，L2 successor bank主要控制trace cardinality/termination，而final answer几乎读取已生成trace长度</strong>。因此targeted retrieval是因果有效的内容通路，却尚未被证明是Thinking最终accuracy优势的主要中介。Thinking answer-query NCC仍为{pct(g_t_final['confirmation_ncc_balanced_accuracy'])}，但固定两-token trace令answer position与count确定相关；Non-thinking broad-bank necessity也仍未建立。</div>
 
 <div class="toc"><b>目录</b><ol><li><a href="#logic">问题与证据层级</a></li><li><a href="#setup">完整训练设定</a></li><li><a href="#behavior">行为与均匀性</a></li><li><a href="#geometry">Geometry Comparison / NCC</a></li><li><a href="#roles">Role specialization</a></li><li><a href="#causal">Ablation 与 patching</a></li><li><a href="#sufficiency">Free-running sufficiency</a></li><li><a href="#dynamics">Training dynamics</a></li><li><a href="#alignment">与大模型对齐及 gaps</a></li><li><a href="#limits">结论与限制</a></li><li><a href="#artifacts">复现产物</a></li></ol></div>
 
@@ -947,7 +1551,7 @@ ul{padding-left:22px}.small{font-size:.86rem;color:var(--muted)}a{color:var(--bl
 <p>核心问题不是“Thinking 有没有更好看的 attention map”，而是同一个 counting task 在两种输出协议下是否形成不同计算：Non-thinking 候选机制是 answer query 对 prompt evidence 的 broad retrieval；Thinking 候选机制是 trace 内逐项 targeted retrieval，再把 trace 压缩为最终 count state。报告把证据分成四层，避免把可读性、attention 与 causality 混为一谈。</p>
 <div class="chain"><div><b>Representation</b>Logistic / NCC / ordinal RSA：count 是否可读、是否形成原型几何。</div><div><b>Routing</b>Broad score / targeted mass：query 看向哪些 evidence positions。</div><div><b>Necessity</b>Ranked Top-K removal 相对 matched controls 是否更伤自然计算。</div><div><b>Sufficiency</b>把 donor state 写入 receiver 后，free-running 输出是否采用 donor 信息。</div></div>
 <div class="example"><span class="label">简单例子。</span>目标字符是 {{a,b,c}}，正文中按顺序出现 a、x、b、a、c，因此 gold count=4。Non-thinking 直接生成 <code>&lt;Ans&gt; 4</code>；Thinking 生成 <code>&lt;Think&gt; &lt;Sep&gt;a &lt;Sep&gt;b &lt;Sep&gt;a &lt;Sep&gt;c &lt;/Think&gt; &lt;Ans&gt; 4</code>。trace 没有“1,2,3,4”数字 index；若第 3 个 separator query 的 attention 指向正文第 3 个目标 occurrence，它就是 targeted retrieval 候选。</div>
-<div class="conclusion"><span class="label">本节结论。</span>高 NCC 只说明 count cloud 可由简单原型读取；ranked ablation 才问模型是否自然依赖候选 bank；donor adoption 才问 state 是否足以驱动后续输出。四层必须分开报告。</div>
+<div class="conclusion"><span class="label">本节结论。</span>高 NCC 只说明 count cloud 可由简单原型读取；ranked ablation 才问模型是否自然依赖候选 bank；donor adoption 才问 state 是否足以驱动后续输出。新的factorial intervention进一步把候选链拆成targeted content与successor/cardinality两条作用不同的通路，因而不能再把“targeted trace damage”直接等同于“final-count mediation”。</div>
 
 <h2 id="setup">2. 完整训练设定：模型到底怎么训</h2>
 {setup_table}
@@ -980,75 +1584,128 @@ ul{padding-left:22px}.small{font-size:.86rem;color:var(--muted)}a{color:var(--bl
 {geometry_table}
 {figure(figures['geometry'], "图 2｜Clean geometry。Panel A 横轴依次为 Non-thinking prompt-occurrence running、Thinking trace-item running、两种 mode 的 answer-query final endpoint；纵轴为未参与层选择的 confirmation balanced accuracy。实心柱为 L2 Logistic，斜线柱为 NCC，红色点线为 10-class chance；柱顶 Lx 是 discovery-only 选层。Panel B 使用相同四个 endpoint，纵轴为 held-out ordinal RSA。", "v58 clean running and final count geometry")}
 <p>Thinking running NCC 从 NT 的 {pct(g_nt_run['confirmation_ncc_balanced_accuracy'])} 提升到 {pct(g_t_run['confirmation_ncc_balanced_accuracy'])}，但绝对值仍低；与此同时 ordinal RSA 达 {num(g_t_run['confirmation_ordinal_rsa'])}，说明平均 centroid path 随 count gap 有序，却不是每个 count 都形成紧致球状簇。真正显著的 compression 在 answer query：Thinking Logistic/NCC 都是 100%，而 NT 只有 {pct(g_nt_final['confirmation_logistic_balanced_accuracy'])}/{pct(g_nt_final['confirmation_ncc_balanced_accuracy'])}。</p>
+<h3>4.3 可选择层的二维与三维主成分对比</h3>
+<div class="purpose"><span class="label">实验目的。</span>沿用v20的四宫格：列固定比较Non-thinking与Thinking，行固定比较running index/progress与final count。二维与三维各有独立层选择器；每个视图内部的四个endpoint始终处于同一个residual depth，同时允许两个视图显示不同层。</div>
+<div class="formula"><span class="label">定义与计算。</span>对每个endpoint × layer，StandardScaler与PC1–PC3只在discovery states上拟合，再把disjoint confirmation states投影到同一坐标系。二维图显示PC1–PC2，三维图显示PC1–PC3；红线按k=1→10连接confirmation class centroids。每个panel独立拟合PCA，因此PC方向只在该panel内部解释；跨mode比较簇的分离、有序性与重叠，不能比较PC1的正负号或绝对坐标。</div>
+{geometry_widget}
+<p class="interactive-caption">图 3｜可选择层的2D与3D Geometry Comparison。两张图均为2×2：左列Non-thinking、右列Thinking；上行running index/progress、下行answer-query final count。2D与3D层选择器相互独立，各自同时切换对应视图的四个panel；3D图支持拖拽旋转、滚轮缩放和双击复位。横纵轴为discovery-fitted PC1/PC2，三维图再加入PC3；颜色和数字为k=1–10，半透明点是held-out confirmation state，红线连接class centroid。PCA图用于描述形状，正式可读性仍以图2的discovery-selected、confirmation-evaluated Logistic/NCC为准。</p>
+<div class="example"><span class="label">说明性示例。</span>如果count 4与count 5在PC1–PC2上重叠、但沿PC3分开，二维图会隐藏该差异，三维图可以显示。若切换layer后形状改变，只能说明该层的低维投影不同；是否更可读仍由held-out decoder指标判断。</div>
 <div class="warning"><span class="label">Position-aware interpretation。</span>由于Thinking的answer-query位置本身是count的确定函数，100% final NCC应表述为“在当前固定grammar下，terminal state形成完美可读的count/trace-length code”。在position-jitter或fixed-position control完成前，不把它单独当作content-invariant semantic compression的证明。</div>
 <div class="example"><span class="label">简单例子。</span>十个班级的平均身高可以按年级递增，因此 ordinal RSA 很高；但每个班的学生身高大量重叠，最近 centroid 分类仍会很差。Thinking running state 正是“平均轨迹有序、单例 cloud 仍松散”的情况。</div>
-<div class="conclusion"><span class="label">本节结论。</span>v58 强力复现了 Thinking 的 operational final-count representation compression，但该结果与trace-length/position纠缠；running count decodability也只有中等，不能把它写成content-invariant semantic compression或compact autonomous counter。当前最干净的机制结论仍是targeted retrieval与terminal readout。</div>
+<div class="conclusion"><span class="label">本节结论。</span>Figure 2确认Thinking final state在冻结的held-out指标上可完全读出count；Figure 3让同一层的四个endpoint在2D与3D下直接比较。PCA图不增加因果证据。固定trace grammar仍使final representation与trace length/answer position相关，position-invariant semantic compression的结论待定。</div>
 
 <h2 id="roles">5. Attention role specialization 与 head-bank differentiation</h2>
 <h3>目的与定义</h3><p><strong>Targeted mass</strong> 是 Thinking 第 k 个 separator query 对正文中 matching 第 k 个目标 occurrence 的 attention mass。<strong>Broad score</strong> 用于 Non-thinking answer query：先求所有 active target occurrences 的总 attention mass M，再以有效覆盖率 C=exp(H)/N 惩罚只盯一个 occurrence 的 head，最终 B=M×C。所有 final roles 只在 held-out selection split 排名，图和数值在 disjoint reporting split 读取。</p>
-{figure(figures['roles'], "图 3｜Role specialization。Panel A 为 Non-thinking final broad score 的 4 layers × 8 heads 热图；横轴=head，纵轴=layer，格内是 reporting-split raw score。Panel B 对 Thinking targeted mass 作同样展示，两图各有独立色标，不能跨图按颜色深浅比较。Panel C 只在同一个 Thinking 模型内比较 broad、marker-successor、targeted 三种 role；横轴列出 32 个 heads，纵轴是 role，每行除以该 role 的最大值，因此用于看 head identity 分工而非 raw effect size。", "v58 attention role specialization heatmaps")}
+{figure(figures['roles'], "图 4｜Role specialization。Panel A 为 Non-thinking final broad score 的 4 layers × 8 heads 热图；横轴=head，纵轴=layer，格内是 reporting-split raw score。Panel B 对 Thinking targeted mass 作同样展示，两图各有独立色标，不能跨图按颜色深浅比较。Panel C 只在同一个 Thinking 模型内比较 broad、marker-successor、targeted 三种 role；横轴列出 32 个 heads，纵轴是 role，每行除以该 role 的最大值，因此用于看 head identity 分工而非 raw effect size。", "v58 attention role specialization heatmaps")}
 <p>Targeted ranking 的 Top-4 为 <strong>{top_t_text}</strong>，全部位于 L4；最终 reporting split 中前八名也全部来自 L4。Thinking broad 的 Top-4 与 targeted Top-4 零重合；marker-successor Top-4 与 targeted 只重合 1/4。这是同一 Thinking 模型内可解释的 role differentiation。相反，Non-thinking broad 的 discovery Top-4 为 {top_nt_text}，但 reporting split 的最高 head 变为 L1H3，说明小样本下 exact identity 不稳定。</p>
 <div class="warning"><span class="label">重要边界。</span>Thinking 与 Non-thinking 是独立初始化模型，L1H3 在两边没有 neuron identity 对齐意义；跨 mode 只能比较 role 在 layer/head-bank 层面的分布。Non-thinking broad 的 selection/reporting 每个 count 仅 2/1 条，且其行为接近 floor，因此本报告不把 descriptive broad map 升级为稳定 causal bank。</div>
 <div class="conclusion"><span class="label">本节结论。</span>v58 的清楚分化发生在 Thinking 内部：L4 targeted bank 与较早的 marker-successor、较分散的 broad role 使用不同 head subsets。Targeted bank 很集中；Non-thinking broad role 目前只有描述性信号，没有同等强度的稳定性。</div>
 
 <h2 id="causal">6. Causal experiments：Top-K ablation、post-ablation NCC 与 patching</h2>
-<h3>6.1 Ranked Top-K necessity</h3><p>Head ranking 只用 discovery split。对累计 Top-K heads 做两种干预：global removal 在所有 query positions 删除；role-query-local removal 只在 Non-thinking answer query 或 Thinking 的每个 separator query 删除。Matched controls 从相同 layer、相同 K 的未选 heads 中枚举所有可用 disjoint sets。Teacher-forced 读即时 token accuracy；free-running 允许错误累积到 trace 与最终答案。</p>
-{figure(figures['topk'], "图 4｜Top-K causal suite。六个 panel 的横轴都是累计删除的 K=0/1/2/4；紫/蓝/绿/橙实线为 discovery-ranked bank，灰色虚线为 layer-matched controls 的中位数，灰带是 controls 的 min–max（不是置信区间）。A/B/C 分别是 teacher-forced trace token、free-running trace exact、Thinking final answer；D/E 是使用 clean discovery scaler/PCA/centroids、不重新拟合的 running/final NCC；F 是 Non-thinking broad-bank free-running final accuracy。", "v58 Top-K ablation, post-ablation NCC, and free-running behavior")}
+<h3>6.1 Ranked Top-K necessity：500-sample confirmation</h3><p>Head ranking只用discovery split；confirmation每个count 50条、每个arm共500条，且与selection样本overlap=0。Role-query-local removal只在Non-thinking answer query或Thinking每个separator query删除head output。Teacher-forced读即时token accuracy；free-running允许错误累积到trace与最终答案。Layer-matched controls是同层、同K的竞争head集合，不保证是功能为零的negative control。</p>
+{figure(figures['topk'], "图 5｜Top-K causal suite。六个panel的横轴都是累计删除K=0/1/2/4；实线为discovery-ranked bank，灰虚线为layer-matched controls中位数，灰带为controls的min–max（不是置信区间）。A、D、E来自原teacher-forced/frozen-NCC protocol；B、C、F替换为新的500-sample confirmation free rollout。B/C是Thinking trace exact/final count，F是Non-thinking broad-bank final count。K4仅有一个disjoint complement，因此该点不是稳定的control distribution。", "v58 high-power Top-K ablation, post-ablation NCC, and free-running behavior")}
 {causal_table}
-<p>Thinking Top-K 的最清楚效果在 trace trajectory：free-running exact trace 从 {pct(fr_clean['trace_exact'])} 降到 K2 的 {pct(fr_k2['trace_exact'])} 与 K4 的 {pct(fr_k4['trace_exact'])}。不过 K4 control 也有明显损害，说明 L4 存在冗余和一般 trace-support heads；应写“ranked bank enriched for necessity”，不应写“只有这四个 heads 必要”。Non-thinking ranked broad removal 没有超过 matched controls，而且 clean accuracy 本来只有 {pct(row_value(free_topk,comparison_mode='nonthinking',scope='role_query_local_free_running',path_kind='clean',top_k=0)['ar_final_accuracy'])}，因此是 floor-limited null。</p>
-<h3>6.2 为什么 Top-K 后 NCC 不变</h3><p>Thinking clean running/final representations由 discovery 选在 L3/L2；targeted heads 全在 L4。删除 L4 head output 不可能逆向改变已经记录的 L2/L3 state。Teacher forcing又把正确 gold marker作为下一 token 输入，使后续 answer query看到修复后的正确 trace。因此 post-ablation NCC 维持 {pct(g_t_run['confirmation_ncc_balanced_accuracy'])}/{pct(g_t_final['confirmation_ncc_balanced_accuracy'])} 并不否定 targeted heads；它说明当前 bank 直接参与 next-marker readout，而没有被证明是 earlier NCC compression 的 mediator。</p>
-<h3>6.3 Retrieval transport patching</h3><p>构造 clean/corrupt 对：在第 k 个 targeted query 破坏应检索的 prompt occurrence，使正确 marker margin由 clean 的 {num(patch_final['clean_margin'],2)} 降到 {num(patch_final['corrupt_margin'],2)}。随后只从 clean run 恢复 ranked Top-2 heads 在 target source position 的 value contribution；最终恢复 {pct(patch_final['normalized_recovery_mean'])} 的 clean-corrupt margin gap，marker accuracy从 {pct(patch_final['corrupt_correct'])} 升到 {pct(patch_final['patched_correct'])}。这比只看 attention mass 更接近 causal retrieval transport。</p>
+<p>Targeted Top-2的paired trace-exact damage为22.4 pp（bootstrap 95% CI 18.4–26.4 pp），而final-count damage只有6.6 pp（4.2–9.2 pp）；Top-4 trace damage为33.2 pp、final damage10.4 pp。K4唯一control是剩余半个L4 bank，其中仍含targeted ranking第5/6/7/10名，故它是“complement”而不是null。Non-thinking clean只有{pct(broad_clean['ar_final_accuracy'])}，ranked K4为{pct(broad_k4['ar_final_accuracy'])}，但唯一control直接降到{pct(broad_k4_control)}；检查发现其中L1H2会让模型几乎不输出答案。因此这不是broad bank的选择性因果证据。</p>
+
+<h3>6.2 为什么targeted retrieval对count伤害不大：content与cardinality分工</h3>
+{figure(figures['role_causal'], "图 6｜Targeted content与successor/cardinality的因果分工；每个干预方案500条。A横轴是clean、targeted Top-2、successor L2H3、同层低successor-score L2H5 control及joint intervention；纵轴依次报告ordered-marker、marker-count与final-count rate。B纵轴为相对同一clean row的paired damage，误差线是10,000次row bootstrap 95% CI。C纵轴为模型有答案时P(final answer=实际生成的marker数)。D横轴是gold count 1–10，纵轴是逐类clean accuracy减intervened accuracy；count 10受上界/termination边界影响，应单独解释。", "v58 causal role separation between targeted content and trace cardinality")}
+<p>证据直接回答“为什么对count伤害不大”。Targeted Top-2后，500条中final answer与实际生成marker数一致{pct(targeted_k2_answer_length_match)}。共有{len(targeted_content_wrong_length_right)}条出现“trace content或顺序不完全正确，但marker总数仍正确”；这些样本的final answer是{int(targeted_content_wrong_length_right['ar_accuracy'].sum())}/{len(targeted_content_wrong_length_right)}正确。相反，在{len(targeted_length_wrong)}条marker数量错误的样本中，final answer只有{int(targeted_length_wrong['ar_accuracy'].sum())}/{len(targeted_length_wrong)}正确。因此L4 targeted lesion常把某个marker身份/顺序弄错，却仍生成正确数量的items；terminal readout于是仍能答对count。</p>
+<p>L2H3 successor lesion给出互补证据：marker-count damage为{100*successor_marker_damage:.1f} pp（95% CI {100*successor_marker_ci_low:.1f}–{100*successor_marker_ci_high:.1f}），final-count damage为{100*successor_final_damage:.1f} pp（{100*successor_final_ci_low:.1f}–{100*successor_final_ci_high:.1f}），但ordered-marker只从{pct(successor_clean_hp['trace_ordered_marker_accuracy'])}降到{pct(successor_top1_hp['trace_ordered_marker_accuracy'])}。低successor-score同层head L2H5也有损害，说明cardinality support是分布式的；然而L2H3的final损害比L2H5大{100*(float(successor_low_hp['ar_final_accuracy'])-float(successor_top1_hp['ar_final_accuracy'])):.1f} pp。Joint intervention的final为{pct(successor_joint_hp['ar_final_accuracy'])}，与successor-only的{pct(successor_top1_hp['ar_final_accuracy'])}几乎相同，却把ordered-marker进一步降到{pct(successor_joint_hp['trace_ordered_marker_accuracy'])}：targeted路径增加content/order damage，没有再增加明显count damage。</p>
+<p>最后，在同一500条上删除Thinking broad Top-2（L3H6/L1H5）与clean逐行完全相同；joint也逐行等于targeted-only。故targeted后count仍正确不是因为这个final-query broad bank接管了计算，而是因为生成trace的cardinality仍由successor/termination通路维持。</p>
+<div class="example"><span class="label">简单例子。</span>gold trace应为 <code>a,b,a,c</code>。Targeted lesion可能生成<code>a,b,b,c</code>：内容错一项但仍有4个marker，最终仍答4。Successor lesion则可能生成<code>a,b,a</code>后提前结束：内容prefix大体正确，却只有3项，final readout随之答3。前者伤“what/order”，后者伤“how many/when to stop”。</div>
+
+<h3>6.3 为什么 Top-K 后 NCC 不变</h3><p>Thinking clean running/final representations由 discovery 选在 L3/L2；targeted heads 全在 L4。删除 L4 head output 不可能逆向改变已经记录的 L2/L3 state。Teacher forcing又把正确 gold marker作为下一 token 输入，使后续 answer query看到修复后的正确 trace。因此 post-ablation NCC 维持 {pct(g_t_run['confirmation_ncc_balanced_accuracy'])}/{pct(g_t_final['confirmation_ncc_balanced_accuracy'])} 并不否定 targeted heads；它说明当前 bank 直接参与 next-marker readout，而没有被证明是 earlier NCC compression 的 mediator。</p>
+<h3>6.4 Retrieval transport patching</h3><p>构造 clean/corrupt 对：在第 k 个 targeted query 破坏应检索的 prompt occurrence，使正确 marker margin由 clean 的 {num(patch_final['clean_margin'],2)} 降到 {num(patch_final['corrupt_margin'],2)}。随后只从 clean run 恢复 ranked Top-2 heads 在 target source position 的 value contribution；最终恢复 {pct(patch_final['normalized_recovery_mean'])} 的 clean-corrupt margin gap，marker accuracy从 {pct(patch_final['corrupt_correct'])} 升到 {pct(patch_final['patched_correct'])}。这比只看 attention mass 更接近 causal retrieval transport。</p>
 <div class="example"><span class="label">简单例子。</span>把第 4 个应检索的正文 occurrence 换成错误 evidence，模型的正确 marker logit落后；只把 clean L4 targeted heads 从正确 source 取出的 value write补回，正确 marker margin恢复约三分之一。这个实验不直接 patch整层 residual，因此比“把 clean final state 全部复制回来”更局部。</div>
-<div class="conclusion"><span class="label">本节结论。</span>Targeted bank 有 attention concentration、teacher-forced即时损害、free-running trace损害和 value-only patch recovery 四类一致证据；单个 L4H5 的 matched-control specificity较弱，集合级结论强于单头唯一性。Non-thinking broad-bank necessity没有建立。</div>
+<div class="conclusion"><span class="label">本节结论。</span>Targeted bank有attention concentration、即时损害、free-running content/order damage与value-only recovery四类一致证据；successor/termination bank则对trace cardinality和final count更必要。这是明确的role specialization，但也缩小了可写主张：targeted retrieval是自然计算中的辅助内容路径，目前没有证据表明它单独中介Thinking的主要accuracy优势。Non-thinking broad-bank necessity仍未建立。</div>
 
 <h2 id="sufficiency">7. Free-running causal sufficiency：terminal state 足够吗？</h2>
 <h3>Experiment A · Answer-query state transplant</h3><p>对相邻 count receiver/donor，在 discovery 选择一个 layer；Thinking 先自由生成 trace直到 <code>&lt;Ans&gt;</code>，然后把 donor 的完整 answer-query residual写入 receiver并继续 greedy生成。Primary outcome 是 receiver 是否采用 donor count；same-count context donor控制“复制另一个上下文 state本身”是否导致 adoption。</p>
-{figure(figures['sufficiency'], "图 5｜Free-running sufficiency。Panel A 横轴是相邻-count full-state donor 与 same-count context control，纵轴是最终 greedy donor-count adoption；每臂 16 个 confirmation pairs，橙/紫分别为 Non-thinking/Thinking。Panel B 在 Thinking trace中比较 clean、same-position centroid shift、等范数 orthogonal control，以及两个跨 absolute-position natural donor upper bounds；纵轴是下一 marker采用 donor successor 的比例，†表示位置混杂。", "v58 free-running terminal and progress-state sufficiency")}
+{figure(figures['sufficiency'], "图 7｜Free-running sufficiency。Panel A 横轴是相邻-count full-state donor 与 same-count context control，纵轴是最终 greedy donor-count adoption；每个方案16个confirmation pairs，橙/紫分别为Non-thinking/Thinking。Panel B在Thinking trace中比较clean、same-position centroid shift、等范数orthogonal control，以及两个跨absolute-position natural donor upper bounds；纵轴是下一marker采用donor successor的比例，†表示位置混杂。", "v58 free-running terminal and progress-state sufficiency")}
 <p>Thinking 在 L4 的相邻 donor adoption 是 {pct(t_donor['donor_adoption'].mean())}（15/16），same-count context control 为 {pct(t_context['donor_adoption'].mean())}，平均 donor-vs-receiver margin shift +{num(t_donor['donor_margin_shift'].mean(),2)}。Non-thinking 在 L3 为 {pct(nt_donor['donor_adoption'].mean())}，但 context control 也是 {pct(nt_context['donor_adoption'].mean())}，因此不是 count-specific categorical sufficiency。</p>
 <h3>Experiment B · Progress-state transplant</h3><p>Same-position centroid shift在17个 eligible cells 中把 donor next-marker adoption从 clean的 {pct(progress.loc[progress['condition'].eq('clean'),'donor_first_adoption'].mean())} 提到 {pct(progress.loc[progress['condition'].eq('centroid_shift'),'donor_first_adoption'].mean())}；orthogonal control仍为 {pct(progress.loc[progress['condition'].eq('orthogonal_control'),'donor_first_adoption'].mean())}。Natural marker/item donor达到 {pct(progress.loc[progress['condition'].eq('natural_marker_cross_position'),'donor_first_adoption'].mean())}，但 donor与receiver位于不同 absolute positions；固定两-token item格式无法消除RoPE/trace-length混杂。所有 progress arms 的最终 count accuracy均为100%，因此没有形成“改写 progress→改写 final answer”的干净链。</p>
-<div class="conclusion"><span class="label">本节结论。</span>不需要证明一个 universal final broad aggregator。v58 已证明 Thinking free-generated trace后的 answer-query state可执行地驱动 count；这足以支持 trace-to-answer readout。相反，低维、同位置 progress state 的行为充分性仍弱，不能声称已识别 natural internal counter。</div>
+<div class="conclusion"><span class="label">本节结论。</span>不需要证明一个universal final broad aggregator。v58已证明free-generated trace后的answer-query state可执行地驱动count；结合Figure 6中final answer几乎逐行等于generated marker count，当前证据支持trace-cardinality/answer-position readout。该结果确认terminal bridge存在；position-invariant semantic aggregation与低维progress state的行为充分性仍为结论待定。</div>
+{commit_query_section}
+{native_continuation_section}
 
 <h2 id="dynamics">8. Training dynamics：何时形成 specialization</h2>
-<h3>横轴为什么用 linear steps，而不是只用 log steps</h3><p><a href="https://transformer-circuits.pub/2022/in-context-learning-and-induction-heads/index.html">Olsson et al. 的 induction-head work</a> 经常在 log elapsed tokens 上看 loss，并对 log-token loss导数讨论 phase change；<a href="https://arxiv.org/abs/2001.08361">Kaplan et al.</a> 与 <a href="https://arxiv.org/abs/2203.15556">Hoffmann et al.</a> 的 scaling-law 图则常在跨多数量级的参数、数据或compute上使用 log/log-log 坐标。Log轴适合展开早期并呈现幂律，但不会自动证明突变，反而会压缩本实验 3k–8k 的关键区间。v58 只有0–10k且每100 steps有snapshot，因此主图使用 linear step；若要正式claim phase transition，还应对 smooth model与change-point model做held-out比较，而不是凭视觉。</p>
-{figure(figures['dynamics'], "图 6｜Synchronized training dynamics。所有 panel 的横轴均为 optimizer step；红色竖虚线是 step 1500 loss-scope切换。A：每个 checkpoint、每种 mode各500条free-running样本的answer accuracy，另画Thinking trace exact。B：固定final-selected L4H5的weighted targeted attention mass（左轴）与correct-vs-best-wrong QK margin（右轴）。C：final Top-4 bank占全部32 heads同一role score总和的份额；点线4/32是均匀基线。D：每一步即时Top-4与final Top-4的Jaccard。E：corrupt baseline下Top-2 value patch的normalized recovery与marker accuracy。F：position-local selected-head causal damage减same-layer control damage；纵轴是correct-token logit-margin units。", "v58 synchronized behavior, routing, bank, patching, and causal training dynamics")}
-<p>Thinking 行为从 step 3,000 的41.4%逐步升到4,500的59.6%、6,000的79.4%、8,000的91.4%和10,000的95.4%；不是一个单点跳变。固定 L4H5 targeted mass在step {int(dynamics_stats['first_targeted_50pct_step']):,}首次达到final值的50%，在step {int(dynamics_stats['first_targeted_80pct_step']):,}达到80%；QK margin约4.8k后由负转正。Top-2 value recovery从3k附近开始上升，10k为{pct(patch_final['normalized_recovery_mean'])}。Marker-successor L2H3的matched causal specificity更早、更强，final damage difference为{num(float(successor_final['causal_damage'])-float(successor_control['causal_damage']))}；targeted L4H5 final difference只有{num(float(target_final['causal_damage'])-float(target_control['causal_damage']))}。</p>
-<p>Bank differentiation的合理读法是：targeted Top-4逐渐占据更多targeted score并稳定到L4，而Non-thinking broad Top-4 identity更不稳定。它支持“先有trace结构/marker successor，再形成集中targeted routing，随后behavior继续改善”的顺序；单seed不能把这种时间共现升级为普适phase transition定律。</p>
-<div class="example"><span class="label">简单例子。</span>如果attention mass从0.02在3k后持续升到0.42，同时free-running accuracy也从0.41升到0.95，我们可以说二者共同形成并给出时间顺序；只有在多个seed中change point都稳定、并且干预形成时间会同步移动behavior onset时，才接近Anthropic式的co-occurrence/co-perturbation证据。</div>
-<div class="conclusion"><span class="label">本节结论。</span>v58出现清楚的role specialization与head-bank differentiation，但曲线更像3k–8k的连续形成窗口，而不是已统计确认的瞬时phase change。线性step主轴最适合本数据；log(step+1)可作早期补图，但不应被用来“制造”突变。</div>
+<h3>8.1 实验目的、横轴与冻结选择</h3><div class="purpose"><span class="label">实验目的。</span>检验行为准确率、representation geometry、attention role、QK routing、value transport和局部因果效应的形成顺序，并与v20使用相同的“固定最终选中对象后向前追踪”原则比较。</div>
+<p>Figure 8与Figure 10使用线性optimizer step；Figure 9把完全相同的head×checkpoint矩阵同时画在线性step与log(step+100)横轴上。v58覆盖0–10,000 steps且每100 steps保存scientific snapshot：线性轴保留3,000–8,000的真实形成宽度，log轴展开0–1,500的早期分化。<a href="https://transformer-circuits.pub/2022/in-context-learning-and-induction-heads/index.html">Olsson et al.</a>在跨数量级token范围时使用log elapsed tokens并分析loss导数；坐标变换只改变视觉分配，不会单独构成突变证据。v58未进行跨seed change-point model比较，因此本节报告形成区间和时间顺序，不报告已确认的phase transition。</p>
+<div class="formula"><span class="label">冻结选择。</span>Head identity与geometry layer均在step 10,000的discovery split确定。所有早期checkpoint追踪相同LxHy或相同residual layer；没有在每个checkpoint重新选择最高score head或最优decoder layer。红色竖虚线标记step 1,500从全序列loss切换到task-output component-normalized loss。</div>
+
+<h3>8.2 行为、routing、bank concentration与因果使用</h3>
+{figure(figures['dynamics'], "图 8｜同步training dynamics。所有panel横轴为optimizer step，红色竖虚线为step 1,500 loss-scope切换。A纵轴为每个checkpoint、每种mode各500条free-running样本的final-answer accuracy，并显示Thinking trace exact。B左纵轴为固定L4H5的targeted attention mass，右纵轴为correct occurrence减best wrong occurrence的scaled QK margin。C纵轴为最终Top-4 bank占全部32 heads同一role score总和的比例，水平点线4/32表示均匀份额。D纵轴为即时Top-4与最终Top-4的Jaccard。E纵轴为corrupt baseline下Top-2 value patch recovery与marker accuracy。F纵轴为selected-head damage减same-layer control damage，单位为correct-token logit margin。", "v58 synchronized behavior, routing, bank, patching, and causal training dynamics")}
+<p>Thinking final accuracy从step 3,000的41.4%提高到4,500的59.6%、6,000的79.4%、8,000的91.4%和10,000的95.4%。固定L4H5 targeted mass在step {int(dynamics_stats['first_targeted_50pct_step']):,}首次达到最终值的50%，在step {int(dynamics_stats['first_targeted_80pct_step']):,}达到80%；QK margin约step 4,800后转为正值。Top-2 value recovery从step 3,000附近开始增加，step 10,000为{pct(patch_final['normalized_recovery_mean'])}。Marker-successor L2H3的最终matched causal specificity为{num(float(successor_final['causal_damage'])-float(successor_control['causal_damage']))} logit-margin units；targeted L4H5为{num(float(target_final['causal_damage'])-float(target_control['causal_damage']))}。</p>
+
+<h3>8.3 Head分化热图：linear steps与log steps</h3>
+{figure(figures['role_dynamics_heatmap'], "图 9｜Head-bank differentiation heatmaps。三行依次为Non-thinking broad、Thinking marker-successor与Thinking targeted retrieval；纵轴列出32个attention heads，横轴为101个checkpoint。每个checkpoint内把同一role的32个非负score归一化为和1，颜色表示该head占全部role score的份额，因此观察的是bank内部集中与迁移，不能跨role解释raw effect size。左列用线性optimizer step，右列显示完全相同的数据但使用log(step+100)横轴；白色竖虚线是step 1,500 objective switch，青色实/虚横线标出final discovery rank-1/rank-2 head。", "v58 linear and log step role differentiation heatmaps")}
+<p>Linear与log两列的数据完全相同。Log轴把step 0–1,500展开，因此更容易看到successor bank在objective switch附近迅速集中；linear轴保留step 3,000–8,000的真实宽度，更清楚显示targeted bank是持续数千steps逐渐迁移到L4，而不是单checkpoint突变。热图的列归一化会抹去role总量的增长，所以必须与Figure 8B的raw targeted mass、Figure 8C的Top-4 share以及Figure 8F的matched causal specificity共同解释。</p>
+<p>Thinking successor discovery rank-1 L2H3在step {int(dynamics_stats['marker_successor_rank1_first_50pct_step']):,}达到最终reporting score的50%，在step {int(dynamics_stats['marker_successor_rank1_first_80pct_step']):,}达到80%；targeted discovery rank-1 L4H5的对应时间为step {int(dynamics_stats['targeted_retrieval_rank1_first_50pct_step']):,}与{int(dynamics_stats['targeted_retrieval_rank1_first_80pct_step']):,}。该时间顺序表明successor role较早形成。Successor rank-2 L4H0在reporting曲线末端高于L2H3，因此精确head排序存在split差异；高功效ablation仍显示L2H3的cardinality effect更强。Non-thinking broad rank-1在初始化时已高于最终score的一半，后续轨迹非单调，且最终selection与reporting的最高head不一致；当前数据不支持为Non-thinking broad bank指定稳定形成时间。</p>
+
+<h3>8.4 Representation geometry emergence</h3>
+{figure(figures['geometry_dynamics'], "图 10｜固定最终选层的representation geometry dynamics。横轴为optimizer step；红色竖虚线为step 1,500 loss-scope切换。橙、蓝、紫曲线分别固定追踪Non-thinking final L4、Thinking running L3和Thinking final L2。A纵轴为count/progress centroids前三个PC解释的方差比例；B为centroid effective dimension，数值越低表示centroid variance集中于更少方向；C为按k顺序连接centroid所得path straightness，即首尾弦长除以相邻路径总长。所有量均为描述性几何，不等同于held-out decodability。", "v58 fixed-layer representation geometry emergence")}
+<p>Thinking running L3在step 0时前三个centroid PC已解释{pct(geometry_initial_t_run['centroid_pc1_to_pc3_variance_fraction'])}方差，最终为{pct(dynamics_stats['thinking_running_centroid_pc1_to_pc3_variance_fraction_final'])}；该低维结构在训练前已存在，可能来自共享token与位置结构，不能解释为已经学会count。Thinking final L2的effective dimension从{num(geometry_initial_t_final['centroid_effective_dimension'],2)}降到{num(dynamics_stats['thinking_final_centroid_effective_dimension_final'],2)}。Non-thinking final L4也从{num(geometry_initial_nt_final['centroid_effective_dimension'],2)}降到{num(dynamics_stats['nonthinking_final_centroid_effective_dimension_final'],2)}，但其最终held-out NCC只有{pct(g_nt_final['confirmation_ncc_balanced_accuracy'])}。因此低effective dimension与高count可读性不是等价指标；Non-thinking centroids可以集中在少数方向，同时仍缺少按count稳定分离的class geometry。</p>
+<div class="example"><span class="label">说明性示例。</span>十个centroid都落在同一条弯曲曲线上时，effective dimension可以接近1；如果不同count沿曲线反复折返或sample cloud跨类重叠，NCC仍可能接近chance。Figure 10描述centroid形状，Figure 2衡量held-out class readout，两者回答不同问题。</div>
+
+<h3>8.5 综合形成顺序</h3>
+<p>v58的单seed结果支持四个连续阶段：(1) step 0–1,500期间，trace token/position相关的低维几何已经可见；(2) step 1,500–3,000期间，L2 successor score明显增加，Thinking在step 3,000达到41.4% final accuracy；(3) step 3,000–6,000期间，L4 targeted mass、QK selectivity和value recovery同步增加，final accuracy达到79.4%；(4) step 6,000–10,000期间，targeted mass逐渐接近平台，final accuracy继续提高到95.4%，局部causal specificity与patch recovery保持正值。</p>
+<div class="warning"><span class="label">分析边界。</span>上述顺序来自单一seed 1234。时间上先出现属于temporal-order evidence；训练因果关系需要多个seed、受控改变形成时间以及behavior onset的同步变化。当前曲线支持3,000–8,000的连续形成区间，瞬时phase transition的结论待定。</div>
+<div class="conclusion"><span class="label">本节结论。</span>v58复现了v20的主要形成顺序：trace相关结构和successor role较早出现，targeted retrieval bank随后在L4分化，Thinking行为在targeted routing增强期间持续改善。v58进一步显示最终count主要依赖successor/cardinality路径；targeted role与accuracy的时间共现尚未证明targeted路径中介主要accuracy增益。</div>
 
 <h2 id="alignment">9. 与大模型 Non-thinking / Native-thinking 实验对齐及 gaps</h2>
 {alignment_table}
 <h3>9.1 已经对齐的部分</h3><ul><li><b>站点：</b>Non-thinking running取k-th prompt occurrence end；Thinking running取k-th trace item end；final均取答案数字前query，与Geometry Comparison的语义边界一致。</li><li><b>Representation：</b>discovery-only选层与frozen confirmation Logistic/NCC，分开running和final，不用PCA图替代held-out指标。</li><li><b>Necessity：</b>discovery-ranked Top-K与layer/head-count matched controls，同时报告teacher-forced immediate damage、post-ablation frozen NCC和free-running rollout。</li><li><b>Sufficiency：</b>相邻count donor、same-count context control、free-running continuation，直接读取greedy donor adoption。</li><li><b>Dynamics：</b>固定final-selected heads追踪全部checkpoint，不在每一步重新选一个最好看的head。</li></ul>
-<h3>9.2 当前最重要的 gaps</h3><ul><li><b>Non-thinking broad retrieval gap：</b>大模型已有broad-bank matched causal effect、retrieval subspace和late executable state；v58 Non-thinking在16–18% floor附近，broad ranking不稳定，ranked lesion没有超过controls。</li><li><b>Running representation gap：</b>Thinking running NCC只有{pct(g_t_run['confirmation_ncc_balanced_accuracy'])}；高ordinal RSA说明有序，不代表紧致或content-free counter。</li><li><b>Progress sufficiency gap：</b>same-position centroid shift很弱；natural donor patch跨absolute positions。尚未复现大模型Qwen natural no-index commit→next-query transfer。</li><li><b>Serial mediation gap：</b>还没有在同一个ranked-damaged free rollout中依次restore targeted output、carrier、commit、answer state并闭合最终答案。</li><li><b>Final-state confound：</b>full answer residual transplant可能携带count、trace length、position和其他上下文；尚无absolute-position matched不同count control。</li><li><b>Scale与监督：</b>12.66M字符模型、固定separator grammar、atomic one-token answer、256-char context和单seed，不能与4B/8B自然语言模型比较绝对head ID、formation step或accuracy。</li></ul>
-<div class="warning"><span class="label">关于“两个mechanism都显著”。</span>v58足以作为强Thinking targeted-retrieval / representation-compression setting；它不支持把Non-thinking broad retrieval写成同等强的已复现机制。如果论文中心句必须是“两侧都由强因果证据确认，只是broad vs targeted不同”，还需要一个行为不在floor、但明显弱于Thinking的Non-thinking setting或额外训练seed，而不能靠换图隐藏当前null。</div>
-<div class="conclusion"><span class="label">本节结论。</span>v58与大模型在实验设计层级上已经对齐，并强力复现Thinking final compression、targeted retrieval与terminal readout；主要未对齐处是Non-thinking broad aggregation和natural progress recurrence。</div>
+<h3>9.2 当前最重要的 gaps</h3><ul><li><b>Targeted-to-count mediation gap：</b>L4 targeted lesion强烈损害content/order，却仅小幅损害final count；joint lesion在successor-only基础上几乎不增加count damage。故targeted retrieval存在不等于它解释了Thinking accuracy优势。</li><li><b>Non-thinking broad retrieval gap：</b>大模型已有broad-bank matched causal effect、retrieval subspace和late executable state；v58 Non-thinking在16–18% floor附近。500-sample ranked K4虽降低accuracy，但control complement更严重地破坏answer production，仍无法给出选择性。</li><li><b>Running representation gap：</b>Thinking running NCC只有{pct(g_t_run['confirmation_ncc_balanced_accuracy'])}；高ordinal RSA说明有序，不代表紧致或content-free counter。</li><li><b>Progress continuation gap：</b>Experiment D在新机制cohort、discovery-selected L2上确认contextual item state对donor-directed自由continuation的局部因果充分性；多步延续弱于Native报告。单字符重复、内容混合与有限discovery覆盖仍限制解释，纯算术counter及稳定长程递推尚未建立；final-count不变不否定局部充分性。</li><li><b>Control contamination：</b>L4 K4 complement仍含targeted ranks 5/6/7/10；L2 low-score control仍有cardinality作用；Non-thinking control含一般readout head。raw attention score不能保证因果null。</li><li><b>Serial mediation gap：</b>虽然targeted与successor lesion已在同一free-running baseline中比较，但还没有restore targeted output→successor/termination→answer state并闭合最终答案。</li><li><b>Final-state confound：</b>fixed grammar使p<sub>Ans</sub>=C+2N；full answer residual transplant可能携带count、trace length、position和其他上下文，尚无absolute-position matched不同count control。</li><li><b>Scale与监督：</b>12.66M字符模型、固定separator grammar、atomic one-token answer、256-char context和单seed，不能与4B/8B自然语言模型比较绝对head ID、formation step或accuracy。</li></ul>
+<div class="warning"><span class="label">关于“两个mechanism都显著”。</span>v58足以作为强Thinking targeted-content / successor-cardinality specialization与operational final-compression setting；它不支持把Non-thinking broad retrieval写成同等强的已复现机制，也不支持说targeted bank本身解释了大部分final-count accuracy。如果论文中心句必须是“两侧都由强因果证据确认，只是broad vs targeted不同”，还需要一个行为不在floor、但明显弱于Thinking的Non-thinking setting或额外训练seed，不能靠换图隐藏当前null。</div>
+<div class="conclusion"><span class="label">本节结论。</span>v58与大模型在geometry、matched/free-running ablation、patching、sufficiency和dynamics的实验层级上已经对齐。已有Thinking targeted content path、successor/cardinality path、terminal readout及contextual-state continuation的局部证据；主要未对齐处是targeted-to-final-count mediation、Non-thinking broad aggregation、position-invariant final compression与稳定长程progress recurrence。</div>
 
 <h2 id="limits">10. 最终结论、限制与建议写法</h2>
-<div class="abstract"><span class="label">可以写进正文的结论。</span>(1) 在同一balanced count-1–10任务上，独立训练的no-index Thinking以{pct(c_t['ar_final_accuracy'],2)}显著超过Non-thinking的{pct(c_nt['ar_final_accuracy'],2)}，且Thinking十类均≥{pct(behavior_gate['metrics']['thinking_min_count_accuracy'])}；(2) Thinking的主要representation advantage位于answer-query final-count state，NCC为100%，running NCC仅{pct(g_t_run['confirmation_ncc_balanced_accuracy'])}但ordinal ordering强；由于固定grammar令answer position与count确定相关，前者是operational count/trace-length compression而非已证实的position-invariant semantic compression；(3) L4形成集中targeted bank，ranked removal破坏trace，target-source value patch可恢复{pct(patch_final['normalized_recovery_mean'])} margin gap；(4) free-generated trace后的answer state具有{pct(t_donor['donor_adoption'].mean())}相邻donor adoption，支持可执行trace-to-answer readout，但full-state transplant也继承position confound；(5)当前没有证据要求universal final broad aggregator，也没有建立compact autonomous internal counter。</div>
-<ul><li>所有模型与training dynamics来自单一seed 1234；checkpoint rows不是独立训练replicates。</li><li>Head roles在final selection split冻结，再在disjoint reporting split读数；但broad reporting sample仅1/count。</li><li>Free-running Top-K只有80条reporting examples；K=4只有一个完全disjoint matched control。</li><li>Targeted bank位于L4，而running/final NCC选层在L3/L2；因此当前Top-K不能检验earlier NCC的中介。</li><li>高功效AR cached evaluator已在修复后与reference逐token一致；修复前错误使用tied embedding的派生CSV已隔离，不进入报告。</li><li><code>plan.tex</code>和<code>LLM_Compression.pdf</code>本轮已不在此前Downloads路径，未重新核验；大模型对齐直接依据三份仍可用HTML报告与旧report保存的crosswalk。</li></ul>
-<p><b>下一步优先级：</b>先不要再为Thinking accuracy调参。若正文只需要“Thinking优势 + compression + targeted retrieval”，v58已经是主setting。若必须补齐对称的broad-vs-targeted机制，优先做2–3个固定v58 seed和一个行为高于floor的matched Non-thinking baseline；随后在同一damaged free rollout中做targeted output→carrier→commit→answer的serial rescue。不要用降低Non-thinking到chance来替代broad mechanism证据。</p>
-<div class="conclusion"><span class="label">最终判断。</span>保留v58并交给合作者审阅，而不是隐藏setting风险。它比“只求accuracy差”更干净：trace不含显式index、Thinking十类均匀、行为差距巨大，并且targeted bank、retrieval transport和terminal answer-state evidence相互一致。报告时同时保留两个null和一个confound：Non-thinking broad-bank necessity未建立，Thinking progress-state sufficiency未建立，final compression尚未与trace-length/position解耦。</div>
+<div class="abstract"><span class="label">可以写进正文的结论。</span>(1) 在同一balanced count-1–10任务上，独立训练的no-index Thinking以{pct(c_t['ar_final_accuracy'],2)}显著超过Non-thinking的{pct(c_nt['ar_final_accuracy'],2)}，且Thinking十类均≥{pct(behavior_gate['metrics']['thinking_min_count_accuracy'])}；(2) answer-query NCC为100%，但固定grammar使其更准确地称为operational count/trace-length compression；(3) L4 targeted bank因果控制trace content/order，Top-2使exact trace下降22.4 pp而final count仅下降6.6 pp；L2 successor L2H3因果控制trace cardinality/termination，使marker-count下降53.4 pp、final下降51.6 pp；(4) final answer在targeted-lesion后仍有{pct(targeted_k2_answer_length_match)}等于实际生成marker数，说明terminal readout主要追踪trace cardinality；(5) target-source value patch与answer-state donor adoption分别证明局部retrieval transport和terminal executability，但尚未闭合targeted→count mediation；(6)不需要也没有证据支持universal final broad aggregator。</div>
+<ul><li>所有模型与training dynamics来自单一seed 1234；checkpoint rows不是独立训练replicates。</li><li>高功效free-running confirmation为50/count、500/arm且与selection overlap=0；但K4只有一个disjoint complement，不能当作control distribution。</li><li>Attention role score按routing定义排名，不含V/W<sub>O</sub>写入强度；单head attention score与causal damage未必一致。低score同层head仍可能承担一般trace/cardinality支持。</li><li>Targeted bank位于L4，而running/final NCC选层在L3/L2；因此当前Top-K不能检验earlier NCC的中介。</li><li>Targeted content damage与successor cardinality damage已在同一baseline中分离，但尚无position-controlled serial rescue。</li><li>高功效AR cached evaluator已与reference逐token一致；修复前错误使用tied embedding的派生CSV已隔离，不进入报告。</li><li><code>plan.tex</code>和<code>LLM_Compression.pdf</code>本轮已不在此前Downloads路径，未重新核验；大模型对齐直接依据三份仍可用HTML报告与旧report保存的crosswalk。</li></ul>
+<p><b>下一步优先级：</b>第一优先不是继续调accuracy，而是做position-controlled trace-length replication，并在同一damaged rollout中restore targeted output→successor/termination→answer state，检验serial mediation。第二优先是2–3个固定v58 seed和行为高于floor的matched Non-thinking baseline。不要把targeted trace damage写成已解释final accuracy，也不要用降低Non-thinking到chance替代broad mechanism证据。</p>
+<div class="conclusion"><span class="label">最终判断。</span>保留v58。当前证据支持功能分工：targeted bank参与内容/顺序生成，successor bank参与数量/终止控制，terminal state用于count readout。新增独立机制confirmation支持contextual item state对donor-directed continuation的局部因果充分性。Non-thinking broad-bank necessity、Thinking targeted-to-count完整mediation、稳定长程progress recurrence和position-invariant final compression仍未建立。</div>
 
 <h2 id="artifacts">11. 复现产物与 provenance</h2>
 {html_table(["Artifact","Path / role"],[
     ["Frozen v58 run archive", html.escape(str(DATA))],
     ["Independent behavior confirmation", html.escape(str(ANALYSIS/'behavior_confirmation_v58'))],
     ["Clean aligned NCC", html.escape(str(ANALYSIS/'v58_clean_ncc'))],
+    ["Clean NCC and layer-selectable confirmation PCA clouds", html.escape(str(ANALYSIS/'v58_clean_ncc'))],
+    ["Milestone geometry dynamics", html.escape(str(ANALYSIS/'phase_transition'))],
     ["Teacher-forced Top-K + post-ablation NCC", html.escape(str(ANALYSIS/'v58_topk_ncc'))],
-    ["Free-running Top-K", html.escape(str(ANALYSIS/'v58_free_running_topk'))],
+    ["High-power targeted Top-K (500/arm)", html.escape(str(ANALYSIS/'v58_confirmation_topk_hp500'))],
+    ["High-power Non-thinking broad Top-K", html.escape(str(ANALYSIS/'v58_confirmation_broad_topk_hp500'))],
+    ["Thinking broad×targeted factorial", html.escape(str(ANALYSIS/'v58_thinking_factorial_hp500'))],
+    ["Thinking targeted×successor factorial", html.escape(str(ANALYSIS/'v58_thinking_successor_hp500'))],
     ["Free-running sufficiency", html.escape(str(ANALYSIS/'v58_free_running_sufficiency'))],
+    ["Commit→query primary assay", html.escape(str(ANALYSIS/'v58_commit_query_20260905'))],
+    ["Position-aligned item-scope sensitivity", html.escape(str(ANALYSIS/'v58_aligned_item_query_20260905'))],
+    ["Commit→query protocol", html.escape(str(ROOT/'docs'/'v58_commit_query_protocol.md'))],
+    ["Native-aligned fresh continuation confirmation", html.escape(str(ANALYSIS/'v58_native_continuation_20260905'))],
+    ["Frozen Native-aligned continuation protocol", html.escape(str(ROOT/'docs'/'v58_native_continuation_protocol.md'))],
     ["101-snapshot roles", html.escape(str(ANALYSIS/'extended'))],
     ["Routing/patching/causal/high-power dynamics", html.escape(str(ANALYSIS/'phase_transition_audit'))],
+    ["Four-endpoint geometry cloud exporter", html.escape(str(ROOT/'scripts'/'export_v58_geometry_cloud.py'))],
     ["Report builder", html.escape(str(Path(__file__).resolve()))],
     ["Self-contained report", html.escape(str(output.resolve()))],
 ])}
-<p class="small">Run created {html.escape(str(run_manifest.get('created_at_utc','unknown')))}; code commit at report build: <code>{git_commit()}</code>. All figures are regenerated from archived tables and embedded as base64, so the final HTML has no external image dependency. External paper links are references only; all v58 numerical claims come from local frozen artifacts.</p>
+<p class="small">Run created {html.escape(str(run_manifest.get('created_at_utc','unknown')))}; code commit at report build: <code>{git_commit()}</code>. Static figures are regenerated from archived tables and embedded as base64; the selectable geometry view embeds its data and Plotly runtime inline. The final HTML has no external image or JavaScript dependency. External paper links are references only; all v58 numerical claims come from local frozen artifacts.</p>
 </main></body></html>"""
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(report, encoding="utf-8")
+    geometry_record_count = (
+        len(geometry_cloud)
+        if "endpoint" in geometry_cloud.columns
+        else len(
+            geometry_cloud.loc[
+                geometry_cloud["step"].eq(geometry_cloud["step"].max())
+                & geometry_cloud["site"].isin(["trace_marker", "final_answer"])
+            ]
+        )
+    )
     manifest = {
-        "schema_version": "v58_synthetic_report_v1",
+        "schema_version": "v58_synthetic_report_v6",
         "report": str(output.resolve()),
         "report_sha256": sha256(output),
         "primary_comparison": "independently trained v58 separator/no-index Thinking vs v58 Non-thinking",
@@ -1056,6 +1713,8 @@ ul{padding-left:22px}.small{font-size:.86rem;color:var(--muted)}a{color:var(--bl
         "code_commit": git_commit(),
         "behavior_gate": behavior_gate,
         "dynamics_statistics": dynamics_stats,
+        "commit_query_alignment": commit_query_provenance,
+        "native_continuation_alignment": native_continuation_provenance,
         "figures": {
             key: {"path": str(value.resolve()), "sha256": sha256(value)}
             for key, value in figures.items()
@@ -1070,8 +1729,21 @@ ul{padding-left:22px}.small{font-size:.86rem;color:var(--muted)}a{color:var(--bl
                 DATA / "config.json",
                 ANALYSIS / "behavior_confirmation_v58" / "autoregressive_summary.csv",
                 ANALYSIS / "v58_clean_ncc" / "selected_confirmation_summary.csv",
+                ANALYSIS / "v58_clean_ncc" / "selected_layers.json",
+                *((clean_projection_path,) if clean_projection_path.exists() else ()),
+                *((clean_projection_manifest_path,) if clean_projection_manifest_path.exists() else ()),
+                ANALYSIS / "phase_transition" / "tables" / "milestone_manifold_cloud_3d.csv",
+                ANALYSIS / "phase_transition" / "tables" / "dense_manifold_geometry.csv",
+                ANALYSIS / "phase_transition" / "tables" / "fixed_head_rankings.csv",
+                ANALYSIS / "extended" / "tables" / "attention_role_dynamics.csv",
                 ANALYSIS / "v58_topk_ncc" / "post_ablation_behavior.csv",
-                ANALYSIS / "v58_free_running_topk" / "free_running_summary.csv",
+                ANALYSIS / "v58_confirmation_topk_hp500" / "free_running_summary.csv",
+                ANALYSIS / "v58_confirmation_topk_hp500" / "free_running_detail.csv",
+                ANALYSIS / "v58_confirmation_broad_topk_hp500" / "free_running_summary.csv",
+                ANALYSIS / "v58_thinking_factorial_hp500" / "factorial_summary.csv",
+                ANALYSIS / "v58_thinking_factorial_hp500" / "factorial_detail.csv",
+                ANALYSIS / "v58_thinking_successor_hp500" / "successor_summary.csv",
+                ANALYSIS / "v58_thinking_successor_hp500" / "successor_detail.csv",
                 ANALYSIS / "v58_free_running_sufficiency" / "answer_transplant_confirmation.csv",
                 ANALYSIS / "phase_transition_audit" / "tables" / "high_power_ar_summary.csv",
             )
@@ -1079,6 +1751,27 @@ ul{padding-left:22px}.small{font-size:.86rem;color:var(--muted)}a{color:var(--bl
         "validation": {
             "high_power_endpoint_matches_canonical": True,
             "cached_vs_reference_generation": "10/10 exact for each mode at step 5000",
+            "causal_confirmation_examples_per_arm": 500,
+            "causal_selection_overlap": 0,
+            "thinking_broad_factorial_clean_equals_broad_rowwise": broad_factorial_rowwise_null,
+            "thinking_broad_factorial_targeted_equals_joint_rowwise": broad_factorial_interaction_null,
+            "targeted_top2_answer_equals_generated_marker_count": targeted_k2_answer_length_match,
+            "interactive_geometry_records": int(geometry_record_count),
+            "interactive_geometry_endpoints": sorted(
+                str(value)
+                for value in (
+                    geometry_cloud["endpoint"].unique()
+                    if "endpoint" in geometry_cloud.columns
+                    else ["nonthinking_answer_query", "thinking_item_end", "thinking_answer_query"]
+                )
+            ),
+            "interactive_geometry_layers": sorted(int(value) for value in geometry_cloud["layer"].unique()),
+            "interactive_geometry_steps": (
+                sorted(int(value) for value in geometry_cloud["step"].unique())
+                if "step" in geometry_cloud.columns
+                else [int(cfg["train_steps"])]
+            ),
+            "inline_plotly_runtime": '<script src="https://cdn.plot.ly' not in report,
             "self_contained_images": all(f'data:image/png;base64,' in report for _ in [0]),
             "missing_reference_files": [
                 "C:/Users/HP/Downloads/plan.tex",

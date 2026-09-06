@@ -1,0 +1,9 @@
+mode,layer,pairs,donor_adoption,receiver_accuracy
+nonthinking,1.0,40,0.2,0.125
+nonthinking,2.0,40,0.1,0.275
+nonthinking,3.0,40,0.2,0.2
+nonthinking,4.0,40,0.175,0.2
+thinking,1.0,40,0.0,1.0
+thinking,2.0,40,0.0,1.0
+thinking,3.0,40,1.0,0.0
+thinking,4.0,40,1.0,0.0

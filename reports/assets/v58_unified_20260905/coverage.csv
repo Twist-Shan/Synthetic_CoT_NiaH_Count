@@ -1,0 +1,11 @@
+Experiment,Discovery / confirmation prompts,Realized unit,Control / restriction,Status
+Behavior / Top-K,200 / 100,10/count; both modes,"K=1,2: 3 controls; K=4: 1",完成
+Four-endpoint geometry / post-Top-K NCC,200 / 100,1100 / 550 running states; 200 / 100 answer states,same input + occurrence keys,完成
+Source formation / restoration,200 / 100,100 per mode per condition,"embedding + L1–L4, ordinary control",完成
+Answer state / count directions,200 / 100,180 directed pairs/depth; Native slice 40,self + context / 3 norm controls,完成
+NT retrieval write / serial factorial,200 / 100,100 per combination,2 source depths × 2 × 3 × 3,完成；positive mediation待检验
+Thinking source-next / answer source,200 / 100,100 per condition,empty-history support reported separately,完成
+Thinking terminal bridge / relay,200 / 100,100 / 180 pairs per condition,same damaged baseline / downstream reset,完成；bridge范围受限
+Read → separate carrier → commit,200 / 100,90 inputs with N≥2,two-token item lacks separate post-marker commit,架构不适用；不能计为复现
+Progress free continuation,20 / 10 (count-10 subset),40 discovery / 60 confirmation pairs/scope,8 conditions; 2 scopes,完成
+Training dynamics,fixed 200 / 100,same inputs at every checkpoint,100-step attention; 11 behavior milestones,完成；single training seed
